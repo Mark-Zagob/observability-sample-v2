@@ -1,0 +1,107 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "DB Query Duration (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(db_query_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "legendFormat": "p50 — {{ operation }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "legendFormat": "p95 — {{ operation }}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(db_query_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "legendFormat": "p99 — {{ operation }}"
+        }
+      ]
+    },
+    {
+      "title": "DB Connection Pool Activity",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } }
+        }
+      },
+      "targets": [
+        {
+          "expr": "db_connection_pool_active{job=\"app-metrics\"}",
+          "legendFormat": "Active Connections"
+        }
+      ]
+    },
+    {
+      "title": "DB Queries per Second",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(db_query_duration_seconds_count{job=\"app-metrics\"}[5m])) by (operation)",
+          "legendFormat": "{{ operation }}"
+        }
+      ]
+    },
+    {
+      "title": "Slow Queries (> 100ms)",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki-datasource" },
+      "targets": [
+        {
+          "expr": "{compose_service=\"order-service\"} |= `Slow database query`",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "title": "Order Processing Duration by Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, status))",
+          "legendFormat": "p95 — {{ status }}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["application", "database", "postgresql"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Database Performance",
+  "uid": "db-performance"
+}

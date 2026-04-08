@@ -1,0 +1,128 @@
+# ============================================================
+# Reusable Workflow — Build, Scan & Push Image
+# ============================================================
+# Được gọi bởi ci.yml orchestrator SAU KHI lint-test pass.
+# Thực hiện:
+#   1. Build Docker image
+#   2. Trivy scan — block nếu có CRITICAL/HIGH vulnerabilities
+#   3. Push lên GHCR (chỉ khi KHÔNG phải PR)
+# ============================================================
+
+name: _Reusable — Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Tên service (vd: api-gateway)'
+        required: true
+        type: string
+      context:
+        description: 'Đường dẫn đến thư mục chứa Dockerfile'
+        required: true
+        type: string
+      push:
+        description: 'Có push image lên registry không (false cho PR)'
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-scan-push:
+    runs-on: [vm-runner-001]
+
+    steps:
+      # -------------------------------------------------------
+      # 1. Checkout source code
+      # -------------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # 2. Set environment variables
+      # -------------------------------------------------------
+      - name: Set environment variables
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER_LC}/observability-lab/${{ inputs.service }}" >> $GITHUB_ENV
+          echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
+      # -------------------------------------------------------
+      # 3. Login to GHCR (chỉ khi cần push)
+      # -------------------------------------------------------
+      - name: Login to GHCR
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -------------------------------------------------------
+      # 4. Build Docker image
+      # -------------------------------------------------------
+      - name: Build ${{ inputs.service }}
+        run: |
+          echo "🏗️  Building ${{ inputs.service }}..."
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            -f ${{ inputs.context }}/Dockerfile \
+            ${{ inputs.context }}
+
+      # -------------------------------------------------------
+      # 5. Trivy — Container image vulnerability scan
+      # -------------------------------------------------------
+      - name: Trivy — Image security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:latest'
+          format: 'table'
+          exit-code: '1'                    # Fail pipeline nếu tìm thấy vuln
+          severity: 'CRITICAL,HIGH'         # Chỉ block CRITICAL và HIGH
+          ignore-unfixed: true              # Bỏ qua vuln chưa có fix
+          output: 'trivy-report.txt'
+
+      # -------------------------------------------------------
+      # 6. Upload Trivy report (luôn upload dù pass hay fail)
+      # -------------------------------------------------------
+      - name: Upload Trivy report
+        if: always()
+        run: |
+          if [ -f trivy-report.txt ]; then
+            echo "### 🔒 Trivy Scan — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -100 trivy-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # -------------------------------------------------------
+      # 7. Push image (chỉ khi push=true VÀ Trivy pass)
+      # -------------------------------------------------------
+      - name: Push ${{ inputs.service }}
+        if: inputs.push
+        run: |
+          echo "📦 Pushing ${{ inputs.service }} to GHCR..."
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
+
+      # -------------------------------------------------------
+      # 8. Summary
+      # -------------------------------------------------------
+      - name: Build summary
+        if: always()
+        run: |
+          echo "### 🏗️ Build — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tags | \`latest\`, \`${{ env.SHORT_SHA }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Size | $(docker images ${{ env.IMAGE_NAME }}:latest --format '{{.Size}}' 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ✅ No CRITICAL/HIGH |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pushed | ${{ inputs.push }} |" >> $GITHUB_STEP_SUMMARY

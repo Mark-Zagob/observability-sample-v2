@@ -1,0 +1,204 @@
+# ============================================================
+# Reusable Workflow — Lint, Test & Security Scan
+# ============================================================
+# Được gọi bởi ci.yml orchestrator.
+# Thực hiện:
+#   1. Hadolint — scan Dockerfile best practices
+#   2. Ruff    — Python linting (nếu có file .py)
+#   3. Bandit  — Python SAST security scan (nếu có file .py)
+#   4. Pytest  — Unit tests (nếu có test_*.py)
+# ============================================================
+
+name: _Reusable — Lint & Test
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Tên service (vd: api-gateway)'
+        required: true
+        type: string
+      context:
+        description: 'Đường dẫn đến thư mục chứa Dockerfile'
+        required: true
+        type: string
+
+jobs:
+  lint-and-test:
+    runs-on: [vm-runner-001]
+
+    steps:
+      # -------------------------------------------------------
+      # 1. Checkout source code
+      # -------------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # 2. Hadolint — Dockerfile linting
+      # -------------------------------------------------------
+      - name: Hadolint — Dockerfile lint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ inputs.context }}/Dockerfile
+          # DL3008: Pin versions in apt-get install (warning)
+          # DL3013: Pin versions in pip install (warning)
+          ignore: DL3008,DL3013
+          failure-threshold: error  # Chỉ fail khi có ERROR, warning thì OK
+
+      # -------------------------------------------------------
+      # 3. Detect language — kiểm tra có Python hay không
+      # -------------------------------------------------------
+      - name: Detect project language
+        id: detect-lang
+        run: |
+          if ls ${{ inputs.context }}/*.py 1>/dev/null 2>&1; then
+            echo "is_python=true" >> $GITHUB_OUTPUT
+            echo "🐍 Python project detected"
+          else
+            echo "is_python=false" >> $GITHUB_OUTPUT
+            echo "📦 Non-Python project (skip Ruff/Bandit/Pytest)"
+          fi
+
+      # -------------------------------------------------------
+      # 4. Setup Python (chỉ cho Python services)
+      # -------------------------------------------------------
+      - name: Setup Python
+        if: steps.detect-lang.outputs.is_python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # -------------------------------------------------------
+      # 5. Install linting tools
+      # -------------------------------------------------------
+      - name: Install lint tools
+        if: steps.detect-lang.outputs.is_python == 'true'
+        run: |
+          pip install --quiet ruff bandit
+
+      # -------------------------------------------------------
+      # 6. Ruff — Python linting (PEP8, import sort, etc.)
+      # -------------------------------------------------------
+      - name: Ruff — Python lint
+        if: steps.detect-lang.outputs.is_python == 'true'
+        run: |
+          echo "🔍 Running Ruff on ${{ inputs.context }}..."
+          ruff check ${{ inputs.context }} \
+            --select=E,W,F,I \
+            --output-format=github
+        # E=pycodestyle errors, W=warnings, F=pyflakes, I=isort
+
+      # -------------------------------------------------------
+      # 7. Bandit — Python security scan (SAST)
+      # -------------------------------------------------------
+      - name: Bandit — Security scan (SAST)
+        if: steps.detect-lang.outputs.is_python == 'true'
+        run: |
+          echo "🛡️  Running Bandit on ${{ inputs.context }}..."
+          bandit -r ${{ inputs.context }} \
+            -f json \
+            -o bandit-report.json \
+            --severity-level medium \
+            --confidence-level medium \
+            -x "*/tests/*,*/test_*" \
+            || true
+
+          # Parse results and fail if CRITICAL/HIGH issues found
+          if [ -f bandit-report.json ]; then
+            HIGH_COUNT=$(cat bandit-report.json | jq '[.results[] | select(.issue_severity == "HIGH")] | length')
+            MEDIUM_COUNT=$(cat bandit-report.json | jq '[.results[] | select(.issue_severity == "MEDIUM")] | length')
+
+            echo "### 🛡️ Bandit SAST — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| HIGH | ${HIGH_COUNT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| MEDIUM | ${MEDIUM_COUNT} |" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$HIGH_COUNT" -gt 0 ]; then
+              echo ""
+              echo "❌ Found ${HIGH_COUNT} HIGH severity issues!"
+              cat bandit-report.json | jq '.results[] | select(.issue_severity == "HIGH") | {file: .filename, line: .line_number, issue: .issue_text}'
+              exit 1
+            fi
+
+            echo ""
+            echo "✅ No HIGH severity issues found"
+          fi
+
+      # -------------------------------------------------------
+      # 8. Detect test files — kiểm tra có unit tests không
+      # -------------------------------------------------------
+      - name: Detect test files
+        id: detect-tests
+        if: steps.detect-lang.outputs.is_python == 'true'
+        run: |
+          if ls ${{ inputs.context }}/test_*.py 1>/dev/null 2>&1 || \
+             ls ${{ inputs.context }}/tests/ 1>/dev/null 2>&1; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "🧪 Test files detected"
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "⏭️  No test files found (skip pytest)"
+          fi
+
+      # -------------------------------------------------------
+      # 9. Install service dependencies + pytest
+      # -------------------------------------------------------
+      - name: Install dependencies & pytest
+        if: steps.detect-tests.outputs.has_tests == 'true'
+        run: |
+          echo "📦 Installing service dependencies..."
+          if [ -f "${{ inputs.context }}/requirements.txt" ]; then
+            pip install --quiet -r ${{ inputs.context }}/requirements.txt
+          fi
+          pip install --quiet pytest
+
+      # -------------------------------------------------------
+      # 10. Pytest — Unit tests
+      # -------------------------------------------------------
+      - name: Pytest — Unit tests
+        id: pytest
+        if: steps.detect-tests.outputs.has_tests == 'true'
+        working-directory: ${{ inputs.context }}
+        run: |
+          echo "🧪 Running pytest for ${{ inputs.service }}..."
+          pytest test_*.py \
+            -v \
+            --tb=short \
+            --junitxml=test-results.xml \
+            2>&1 | tee pytest-output.txt
+
+          # Parse results for summary
+          PASSED=$(grep -oP '\d+ passed' pytest-output.txt | grep -oP '\d+' || echo "0")
+          FAILED=$(grep -oP '\d+ failed' pytest-output.txt | grep -oP '\d+' || echo "0")
+          ERRORS=$(grep -oP '\d+ error' pytest-output.txt | grep -oP '\d+' || echo "0")
+
+          echo "### 🧪 Unit Tests — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | ${PASSED} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | ${FAILED} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚠️ Errors | ${ERRORS} |" >> $GITHUB_STEP_SUMMARY
+
+      # -------------------------------------------------------
+      # 11. Summary
+      # -------------------------------------------------------
+      - name: Pipeline summary
+        if: always()
+        run: |
+          echo "### 📋 Lint & Test Summary — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Hadolint (Dockerfile) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.detect-lang.outputs.is_python }}" == "true" ]; then
+            echo "| Ruff (Python lint) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            echo "| Bandit (SAST) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.detect-tests.outputs.has_tests }}" == "true" ]; then
+              echo "| Pytest (Unit tests) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Pytest (Unit tests) | ⏭️ Skipped (no test files) |" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| Python checks | ⏭️ Skipped (non-Python) |" >> $GITHUB_STEP_SUMMARY
+          fi

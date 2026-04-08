@@ -1,0 +1,117 @@
+{
+    "annotations": { "list": [] },
+    "editable": true,
+    "graphTooltip": 1,
+    "panels": [
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+            "id": 100,
+            "title": "🔍 Host System Logs (/var/log/syslog)",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+            "id": 1,
+            "title": "All System Events (syslog)",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            },
+            "targets": [
+                {
+                    "expr": "{job=\"syslog\",vm=~\"$vm\"}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+            "id": 101,
+            "title": "🛡️ Security Logs (/var/log/auth.log)",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 12, "w": 24, "x": 0, "y": 14 },
+            "id": 2,
+            "title": "SSH & Sudo Events",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            },
+            "targets": [
+                {
+                    "expr": "{job=\"auth\",vm=~\"$vm\"}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+            "id": 102,
+            "title": "📊 Log Volume by VM",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "min": 0,
+                    "custom": {
+                        "fillOpacity": 20,
+                        "stacking": { "mode": "normal" }
+                    }
+                }
+            },
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 27 },
+            "id": 3,
+            "title": "Host Log Volume by VM",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "sum by(vm) (count_over_time({source=\"host\",vm=~\"$vm\"}[1m]))",
+                    "legendFormat": "{{ vm }}"
+                }
+            ]
+        }
+    ],
+    "schemaVersion": 39,
+    "tags": ["loki", "logging", "host", "security"],
+    "templating": {
+        "list": [
+            {
+                "allValue": ".*",
+                "current": { "selected": true, "text": "All", "value": "$__all" },
+                "datasource": { "type": "loki", "uid": "loki-datasource" },
+                "definition": "label_values({source=\"host\"}, vm)",
+                "includeAll": true,
+                "label": "VM",
+                "multi": true,
+                "name": "vm",
+                "query": "label_values({source=\"host\"}, vm)",
+                "refresh": 2,
+                "type": "query"
+            }
+        ]
+    },
+    "time": { "from": "now-1h", "to": "now" },
+    "timezone": "browser",
+    "title": "Host OS & System Logs",
+    "uid": "host-system-logs",
+    "version": 3
+}

@@ -1,0 +1,211 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "TraceQL Investigation Dashboard — Sử dụng TraceQL queries để phân tích traces nâng cao",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "description": "Tất cả traces có status = error trong khoảng thời gian được chọn.\n\nTraceQL: { status = error }\n\nTác dụng: Nhanh chóng tìm tất cả request thất bại để debug.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
+          "limit": 20,
+          "queryType": "traceql",
+          "refId": "A",
+          "query": "{ status = error }",
+          "tableType": "traces"
+        }
+      ],
+      "title": "🔴 Recent Errors",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "description": "Traces có span chậm hơn 500ms.\n\nTraceQL: { duration > 500ms }\n\nTác dụng: Tìm performance bottleneck — bất kỳ span nào chậm hơn ngưỡng đều xuất hiện ở đây.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
+          "limit": 20,
+          "queryType": "traceql",
+          "refId": "A",
+          "query": "{ duration > 500ms }",
+          "tableType": "traces"
+        }
+      ],
+      "title": "🐢 Slow Requests (> 500ms)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "description": "Traces lỗi từ payment-service.\n\nTraceQL: { resource.service.name = \"payment-service\" && status = error }\n\nTác dụng: Kết hợp filter theo service + status — rất phổ biến trong production để debug 1 service cụ thể.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 3,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
+          "limit": 20,
+          "queryType": "traceql",
+          "refId": "A",
+          "query": "{ resource.service.name = \"payment-service\" && status = error }",
+          "tableType": "traces"
+        }
+      ],
+      "title": "💳 Payment Failures",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "description": "Spans có tên 'call_payment_gateway' và chậm hơn 1 giây.\n\nTraceQL: { name = \"call_payment_gateway\" && duration > 1s }\n\nTác dụng: Filter theo span name + latency — debug external dependency chậm.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 4,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
+          "limit": 20,
+          "queryType": "traceql",
+          "refId": "A",
+          "query": "{ name = \"call_payment_gateway\" && duration > 1s }",
+          "tableType": "traces"
+        }
+      ],
+      "title": "⏱️ Slow Payment Gateway (> 1s)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "description": "Orders có giá trị cao (payment.amount > 400).\n\nTraceQL: { span.payment.amount > 400 }\n\nTác dụng: Filter theo custom span attribute — demo khả năng query business-level data trong traces.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 5,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
+          "limit": 20,
+          "queryType": "traceql",
+          "refId": "A",
+          "query": "{ span.payment.amount > 400 }",
+          "tableType": "traces"
+        }
+      ],
+      "title": "💰 High-value Orders (> $400)",
+      "type": "table"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["tracing", "traceql", "investigation"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Trace Investigation (TraceQL)",
+  "uid": "trace-investigation",
+  "version": 1,
+  "weekStart": ""
+}

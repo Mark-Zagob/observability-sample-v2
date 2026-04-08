@@ -1,0 +1,113 @@
+# ============================================================
+# Kafka Alert Rules
+# ============================================================
+# Alert rules cho Kafka cluster, consumer groups, và workers.
+# Metrics từ kafka-exporter + application custom metrics.
+# ============================================================
+
+groups:
+  # ----------------------------------------------------------
+  # Kafka Cluster Health
+  # ----------------------------------------------------------
+  - name: kafka_cluster_alerts
+    interval: 30s
+    rules:
+
+      # Kafka exporter unreachable
+      - alert: KafkaExporterDown
+        expr: up{job="kafka-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka Exporter is down"
+          description: "Cannot scrape kafka-exporter metrics. Kafka monitoring is blind."
+
+      # Topic has under-replicated partitions
+      - alert: KafkaTopicUnderReplicated
+        expr: kafka_topic_partition_under_replicated_partition > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Under-replicated partitions on topic {{ $labels.topic }}"
+          description: "Partition {{ $labels.partition }} of topic {{ $labels.topic }} is under-replicated. Data durability at risk."
+
+  # ----------------------------------------------------------
+  # Consumer Group Monitoring
+  # ----------------------------------------------------------
+  - name: kafka_consumer_alerts
+    interval: 30s
+    rules:
+
+      # Consumer lag > 100 for 5 minutes
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          sum by(consumergroup, topic) (
+            kafka_consumergroup_lag
+          ) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High consumer lag for {{ $labels.consumergroup }}"
+          description: "Consumer group {{ $labels.consumergroup }} has lag of {{ $value }} on topic {{ $labels.topic }}. Events are piling up."
+
+      # Consumer lag > 1000 — critical backlog
+      - alert: KafkaConsumerLagCritical
+        expr: |
+          sum by(consumergroup, topic) (
+            kafka_consumergroup_lag
+          ) > 1000
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical consumer lag for {{ $labels.consumergroup }}"
+          description: "Consumer group {{ $labels.consumergroup }} has lag of {{ $value }}. Consumers may be down or overwhelmed."
+
+      # Consumer group has no active members (no consumers connected)
+      - alert: KafkaConsumerGroupDown
+        expr: |
+          kafka_consumergroup_members == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consumer group {{ $labels.consumergroup }} has no members"
+          description: "No consumers are connected to group {{ $labels.consumergroup }}. Events are not being processed."
+
+  # ----------------------------------------------------------
+  # Worker Service Alerts
+  # ----------------------------------------------------------
+  - name: kafka_worker_alerts
+    interval: 30s
+    rules:
+
+      # Notification worker error rate high
+      - alert: NotificationWorkerHighErrorRate
+        expr: |
+          rate(inventory_errors_total[5m]) > 0.1
+          or
+          rate(kafka_events_consumed_total{service_name="notification-worker"}[5m]) == 0
+          and
+          kafka_consumergroup_lag{consumergroup="notification-workers"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: notification-worker
+        annotations:
+          summary: "Notification worker is failing or stalled"
+          description: "The notification worker is either producing errors or has stopped consuming despite pending messages."
+
+      # Inventory worker error rate high
+      - alert: InventoryWorkerHighErrorRate
+        expr: |
+          rate(inventory_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: inventory-worker
+        annotations:
+          summary: "Inventory worker has high error rate"
+          description: "The inventory worker is producing errors at {{ $value }}/s."

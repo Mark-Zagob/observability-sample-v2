@@ -1,0 +1,24 @@
+# ============================================================
+# Grafana Datasource Provisioning
+# ============================================================
+# File này tự động cấu hình Prometheus làm datasource
+# khi Grafana khởi động lần đầu.
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: PBFA97CFB590B2093         # UID cố định, dashboard JSON reference tới
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"          # Phải khớp với scrape_interval
+      httpMethod: POST
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo-datasource
+          urlDisplayLabel: "View Trace"

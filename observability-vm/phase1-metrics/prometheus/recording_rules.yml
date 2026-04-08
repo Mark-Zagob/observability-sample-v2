@@ -1,0 +1,83 @@
+# ============================================================
+# Recording Rules - Pre-computed Metrics
+# ============================================================
+# Recording rules tính trước các PromQL phức tạp và lưu
+# thành metrics mới. Lợi ích:
+#   - Dashboard/Alert query nhanh hơn (chỉ đọc kết quả)
+#   - DRY: viết PromQL phức tạp 1 lần
+#   - Nhiều users xem dashboard = tính 1 lần
+#
+# Naming convention:  level:metric_name:operation
+# ============================================================
+
+groups:
+  # ----------------------------------------------------------
+  # Application Recording Rules (từ span metrics)
+  # ----------------------------------------------------------
+  - name: app_recording_rules
+    interval: 30s
+    rules:
+
+      # Request rate by service (req/s)
+      - record: service:request_rate:5m
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{
+              span_kind="SPAN_KIND_SERVER"
+            }[5m])
+          )
+
+      # Error rate by service (%)
+      - record: service:error_rate_percent:5m
+        expr: |
+          100 * sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{
+              span_kind="SPAN_KIND_SERVER",
+              status_code="STATUS_CODE_ERROR"
+            }[5m])
+          )
+          /
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{
+              span_kind="SPAN_KIND_SERVER"
+            }[5m])
+          )
+
+      # P95 latency by service (seconds)
+      - record: service:latency_p95:5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, service_name) (
+              rate(traces_spanmetrics_latency_bucket{
+                span_kind="SPAN_KIND_SERVER"
+              }[5m])
+            )
+          )
+
+      # P50 latency by service (seconds)
+      - record: service:latency_p50:5m
+        expr: |
+          histogram_quantile(0.50,
+            sum by (le, service_name) (
+              rate(traces_spanmetrics_latency_bucket{
+                span_kind="SPAN_KIND_SERVER"
+              }[5m])
+            )
+          )
+
+  # ----------------------------------------------------------
+  # Infrastructure Recording Rules
+  # ----------------------------------------------------------
+  - name: infra_recording_rules
+    interval: 30s
+    rules:
+
+      # CPU usage by instance (%)
+      - record: instance:cpu_usage_percent:5m
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+
+      # Memory usage by instance (%)
+      - record: instance:memory_usage_percent:5m
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100

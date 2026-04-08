@@ -1,0 +1,148 @@
+# ============================================================
+# Prometheus Configuration — Observability VM
+# ============================================================
+# Scrape targets từ 2 VM:
+#   - Local (observability VM): prometheus, alertmanager, otel-collector
+#   - Remote (app VM 192.168.100.57): node-exporter, cadvisor
+# ============================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# ============================================================
+# Alerting - Gửi alerts tới Alertmanager
+# ============================================================
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# ============================================================
+# Alert Rules
+# ============================================================
+rule_files:
+  - "alert_rules.yml"
+  - "tracing_alert_rules.yml"
+  - "recording_rules.yml"
+  - "kafka_alert_rules.yml"
+
+# ============================================================
+# Scrape Configs
+# ============================================================
+scrape_configs:
+
+  # ==========================================================
+  # LOCAL TARGETS (Observability VM — 192.168.100.55)
+  # ==========================================================
+
+  # ----------------------------------------------------------
+  # 1. Prometheus tự monitor
+  # ----------------------------------------------------------
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          environment: "lab"
+          vm: "observability"
+
+  # ----------------------------------------------------------
+  # 2. Node Exporter — Observability VM
+  # ----------------------------------------------------------
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          environment: "lab"
+          type: "infrastructure"
+          vm: "observability"
+
+  # ----------------------------------------------------------
+  # 3. cAdvisor — Observability VM containers
+  # ----------------------------------------------------------
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          environment: "lab"
+          type: "container"
+          vm: "observability"
+
+  # ----------------------------------------------------------
+  # 4. Alertmanager
+  # ----------------------------------------------------------
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels:
+          environment: "lab"
+          vm: "observability"
+
+  # ----------------------------------------------------------
+  # 5. Application Metrics (via OTel Collector)
+  # ----------------------------------------------------------
+  - job_name: "app-metrics"
+    static_configs:
+      - targets: ["otel-collector:8889"]
+        labels:
+          environment: "lab"
+          type: "application"
+
+  # ----------------------------------------------------------
+  # 6. Span Metrics (auto RED via OTel spanmetrics connector)
+  # ----------------------------------------------------------
+  - job_name: "span-metrics"
+    static_configs:
+      - targets: ["otel-collector:8890"]
+        labels:
+          environment: "lab"
+          type: "span-metrics"
+
+  # ==========================================================
+  # REMOTE TARGETS (App VM — 192.168.100.57)
+  # ==========================================================
+
+  # ----------------------------------------------------------
+  # 7. Node Exporter — App VM
+  # ----------------------------------------------------------
+  - job_name: "node-exporter-app"
+    static_configs:
+      - targets: ["192.168.100.57:9100"]
+        labels:
+          environment: "lab"
+          type: "infrastructure"
+          vm: "app"
+
+  # ----------------------------------------------------------
+  # 8. cAdvisor — App VM containers
+  # ----------------------------------------------------------
+  - job_name: "cadvisor-app"
+    static_configs:
+      - targets: ["192.168.100.57:8080"]
+        labels:
+          environment: "lab"
+          type: "container"
+          vm: "app"
+
+  # ----------------------------------------------------------
+  # 9. Traffic Generator — App VM (for conditional alerting)
+  # ----------------------------------------------------------
+  - job_name: "traffic-gen"
+    static_configs:
+      - targets: ["192.168.100.57:5003"]
+        labels:
+          environment: "lab"
+          type: "traffic-gen"
+          vm: "app"
+
+  # ----------------------------------------------------------
+  # 10. Kafka Exporter — App VM
+  # ----------------------------------------------------------
+  - job_name: "kafka-exporter"
+    static_configs:
+      - targets: ["192.168.100.57:9308"]
+        labels:
+          environment: "lab"
+          type: "kafka"
+          vm: "app"

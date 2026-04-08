@@ -1,0 +1,244 @@
+# ============================================================
+# Alert Rules - Phase 1
+# ============================================================
+# Alert rules sẽ được Prometheus evaluate theo evaluation_interval.
+# Khi condition đúng trong khoảng `for`, alert sẽ FIRING.
+# ============================================================
+
+groups:
+  # ----------------------------------------------------------
+  # Infrastructure Alerts
+  # ----------------------------------------------------------
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+
+      # Target bị down
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Target {{ $labels.instance }} is down"
+          description: "{{ $labels.job }} / {{ $labels.instance }} has been down for more than 1 minute."
+
+      # CPU usage > 80%
+      - alert: HighCpuUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is at {{ $value }}%"
+
+      # Memory usage > 85%
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is at {{ $value }}%"
+
+      # Disk usage > 80%
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk {{ $labels.mountpoint }} is at {{ $value }}%"
+
+      # ----------------------------------------------------------
+      # Predictive Alerts — dự đoán trước khi xảy ra
+      # ----------------------------------------------------------
+      # predict_linear(metric[lookback], seconds) dự đoán giá trị
+      # metric sau X giây dựa trên xu hướng trong lookback window.
+      #
+      # Ví dụ: predict_linear(disk_avail[1d], 4*3600) < 0
+      # = "Nếu disk giảm cùng tốc độ 1 ngày qua, sẽ hết trong 4h"
+      # ----------------------------------------------------------
+
+      # Disk sẽ đầy trong 4 giờ tới
+      - alert: DiskWillFillIn4Hours
+        expr: |
+          predict_linear(
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}[1d], 4 * 3600
+          ) < 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} predicted to fill in 4h"
+          description: "Based on the trend of the last 24h, disk {{ $labels.mountpoint }} on {{ $labels.instance }} will run out of space within 4 hours."
+
+      # Memory sẽ hết trong 2 giờ tới
+      - alert: MemoryWillExhaustIn2Hours
+        expr: |
+          predict_linear(
+            node_memory_MemAvailable_bytes[1h], 2 * 3600
+          ) < 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory predicted to exhaust in 2h on {{ $labels.instance }}"
+          description: "Based on the trend of the last 1h, available memory will be exhausted within 2 hours."
+
+  # ----------------------------------------------------------
+  # Watchdog (Dead Man's Switch)
+  # ----------------------------------------------------------
+  # Alert luôn firing 24/7. Nếu nó RESOLVED → alerting pipeline
+  # bị hỏng (Prometheus/Alertmanager/network issue).
+  #
+  # Production tip: Kết hợp với PagerDuty Dead Man's Snitch
+  # hoặc Healthchecks.io để monitor pipeline từ bên ngoài.
+  # ----------------------------------------------------------
+  - name: watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Watchdog — alerting pipeline is healthy"
+          description: "This alert always fires. If you stop receiving it, the alerting pipeline is broken."
+
+  # ==========================================================
+  # SLI Recording Rules (Phase 6)
+  # ==========================================================
+  # Recording rules pre-calculate SLIs to:
+  #   1. Tránh query nặng khi load dashboard
+  #   2. Cho phép alert trên kết quả đã tính sẵn
+  #   3. Giữ data consistency giữa dashboard và alert
+  #
+  # Naming convention: sli:<signal>:<aggregation>
+  # ==========================================================
+  - name: sli_recording_rules
+    interval: 30s
+    rules:
+
+      # --- Availability SLI ---
+      # Tỉ lệ request thành công trong 5 phút gần nhất
+      - record: sli:api_gateway_availability:rate5m
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success"}[5m]))
+            /
+            sum(rate(api_gateway_requests_total[5m]))
+          ) or vector(1)
+
+      # --- Latency SLI ---
+      # P95 latency của API Gateway trong 5 phút
+      - record: sli:api_gateway_latency_p95:rate5m
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le)
+          )
+
+      # --- Payment Success SLI ---
+      - record: sli:payment_success_rate:rate5m
+        expr: |
+          (
+            sum(rate(payments_total{status="completed"}[5m]))
+            /
+            sum(rate(payments_total[5m]))
+          ) or vector(1)
+
+      # --- 30 phút rolling window (dùng cho burn rate) ---
+      - record: sli:api_gateway_availability:rate30m
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success"}[30m]))
+            /
+            sum(rate(api_gateway_requests_total[30m]))
+          ) or vector(1)
+
+      - record: sli:payment_success_rate:rate30m
+        expr: |
+          (
+            sum(rate(payments_total{status="completed"}[30m]))
+            /
+            sum(rate(payments_total[30m]))
+          ) or vector(1)
+
+  # ==========================================================
+  # SLO Burn Rate Alerts (Phase 6)
+  # ==========================================================
+  # SLO targets:
+  #   - API Gateway Availability: 99.5%  (error budget = 0.5%)
+  #   - Payment Success Rate:     99.0%  (error budget = 1.0%)
+  #   - API Gateway P95 Latency:  < 500ms
+  #
+  # Burn Rate = tốc độ tiêu thụ error budget
+  #   - burn_rate = 1  → dùng hết budget đúng hạn (30 ngày)
+  #   - burn_rate > 14 → hết budget trong ~2 giờ (CRITICAL)
+  #   - burn_rate > 6  → hết budget trong ~5 giờ (WARNING)
+  #
+  # Công thức: burn_rate = (1 - availability) / (1 - slo_target)
+  # ==========================================================
+  - name: slo_burn_rate_alerts
+    interval: 30s
+    rules:
+
+      # CRITICAL: API Gateway burn rate > 14x trong 5 phút liên tục
+      # → Error budget sẽ hết trong ~2 giờ
+      - alert: APIGatewayHighBurnRate
+        expr: |
+          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 14
+          and
+          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 14
+        for: 2m
+        labels:
+          severity: critical
+          slo: api_gateway_availability
+        annotations:
+          summary: "API Gateway SLO burn rate is critical (>14x)"
+          description: "Error budget is being consumed 14x faster than sustainable. At this rate, the entire 30-day error budget will be exhausted in ~2 hours. Current availability: {{ $value }}"
+
+      # WARNING: API Gateway burn rate > 6x trong 5 phút
+      # → Error budget sẽ hết trong ~5 giờ
+      - alert: APIGatewayModerateBurnRate
+        expr: |
+          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 6
+          and
+          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 6
+        for: 5m
+        labels:
+          severity: warning
+          slo: api_gateway_availability
+        annotations:
+          summary: "API Gateway SLO burn rate is elevated (>6x)"
+          description: "Error budget is being consumed 6x faster than sustainable. At this rate, the 30-day budget will be exhausted in ~5 hours."
+
+      # CRITICAL: Payment Success burn rate > 14x
+      - alert: PaymentHighBurnRate
+        expr: |
+          (1 - sli:payment_success_rate:rate5m) / (1 - 0.99) > 14
+          and
+          (1 - sli:payment_success_rate:rate30m) / (1 - 0.99) > 14
+        for: 2m
+        labels:
+          severity: critical
+          slo: payment_success
+        annotations:
+          summary: "Payment SLO burn rate is critical (>14x)"
+          description: "Payment error budget is being consumed 14x faster than sustainable."
+
+      # WARNING: P95 Latency vượt 500ms
+      - alert: APIGatewayLatencySLOBreach
+        expr: sli:api_gateway_latency_p95:rate5m > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          slo: api_gateway_latency
+        annotations:
+          summary: "API Gateway P95 latency exceeds 500ms SLO"
+          description: "P95 latency is {{ $value }}s, exceeding the 500ms target."

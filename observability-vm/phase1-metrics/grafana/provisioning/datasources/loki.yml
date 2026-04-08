@@ -1,0 +1,25 @@
+# ============================================================
+# Grafana Datasource - Loki (Phase 2 + Phase 6 correlation)
+# ============================================================
+# derivedFields: extract trace_id từ JSON log → link sang Tempo
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki-datasource
+    access: proxy
+    url: http://loki:3100
+    isDefault: false
+    editable: true
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # Extract trace_id từ structured JSON log → tạo link sang Tempo
+        - datasourceUid: tempo-datasource
+          matcherRegex: '"trace_id":\s*"([a-f0-9]+)"'
+          matcherType: regex
+          name: TraceID
+          url: "$${__value.raw}"

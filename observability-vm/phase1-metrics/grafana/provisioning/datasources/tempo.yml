@@ -1,0 +1,31 @@
+# ============================================================
+# Grafana Datasource - Tempo (added by Phase 3)
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo-datasource
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false
+    editable: true
+    jsonData:
+      tracesToLogsV2:                 # Link traces → logs (Loki)
+        datasourceUid: loki-datasource
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{compose_project=~".+"} |= "${__trace.traceId}"'
+      tracesToMetrics:                # Link traces → metrics (Prometheus)
+        datasourceUid: PBFA97CFB590B2093
+      nodeGraph:
+        enabled: true                 # Service map visualization
+      traceQuery:
+        timeShiftEnabled: true
+        spanStartTimeShift: "1h"
+        spanEndTimeShift: "1h"
+      serviceMap:
+        datasourceUid: PBFA97CFB590B2093

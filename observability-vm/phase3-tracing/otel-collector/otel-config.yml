@@ -1,0 +1,208 @@
+# ============================================================
+# OpenTelemetry Collector Configuration
+# ============================================================
+# Nhận traces + metrics từ apps → xử lý → export
+#   - Traces → tail_sampling → Tempo + spanmetrics
+#   - Metrics (app)  → Prometheus (:8889)
+#   - Metrics (span) → Prometheus (:8890)
+# ============================================================
+
+# ============================================================
+# Receivers - Nhận data từ applications
+# ============================================================
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"      # Apps gửi traces + metrics qua gRPC
+      http:
+        endpoint: "0.0.0.0:4318"      # Apps gửi traces + metrics qua HTTP
+
+# ============================================================
+# Processors - Xử lý data trước khi export
+# ============================================================
+processors:
+  # Gộp thành batch trước khi gửi (giảm network calls)
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+  # Thêm metadata về nguồn gốc
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: "lab"
+        action: upsert
+
+  # ============================================================
+  # FILTER - Loại bỏ health check spans
+  # ============================================================
+  # Health check endpoints (/health, /ready) được gọi liên tục
+  # bởi orchestrator/load-balancer → tạo hàng nghìn spans vô nghĩa.
+  # Drop sớm ở đây để giảm:
+  #   - Storage cost (Tempo + S3)
+  #   - Prometheus cardinality (spanmetrics)
+  #   - Noise khi investigate traces
+  # ============================================================
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["http.route"] == "/health"'
+        - 'attributes["http.route"] == "/ready"'
+        - 'attributes["http.route"] == "/healthz"'
+        - 'attributes["url.path"] == "/health"'
+        - 'attributes["url.path"] == "/ready"'
+        - 'attributes["url.path"] == "/healthz"'
+
+  # ============================================================
+  # TAIL-BASED SAMPLING (Phase 3 Enhancement)
+  # ============================================================
+  # Quyết định giữ/drop trace SAU KHI trace hoàn thành.
+  #
+  # Flow: Collector buffer traces → đợi decision_wait →
+  #       evaluate policies → giữ hoặc drop.
+  #
+  # Policies được evaluate theo thứ tự, trace được GIỮ nếu
+  # BẤT KỲ policy nào match.
+  # ============================================================
+  tail_sampling:
+    # Thời gian đợi cho trace hoàn thành trước khi quyết định
+    # Trade-off: dài hơn → chính xác hơn, nhưng tốn RAM hơn
+    decision_wait: 10s
+
+    # Số traces tối đa được buffer trong bộ nhớ
+    # Nếu vượt quá → traces cũ nhất bị force-decision
+    num_traces: 50000
+
+    policies:
+      # ---------------------------------------------------------
+      # Policy 1: LUÔN giữ traces có lỗi (ERROR status)
+      # ---------------------------------------------------------
+      # Đây là policy quan trọng nhất — khi debug, bạn cần
+      # trace lỗi 100%. Không bao giờ drop traces có error.
+      # ---------------------------------------------------------
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+      # ---------------------------------------------------------
+      # Policy 2: LUÔN giữ traces chậm (> 500ms)
+      # ---------------------------------------------------------
+      # Latency cao thường là dấu hiệu của vấn đề.
+      # Giữ 100% slow traces để phân tích bottleneck.
+      # ---------------------------------------------------------
+      - name: keep-slow-requests
+        type: latency
+        latency:
+          threshold_ms: 500
+
+      # ---------------------------------------------------------
+      # Policy 3: Random 10% cho traces bình thường
+      # ---------------------------------------------------------
+      # Traces bình thường (không lỗi, không chậm) chỉ giữ 10%
+      # → giảm ~90% storage mà vẫn có mẫu đại diện.
+      #
+      # Production: Tuỳ traffic, có thể giảm xuống 1-5%
+      # ---------------------------------------------------------
+      - name: random-sample
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+# ============================================================
+# Connectors - Kết nối pipeline với pipeline
+# ============================================================
+# Connector vừa là exporter của pipeline A,
+# vừa là receiver của pipeline B.
+# ============================================================
+connectors:
+  # ============================================================
+  # SPANMETRICS CONNECTOR (Phase 3 Enhancement)
+  # ============================================================
+  # Tự động tạo RED metrics từ traces:
+  #   - calls_total      → Request count (Rate)
+  #   - calls_total{status_code="STATUS_CODE_ERROR"}  (Errors)
+  #   - duration_bucket   → Latency histogram (Duration)
+  #
+  # Không cần instrument thủ công — chỉ cần có traces!
+  # ============================================================
+  spanmetrics:
+    # Histogram buckets cho latency distribution
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s]
+
+    # Thêm dimensions từ span attributes vào metrics labels
+    # → cho phép filter/group by trong PromQL
+    dimensions:
+      - name: http.method
+      - name: http.status_code
+      - name: http.route
+
+    # Namespace prefix cho metrics (tránh conflict)
+    # Kết quả: span_calls_total, span_duration_bucket
+    namespace: span
+
+    # Resource attributes cần giữ làm metrics labels
+    dimensions_cache_size: 1000
+    aggregation_temporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"
+
+# ============================================================
+# Exporters - Gửi data tới backend
+# ============================================================
+exporters:
+  # Traces → Tempo qua OTLP gRPC
+  otlp:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+
+  # App Metrics (manual) → Prometheus :8889
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    resource_to_telemetry_conversion:
+      enabled: true                    # service.name → label trên metric
+
+  # Span Metrics (auto RED) → Prometheus :8890
+  # Tách riêng port để phân biệt manual vs auto metrics
+  prometheus/spanmetrics:
+    endpoint: "0.0.0.0:8890"
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Debug: in ra stdout (troubleshoot)
+  debug:
+    verbosity: basic
+
+# ============================================================
+# Service - Kết nối receivers → processors → exporters
+# ============================================================
+service:
+  pipelines:
+    # Traces pipeline
+    # Flow: OTLP → batch → resource → tail_sampling → Tempo + spanmetrics
+    #
+    # ⚠️ tail_sampling PHẢI đặt SAU batch/resource
+    #    vì nó cần đợi trace hoàn thành
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource, filter/health, tail_sampling]
+      exporters: [otlp, debug, spanmetrics]
+
+    # App Metrics pipeline (manual metrics từ code — Phase 5)
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [prometheus]
+
+    # SpanMetrics pipeline (auto RED metrics từ traces)
+    # Receiver = spanmetrics connector (nhận từ traces pipeline)
+    metrics/spanmetrics:
+      receivers: [spanmetrics]
+      exporters: [prometheus/spanmetrics]
+
+  telemetry:
+    logs:
+      level: info

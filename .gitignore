@@ -1,0 +1,32 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+# === Environment ===
+.env
+*.env.local
+# === Docker volumes (data) ===
+postgres_data/
+kafka_data/
+# === OS ===
+.DS_Store
+Thumbs.db
+# === IDE ===
+.vscode/
+.idea/
+# === Logs ===
+*.log
+# === Secrets ===
+.env
+*.env.local
+# === Rendered configs (chứa secrets) ===
+alertmanager/alertmanager.yml
+!alertmanager/alertmanager.yml.tpl
+# ===terrraform===
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.lock.hcl

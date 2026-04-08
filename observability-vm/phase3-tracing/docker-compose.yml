@@ -1,0 +1,50 @@
+# ============================================================
+# Phase 3: Tracing
+# Tempo + OTEL Collector + Sample App (3 microservices)
+# ============================================================
+
+services:
+  # ==========================================================
+  # GRAFANA TEMPO - Trace Storage & Query
+  # ==========================================================
+  tempo:
+    image: grafana/tempo:2.7.0
+    container_name: tempo
+    command: ["-config.file=/etc/tempo/tempo-config.yml"]
+    volumes:
+      - ./tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"        # Tempo HTTP API
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # OPENTELEMETRY COLLECTOR - Trace Processor
+  # ==========================================================
+  # Nhận traces từ apps → batch → gửi tới Tempo
+  # ==========================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel/otel-config.yml"]
+    volumes:
+      - ./otel-collector/otel-config.yml:/etc/otel/otel-config.yml:ro
+    ports:
+      - "4317:4317"        # OTLP gRPC (apps gửi traces vào đây)
+      - "4318:4318"        # OTLP HTTP
+      - "8889:8889"        # Prometheus metrics exporter (Phase 5 — app metrics)
+      - "8890:8890"        # Prometheus metrics exporter (spanmetrics — auto RED)
+    networks:
+      - observability
+    depends_on:
+      - tempo
+    restart: unless-stopped
+
+volumes:
+  tempo_data:
+
+networks:
+  observability:
+    external: true

@@ -1,0 +1,189 @@
+{
+    "annotations": { "list": [] },
+    "editable": true,
+    "graphTooltip": 1,
+    "panels": [
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+            "id": 100,
+            "title": "📝 Log Viewer",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+            "id": 1,
+            "title": "All Container Logs",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": false,
+                "enableLogDetails": true,
+                "sortOrder": "Descending",
+                "dedupStrategy": "none"
+            },
+            "targets": [
+                {
+                    "expr": "{source=\"docker\",vm=~\"$vm\"}",
+                    "legendFormat": "",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+            "id": 101,
+            "title": "📊 Log Volume & Rates",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "min": 0,
+                    "custom": {
+                        "fillOpacity": 20,
+                        "stacking": { "mode": "normal" }
+                    }
+                }
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+            "id": 2,
+            "title": "Log Volume by Container",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "sum by(container_name) (count_over_time({source=\"docker\",vm=~\"$vm\"}[1m]))",
+                    "legendFormat": "{{ container_name }}"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "min": 0,
+                    "custom": {
+                        "fillOpacity": 20,
+                        "stacking": { "mode": "normal" }
+                    }
+                }
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+            "id": 3,
+            "title": "Log Volume by VM",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "expr": "sum by(vm) (count_over_time({source=\"docker\",vm=~\"$vm\"}[1m]))",
+                    "legendFormat": "{{ vm }}"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+            "id": 102,
+            "title": "⚠️ Error Logs",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+            "id": 4,
+            "title": "Error & Warning Logs",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            },
+            "targets": [
+                {
+                    "expr": "{source=\"docker\",vm=~\"$vm\",detected_level=~\"error|warn\"}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+            "id": 103,
+            "title": "🔍 Per-Service Logs",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 10, "w": 12, "x": 0, "y": 34 },
+            "id": 5,
+            "title": "Prometheus Logs",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": false,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            },
+            "targets": [
+                {
+                    "expr": "{container_name=\"prometheus\"}",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "loki", "uid": "loki-datasource" },
+            "gridPos": { "h": 10, "w": 12, "x": 12, "y": 34 },
+            "id": 6,
+            "title": "Grafana Logs",
+            "type": "logs",
+            "options": {
+                "showTime": true,
+                "showLabels": false,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            },
+            "targets": [
+                {
+                    "expr": "{container_name=\"grafana\"}",
+                    "refId": "A"
+                }
+            ]
+        }
+    ],
+    "schemaVersion": 39,
+    "tags": ["loki", "logging", "phase2"],
+    "templating": {
+        "list": [
+            {
+                "allValue": ".*",
+                "current": { "selected": true, "text": "All", "value": "$__all" },
+                "datasource": { "type": "loki", "uid": "loki-datasource" },
+                "definition": "label_values({source=\"docker\"}, vm)",
+                "includeAll": true,
+                "label": "VM",
+                "multi": true,
+                "name": "vm",
+                "query": "label_values({source=\"docker\"}, vm)",
+                "refresh": 2,
+                "type": "query"
+            }
+        ]
+    },
+    "time": { "from": "now-1h", "to": "now" },
+    "timezone": "browser",
+    "title": "Docker Logs Overview",
+    "uid": "docker-logs-overview",
+    "version": 2
+}

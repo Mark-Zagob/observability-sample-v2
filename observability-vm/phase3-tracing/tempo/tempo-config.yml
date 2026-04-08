@@ -1,0 +1,92 @@
+# ============================================================
+# Tempo Configuration
+# ============================================================
+# Chế độ: monolithic (single process)
+# Nhận traces qua OTLP protocol từ OTEL Collector
+# Storage: MinIO (S3-compatible) — bucket "tempo"
+# ============================================================
+
+stream_over_http_enabled: true    # Enable streaming traces qua HTTP
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: info
+
+# ============================================================
+# Distributor - Nhận traces từ OTEL Collector
+# ============================================================
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"    # OTLP gRPC
+        http:
+          endpoint: "0.0.0.0:4318"    # OTLP HTTP
+
+# ============================================================
+# Ingester - Ghi traces vào storage
+# ============================================================
+ingester:
+  max_block_duration: 5m
+
+# ============================================================
+# Compactor - Nén và tối ưu storage
+# ============================================================
+compactor:
+  compaction:
+    block_retention: 168h             # Giữ traces 7 ngày
+
+# ============================================================
+# Storage — MinIO (S3-compatible)
+# ============================================================
+# WAL (Write-Ahead Log) vẫn ở local để đảm bảo performance
+# Blocks được flush lên S3 (MinIO) để lưu trữ lâu dài
+# ============================================================
+storage:
+  trace:
+    backend: s3
+    wal:
+      path: /var/tempo/wal
+    s3:
+      bucket: tempo
+      endpoint: minio:9000
+      access_key: minioadmin
+      secret_key: minioadmin
+      insecure: true              # HTTP cho lab
+      forcepathstyle: true        # Bắt buộc cho MinIO
+
+# ============================================================
+# Metrics Generator - Tạo metrics từ traces (RED metrics)
+# ============================================================
+# Tự động tạo span metrics (request rate, error rate, duration)
+# và gửi về Prometheus qua remote_write
+# ============================================================
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: docker-compose
+    stale_duration: 2m               # Xóa metric sau 2m không có traces mới (default: 15m)
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    span_metrics:
+      dimensions:
+        - service.name
+        - http.method
+        - http.status_code
+    service_graphs:
+      dimensions:
+        - service.name
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]

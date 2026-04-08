@@ -1,0 +1,126 @@
+# ============================================================
+# Alert Rules - Application / Tracing (Phase 4)
+# ============================================================
+# Alert rules cho application layer, dựa trên span metrics
+# từ Tempo metrics_generator → Prometheus.
+# ============================================================
+
+groups:
+  # ----------------------------------------------------------
+  # Application Alerts (từ span metrics)
+  # ----------------------------------------------------------
+  - name: application_alerts
+    interval: 30s
+    rules:
+
+      # Error rate > 10% trên bất kỳ service nào
+      - alert: HighErrorRate
+        expr: |
+          100 * sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{
+              span_kind="SPAN_KIND_SERVER",
+              status_code="STATUS_CODE_ERROR"
+            }[5m])
+          )
+          /
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{
+              span_kind="SPAN_KIND_SERVER"
+            }[5m])
+          ) > 10
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on {{ $labels.service_name }}"
+          description: "{{ $labels.service_name }} has {{ $value | printf \"%.1f\" }}% error rate (threshold: 10%)"
+
+      # P95 latency > 2 giây
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, service_name) (
+              rate(traces_spanmetrics_latency_bucket{
+                span_kind="SPAN_KIND_SERVER"
+              }[5m])
+            )
+          ) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High P95 latency on {{ $labels.service_name }}"
+          description: "{{ $labels.service_name }} P95 latency is {{ $value | printf \"%.2f\" }}s (threshold: 2s)"
+
+      # ----------------------------------------------------------
+      # Service Down Detection (conditional on load test running)
+      # ----------------------------------------------------------
+      # ⚠️ Chỉ fire khi traffic-gen đang chạy (traffic_gen_running == 1)
+      # mà không thấy traces từ service.
+      #
+      # Khi idle (không load test): alert KHÔNG fire.
+      # Khi load test đang chạy mà service down: alert fire.
+      #
+      # Logic: absent_over_time trả vector rỗng khi metric có
+      # → dùng "or on() vector(0)" để lấy 0 khi metric tồn tại,
+      # 1 khi metric absent. Rồi nhân với traffic_gen_running.
+      # ----------------------------------------------------------
+
+      - alert: ServiceNoTraces_ApiGateway
+        expr: |
+          (
+            absent_over_time(
+              traces_spanmetrics_calls_total{
+                span_kind="SPAN_KIND_SERVER",
+                service_name="api-gateway"
+              }[3m]
+            )
+          )
+          and on() (traffic_gen_running == 1)
+        for: 2m
+        labels:
+          severity: critical
+          service_name: api-gateway
+        annotations:
+          summary: "No traces from api-gateway (load test active)"
+          description: "Load test is running but api-gateway has not produced any traces in 3+ minutes. Service may be down."
+
+      - alert: ServiceNoTraces_OrderService
+        expr: |
+          (
+            absent_over_time(
+              traces_spanmetrics_calls_total{
+                span_kind="SPAN_KIND_SERVER",
+                service_name="order-service"
+              }[3m]
+            )
+          )
+          and on() (traffic_gen_running == 1)
+        for: 2m
+        labels:
+          severity: critical
+          service_name: order-service
+        annotations:
+          summary: "No traces from order-service (load test active)"
+          description: "Load test is running but order-service has not produced any traces in 3+ minutes. Service may be down."
+
+      - alert: ServiceNoTraces_PaymentService
+        expr: |
+          (
+            absent_over_time(
+              traces_spanmetrics_calls_total{
+                span_kind="SPAN_KIND_SERVER",
+                service_name="payment-service"
+              }[3m]
+            )
+          )
+          and on() (traffic_gen_running == 1)
+        for: 2m
+        labels:
+          severity: critical
+          service_name: payment-service
+        annotations:
+          summary: "No traces from payment-service (load test active)"
+          description: "Load test is running but payment-service has not produced any traces in 3+ minutes. Service may be down."
+
+

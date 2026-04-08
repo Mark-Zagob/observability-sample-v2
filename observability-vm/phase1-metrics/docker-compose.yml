@@ -1,0 +1,171 @@
+# ============================================================
+# Phase 1: Metrics Foundation
+# Prometheus + Grafana + Node Exporter + cAdvisor
+# ============================================================
+# Mục tiêu: Giám sát VM/host và Docker containers
+# Chưa cần sample app — chỉ tập trung infrastructure metrics
+# ============================================================
+
+services:
+  # ==========================================================
+  # PROMETHEUS - Metrics Collection & Storage
+  # ==========================================================
+  # Prometheus là "trái tim" của hệ thống metrics.
+  # Nó PULL (kéo) metrics từ các targets theo định kỳ.
+  # ==========================================================
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ./prometheus/tracing_alert_rules.yml:/etc/prometheus/tracing_alert_rules.yml:ro
+      - ./prometheus/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'       # Giữ data 15 ngày
+      - '--web.enable-lifecycle'                    # Cho phép reload config qua API
+      - '--web.enable-remote-write-receiver'        # Bật nhận remote write (hữu ích cho OTEL sau này)
+      - '--enable-feature=exemplar-storage'          # Lưu exemplars (trace_id gắn với metrics)
+    ports:
+      - "9090:9090"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # GRAFANA - Visualization & Dashboards
+  # ==========================================================
+  # Grafana là công cụ tạo dashboard, trực quan hoá metrics.
+  # Nó kết nối tới Prometheus như một datasource.
+  # ==========================================================
+  grafana:
+    image: grafana/grafana:12.3.3
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - observability
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ==========================================================
+  # NODE EXPORTER - Host/System Metrics
+  # ==========================================================
+  # Thu thập metrics của máy host: CPU, RAM, Disk, Network.
+  # Đây là exporter phổ biến nhất của Prometheus.
+  # ==========================================================
+  node-exporter:
+    image: prom/node-exporter:v1.10.2
+    container_name: node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # cADVISOR - Container Metrics
+  # ==========================================================
+  # Thu thập metrics của Docker containers:
+  # CPU, Memory, Network I/O, Disk I/O per container.
+  # ==========================================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.51.0
+    container_name: cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # ALERTMANAGER - Alert Routing & Notification (Phase 4)
+  # ==========================================================
+  # Nhận alerts từ Prometheus → route theo severity
+  # → gửi notification tới receivers (webhook, Slack, ...)
+  # ==========================================================
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    container_name: alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # WEBHOOK RECEIVER - Test alert notifications
+  # ==========================================================
+  # Container đơn giản nhận webhook POST từ Alertmanager
+  # và hiển thị trên web UI. Dùng để test trước khi cấu hình
+  # Slack/Email thực tế.
+  #
+  # Web UI: http://<VM_IP>:9095
+  # Webhook endpoint: http://webhook-receiver:9095/webhook
+  # ==========================================================
+  webhook-receiver:
+    build: ./webhook-receiver
+    container_name: webhook-receiver
+    ports:
+      - "9095:9095"
+    networks:
+      - observability
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+# ==========================================================
+# External Network
+# ==========================================================
+# Dùng external network để các phase sau (Loki, Tempo, ...)
+# có thể join cùng network mà không cần sửa file này.
+#
+# Tạo network trước khi chạy:
+#   docker network create observability
+# ==========================================================
+networks:
+  observability:
+    external: true
+

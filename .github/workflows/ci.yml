@@ -1,0 +1,212 @@
+# ============================================================
+# CI Orchestrator — Production Pipeline
+# ============================================================
+# Workflow chính điều phối toàn bộ CI pipeline.
+#
+# Architecture (Reusable Workflows):
+#   ci.yml (orchestrator)
+#     ├─→ _reusable-lint-test.yml   (Hadolint + Ruff + Bandit)
+#     └─→ _reusable-build-push.yml  (Build + Trivy + Push)
+#
+# Branching Strategy:
+#   feature/* → PR → develop    : Lint + Test + Build Verify (no push)
+#   develop   → PR → main       : Lint + Test + Build + Scan + Push
+#   main      (hotfix push)     : Lint + Test + Build + Scan + Push
+#
+# Change Detection:
+#   - Chỉ build services có file thay đổi
+#   - Matrix strategy — build song song nhiều services
+# ============================================================
+
+name: CI — Orchestrator
+
+# ============================================================
+# TRIGGER
+# ============================================================
+on:
+  push:
+    # branches: [main, develop]
+    paths:
+      - 'applications-vm/applications/**'
+      - 'observability-vm/phase1-metrics/webhook-receiver/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/_reusable-*.yml'
+
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'applications-vm/applications/**'
+      - 'observability-vm/phase1-metrics/webhook-receiver/**'
+
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service cụ thể muốn build (để trống = detect changes)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - api-gateway
+          - order-service
+          - payment-service
+          - inventory-worker
+          - notification-worker
+          - sample-app
+          - traffic-gen
+          - web-ui
+          - webhook-receiver
+
+# ============================================================
+# PERMISSIONS
+# ============================================================
+permissions:
+  contents: read
+  packages: write
+
+# ============================================================
+# JOB 1: Detect Changes
+# ============================================================
+jobs:
+  detect-changes:
+    runs-on: [vm-runner-001]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_changes: ${{ steps.set-matrix.outputs.has_changes }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: set-matrix
+        run: |
+          # -------------------------------------------------------
+          # Service registry — thêm service mới chỉ cần thêm 1 dòng
+          # -------------------------------------------------------
+          declare -A SERVICE_PATHS=(
+            ["api-gateway"]="applications-vm/applications/api-gateway"
+            ["order-service"]="applications-vm/applications/order-service"
+            ["payment-service"]="applications-vm/applications/payment-service"
+            ["inventory-worker"]="applications-vm/applications/inventory-worker"
+            ["notification-worker"]="applications-vm/applications/notification-worker"
+            ["sample-app"]="applications-vm/applications/sample-app"
+            ["traffic-gen"]="applications-vm/applications/traffic-gen"
+            ["web-ui"]="applications-vm/applications/web-ui"
+            ["webhook-receiver"]="observability-vm/phase1-metrics/webhook-receiver"
+          )
+
+          # -------------------------------------------------------
+          # Manual trigger — build service cụ thể
+          # -------------------------------------------------------
+          if [ -n "${{ github.event.inputs.service }}" ]; then
+            SERVICE="${{ github.event.inputs.service }}"
+            PATH_VALUE="${SERVICE_PATHS[$SERVICE]}"
+            MATRIX=$(jq -n -c \
+              --arg name "$SERVICE" \
+              --arg context "$PATH_VALUE" \
+              '{include: [{service: $name, context: $context}]}')
+            echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "🔧 Manual trigger: building $SERVICE"
+            exit 0
+          fi
+
+          # -------------------------------------------------------
+          # Auto detect changes
+          # -------------------------------------------------------
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "📝 Changed files:"
+          echo "$CHANGED_FILES"
+
+          SERVICES_TO_BUILD="[]"
+          for SERVICE in "${!SERVICE_PATHS[@]}"; do
+            CONTEXT="${SERVICE_PATHS[$SERVICE]}"
+            if echo "$CHANGED_FILES" | grep -q "^${CONTEXT}/"; then
+              SERVICES_TO_BUILD=$(echo "$SERVICES_TO_BUILD" | jq -c \
+                --arg name "$SERVICE" \
+                --arg context "$CONTEXT" \
+                '. + [{service: $name, context: $context}]')
+              echo "✅ $SERVICE — has changes, will build"
+            else
+              echo "⏭️  $SERVICE — no changes, skipping"
+            fi
+          done
+
+          COUNT=$(echo "$SERVICES_TO_BUILD" | jq length)
+          if [ "$COUNT" -gt 0 ]; then
+            MATRIX=$(echo "$SERVICES_TO_BUILD" | jq -c '{include: .}')
+            echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo ""
+            echo "🏗️  Will build $COUNT service(s)"
+          else
+            echo "matrix={}" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo ""
+            echo "💤 No services changed, nothing to build"
+          fi
+
+  # ============================================================
+  # JOB 2: Lint & Test — gọi reusable workflow
+  # ============================================================
+  lint-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+
+    uses: ./.github/workflows/_reusable-lint-test.yml
+    with:
+      service: ${{ matrix.service }}
+      context: ${{ matrix.context }}
+
+  # ============================================================
+  # JOB 3: Build, Scan & Push — gọi reusable workflow
+  # SAU KHI lint-test pass
+  # ============================================================
+  build-push:
+    needs: [detect-changes, lint-test]
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+
+    uses: ./.github/workflows/_reusable-build-push.yml
+    with:
+      service: ${{ matrix.service }}
+      context: ${{ matrix.context }}
+      # PR → chỉ build verify, KHÔNG push
+      # Push vào develop/main → build + push
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit  # Truyền GITHUB_TOKEN cho GHCR login
+
+  # ============================================================
+  # JOB 4: Pipeline Summary
+  # ============================================================
+  summary:
+    needs: [detect-changes, lint-test, build-push]
+    if: always() && needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: [vm-runner-001]
+
+    steps:
+      - name: Pipeline summary
+        run: |
+          echo "## 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Detect Changes | ✅ ${{ needs.detect-changes.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Test | ${{ needs.lint-test.result == 'success' && '✅' || '❌' }} ${{ needs.lint-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Push | ${{ needs.build-push.result == 'success' && '✅' || '❌' }} ${{ needs.build-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA | \`$(echo ${{ github.sha }} | cut -c1-7)\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Push to registry | \`${{ github.event_name != 'pull_request' }}\` |" >> $GITHUB_STEP_SUMMARY

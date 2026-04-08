@@ -1,0 +1,22 @@
+# ============================================================
+# Grafana Dashboard Provisioning Config
+# ============================================================
+# Grafana sẽ tự tạo folders dựa trên cấu trúc thư mục:
+#   dashboards/Infrastructure/*.json → folder "Infrastructure"
+#   dashboards/Logging/*.json        → folder "Logging"
+#   dashboards/Tracing/*.json        → folder "Tracing"
+# ============================================================
+
+apiVersion: 1
+
+providers:
+  - name: "default"
+    orgId: 1
+    type: file
+    disableDeletion: false
+    editable: true                     # Cho phép chỉnh sửa trên UI
+    updateIntervalSeconds: 30          # Kiểm tra file thay đổi mỗi 30s
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true  # Tự tạo folder từ subfolder names
+

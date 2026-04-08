@@ -1,0 +1,81 @@
+# ============================================================
+# CI Pipeline — Build & Push api-gateway Image
+# ============================================================
+# Ví dụ đơn giản: build 1 service → push lên GHCR
+# Sau khi hiểu flow, sẽ mở rộng cho tất cả services
+# ============================================================
+
+name: CI — api-gateway
+
+# ============================================================
+# TRIGGER: khi nào workflow chạy?
+# ============================================================
+on:
+  push:
+    # branches: [main]
+    paths:
+      # Chỉ chạy khi code api-gateway hoặc workflow thay đổi
+      - 'applications-vm/applications/api-gateway/**'
+      - '.github/workflows/ci-api-gateway.yml'
+
+  # Cho phép chạy thủ công từ GitHub UI (Actions → Run workflow)
+  workflow_dispatch:
+
+# ============================================================
+# PERMISSIONS: workflow cần quyền gì?
+# ============================================================
+permissions:
+  contents: read      # Đọc source code
+  packages: write     # Push image lên GHCR
+
+# ============================================================
+# JOB: Build & Push
+# ============================================================
+jobs:
+  build-and-push:
+    runs-on: [vm-runner-001]   # Self-hosted runner, Docker đã cài sẵn
+
+    steps:
+      # --- Step 1: Checkout code ---
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # --- Step 2: Set variables (lowercase owner + short SHA) ---
+      - name: Set environment variables
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER_LC}/observability-lab/api-gateway" >> $GITHUB_ENV
+          echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
+      # --- Step 3: Login vào GHCR bằng docker CLI ---
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Step 4: Build image ---
+      - name: Build api-gateway image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} \
+            -f applications-vm/applications/api-gateway/Dockerfile \
+            applications-vm/applications/api-gateway
+
+      # --- Step 5: Push image lên GHCR ---
+      - name: Push api-gateway image
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
+
+      # --- Step 6: Verify ---
+      - name: Print image info
+        run: |
+          echo "✅ Image pushed successfully!"
+          echo "📦 ${{ env.IMAGE_NAME }}:latest"
+          echo "📦 ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}"
+          echo ""
+          echo "📏 Image size:"
+          docker images ${{ env.IMAGE_NAME }} --format "table {{.Tag}}\t{{.Size}}"

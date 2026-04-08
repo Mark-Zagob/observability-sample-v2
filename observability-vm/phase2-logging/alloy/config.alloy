@@ -1,0 +1,278 @@
+// ============================================================
+// Grafana Alloy - Phase 2
+// ============================================================
+// Thu thập 3 loại logs:
+//   1. Docker container logs (via Docker API)
+//   2. Host system logs (/var/log/syslog)
+//   3. Docker daemon logs (tạm bỏ — xem note bên dưới)
+//
+// Pipeline:
+//   Source → Process (parse, extract, filter) → Push Loki
+// ============================================================
+
+// ============================================================
+// PHẦN 1: DOCKER CONTAINER LOGS
+// ============================================================
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker_labels" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker_labels.output
+  forward_to = [loki.process.docker_pipeline.receiver]
+}
+
+// ============================================================
+// LOG PROCESSING PIPELINE — Docker containers
+// ============================================================
+// Pipeline xử lý log trước khi push Loki:
+//   1. Detect & drop health check noise
+//   2. Thử parse JSON → extract structured fields
+//   3. Nếu không phải JSON → parse logfmt
+//   4. Extract log level thành label (để filter/query)
+//   5. Thêm label source = "docker"
+// ============================================================
+
+loki.process "docker_pipeline" {
+  // ---------------------------------------------------------
+  // Stage 1: Drop health check logs
+  // ---------------------------------------------------------
+  // Nhiều service liên tục log "GET /health", "GET /ready"
+  // → noise chiếm dung lượng, không có giá trị debug.
+  // Drop trước khi parse để tiết kiệm CPU.
+  // ---------------------------------------------------------
+  stage.drop {
+    expression = "(?i)(GET|HEAD)\\s+/(health|ready|healthz|livez|readyz)"
+    drop_counter_reason = "health_check"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 2: Parse JSON logs
+  // ---------------------------------------------------------
+  // Hầu hết application hiện đại log theo structured JSON:
+  //   {"level":"info","msg":"request handled","trace_id":"abc"}
+  //
+  // stage.json extract các field ra dạng "extracted values"
+  // để các stage sau có thể dùng (label, template, output...).
+  //
+  // Nếu log KHÔNG phải JSON → stage này tự skip, không lỗi.
+  // ---------------------------------------------------------
+  stage.json {
+    expressions = {
+      level    = "level",
+      msg      = "msg",
+      caller   = "caller",
+      trace_id = "trace_id",
+      span_id  = "span_id",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 3: Parse logfmt (fallback)
+  // ---------------------------------------------------------
+  // Một số service (ví dụ Prometheus, Loki) log dạng logfmt:
+  //   level=info msg="server started" caller=main.go:42
+  //
+  // Nếu stage.json đã extract thành công → giá trị giữ nguyên.
+  // Nếu chưa → stage.logfmt sẽ extract.
+  // ---------------------------------------------------------
+  stage.logfmt {
+    mapping = {
+      level  = "",
+      msg    = "",
+      caller = "",
+      ts     = "",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 4: Chuẩn hoá log level
+  // ---------------------------------------------------------
+  // Các service khác nhau dùng format level khác nhau:
+  //   "INFO", "info", "warning", "warn", "WARN"
+  // → Chuẩn hoá tất cả về lowercase để query nhất quán.
+  // ---------------------------------------------------------
+  stage.template {
+    source   = "level"
+    template = "{{ ToLower .Value }}"
+  }
+
+  // Map "warning" → "warn" cho nhất quán
+  stage.replace {
+    expression = "warning"
+    source     = "level"
+    replace    = "warn"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 5: Gán detected_level label
+  // ---------------------------------------------------------
+  // Tạo label "detected_level" từ extracted level.
+  // → Cho phép query: {detected_level="error"}
+  //
+  // LƯU Ý: Chỉ dùng label có low cardinality
+  // (debug/info/warn/error/fatal). KHÔNG BAO GIỜ đưa
+  // high-cardinality fields (user_id, request_id) vào label.
+  // ---------------------------------------------------------
+  stage.labels {
+    values = {
+      detected_level = "level",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 6: Gán static label source
+  // ---------------------------------------------------------
+  stage.static_labels {
+    values = {
+      source = "docker",
+      vm     = "observability",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 7: Drop noisy debug logs
+  // ---------------------------------------------------------
+  // Trong lab/dev, debug logs ít giá trị nhưng chiếm nhiều
+  // dung lượng. Drop để giảm storage cost.
+  // Comment out stage này nếu cần debug chi tiết.
+  // ---------------------------------------------------------
+  stage.drop {
+    source           = "level"
+    expression       = "debug"
+    drop_counter_reason = "debug_level"
+  }
+
+  forward_to = [loki.write.loki_endpoint.receiver]
+}
+
+// ============================================================
+// PHẦN 2: HOST SYSTEM LOGS
+// ============================================================
+
+local.file_match "syslog" {
+  path_targets = [{
+    __path__  = "/var/log/host/syslog",
+    job       = "syslog",
+    log_type  = "system",
+  }]
+}
+
+loki.source.file "syslog" {
+  targets    = local.file_match.syslog.targets
+  forward_to = [loki.process.host_pipeline.receiver]
+}
+
+local.file_match "auth_log" {
+  path_targets = [{
+    __path__  = "/var/log/host/auth.log",
+    job       = "auth",
+    log_type  = "security",
+  }]
+}
+
+loki.source.file "auth_log" {
+  targets    = local.file_match.auth_log.targets
+  forward_to = [loki.process.host_pipeline.receiver]
+}
+
+// ============================================================
+// LOG PROCESSING PIPELINE — Host logs
+// ============================================================
+// Syslog format: "Mar 12 06:30:01 hostname service[pid]: message"
+// Pipeline nhẹ hơn docker: chỉ thêm source label + parse
+// severity cơ bản.
+// ============================================================
+
+loki.process "host_pipeline" {
+  // ---------------------------------------------------------
+  // Stage 1: Extract syslog fields
+  // ---------------------------------------------------------
+  // Parse syslog standard format để lấy hostname, service, PID.
+  // Regex khớp: "Mar 12 06:30:01 myhost sshd[1234]: message"
+  // ---------------------------------------------------------
+  stage.regex {
+    expression = "^\\w+\\s+\\d+\\s+[\\d:]+\\s+(?P<hostname>\\S+)\\s+(?P<syslog_service>[^\\[\\s:]+)"
+  }
+
+  stage.labels {
+    values = {
+      hostname       = "",
+      syslog_service = "",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 2: Detect severity từ nội dung
+  // ---------------------------------------------------------
+  // Syslog không có structured level, nhưng ta có thể detect
+  // từ keywords: "error", "fail", "panic", "crit"
+  // ---------------------------------------------------------
+  stage.regex {
+    expression = "(?i)(?P<severity>error|fail|panic|crit|warn|alert|emerg)"
+  }
+
+  stage.template {
+    source   = "severity"
+    template = "{{ if .Value }}{{ ToLower .Value }}{{ else }}info{{ end }}"
+  }
+
+  stage.labels {
+    values = {
+      detected_level = "severity",
+    }
+  }
+
+  // ---------------------------------------------------------
+  // Stage 3: Static label
+  // ---------------------------------------------------------
+  stage.static_labels {
+    values = {
+      source = "host",
+      vm     = "observability",
+    }
+  }
+
+  forward_to = [loki.write.loki_endpoint.receiver]
+}
+
+// ============================================================
+// PHẦN 3: DOCKER DAEMON LOGS
+// ============================================================
+// Đã loại bỏ do Docker trên Ubuntu/Debian thường log thẳng vào
+// Systemd Journal (journalctl), KHÔNG ghi ra /var/log/docker.log
+// Việc đọc journald đòi hỏi mount cấu hình phức tạp hơn,
+// nên tạm bỏ qua ở phase cơ bản này.
+// ============================================================
+
+// ============================================================
+// PUSH VỀ LOKI
+// ============================================================
+
+loki.write "loki_endpoint" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
