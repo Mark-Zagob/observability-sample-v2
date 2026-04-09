@@ -28,5 +28,4 @@ alertmanager/alertmanager.yml
 .terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
 *.lock.hcl
