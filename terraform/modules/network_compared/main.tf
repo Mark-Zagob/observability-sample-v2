@@ -29,8 +29,8 @@ locals {
   others_blocks = [for i in range(8) : cidrsubnet(local.half_others, 3, i)]
 
   public_cidrs = [for i in range(length(var.avai_zones)) : cidrsubnet(local.others_blocks[0], 4, i)] # /24
-  data_cidrs   = [for i in range(length(var.avai_zones)) : cidrsubnet(local.others_blocks[1], 6, i)] # /26
-  mgmt_cidrs   = [for i in range(length(var.avai_zones)) : cidrsubnet(local.others_blocks[2], 7, i)] # /27
+  data_cidrs   = [for i in range(length(var.avai_zones)) : cidrsubnet(local.others_blocks[1], 6, i)] # /26 #cursor recommennd /24 for large envs
+  mgmt_cidrs   = [for i in range(length(var.avai_zones)) : cidrsubnet(local.others_blocks[2], 7, i)] # /27 #cursor recommennd /26 for large envs
 }
 
 #--------------------------------------------------------------
