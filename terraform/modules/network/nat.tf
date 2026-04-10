@@ -10,7 +10,6 @@ resource "aws_eip" "nat" {
     Name = "${var.project_name}-nat-eip-${each.value}"
   })
 
-  depends_on = [aws_internet_gateway.this]
 }
 
 #--------------------------------------------------------------
