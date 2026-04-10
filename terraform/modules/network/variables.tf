@@ -1,44 +1,48 @@
 #--------------------------------------------------------------
-# Network Module - Input Variables
+# Network Module — Input Variables
 #--------------------------------------------------------------
 
 variable "project_name" {
   description = "Project name used for resource naming"
   type        = string
 
-  # [FIX #5] Validation: chặn tên rỗng hoặc có ký tự đặc biệt
   validation {
     condition     = can(regex("^[a-z0-9-]+$", var.project_name))
-    error_message = "project_name chỉ chấp nhận lowercase, số và dấu gạch ngang."
+    error_message = "project_name only accepts lowercase, digits, and hyphens."
   }
 }
 
 variable "aws_region" {
-  description = "AWS region"
+  description = "AWS region for endpoint service names"
   type        = string
 
-  # [FIX #5] Validation: format region hợp lệ
   validation {
     condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.aws_region))
-    error_message = "aws_region phải đúng format, ví dụ: ap-southeast-1, us-east-1"
+    error_message = "aws_region must match format, e.g. ap-southeast-1, us-east-1."
   }
 }
 
 variable "vpc_cidr" {
-  description = "CIDR block for VPC"
+  description = "CIDR block for VPC (must be /16)"
   type        = string
   default     = "10.0.0.0/16"
 
-  # [FIX #5] Validation: chỉ chấp nhận /16 để cidrsubnet(8) tạo /24
   validation {
     condition     = can(cidrhost(var.vpc_cidr, 0)) && endswith(var.vpc_cidr, "/16")
-    error_message = "vpc_cidr phải là CIDR hợp lệ với prefix /16 (ví dụ: 10.0.0.0/16)"
+    error_message = "vpc_cidr must be a valid CIDR with /16 prefix (e.g. 10.0.0.0/16)."
   }
 }
 
-# NOTE: Không còn public/private/data_subnet_cidrs
-# → Module tự tính bằng cidrsubnet() trong locals (main.tf)
-# → Đảm bảo CIDRs luôn khớp với vpc_cidr, không bao giờ bị conflict
+variable "az_count" {
+  description = "Number of Availability Zones to use (2 or 3)"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.az_count >= 2 && var.az_count <= 3
+    error_message = "az_count must be 2 or 3."
+  }
+}
 
 variable "single_nat_gateway" {
   description = "Use a single NAT Gateway (cost-saving) vs one per AZ (HA)"
@@ -49,34 +53,29 @@ variable "single_nat_gateway" {
 #--------------------------------------------------------------
 # VPC Flow Logs
 #--------------------------------------------------------------
+
 variable "enable_flow_logs" {
-  description = "Enable VPC Flow Logs to CloudWatch (learn network debugging)"
+  description = "Enable VPC Flow Logs to CloudWatch"
   type        = bool
   default     = true
 }
 
-#--------------------------------------------------------------
-# VPC Interface Endpoints (optional, costs money)
-#--------------------------------------------------------------
-variable "enable_interface_endpoints" {
-  description = "Enable Interface VPC Endpoints (costs ~$7.2/month per endpoint per AZ)"
-  type        = bool
-  default     = false
+variable "flow_logs_retention_days" {
+  description = "CloudWatch Log Group retention in days for flow logs"
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.flow_logs_retention_days)
+    error_message = "flow_logs_retention_days must be a valid CloudWatch retention value."
+  }
 }
 
-variable "interface_endpoint_services" {
-  description = "List of AWS services to create Interface Endpoints for"
-  type        = list(string)
-  default = [
-    "ecr.api",        # ECR API calls
-    "ecr.dkr",        # ECR Docker image pull
-    "logs",           # CloudWatch Logs
-    "ssm",            # Systems Manager
-    "secretsmanager", # Secrets Manager
-    "sts",            # STS (IRSA, role assumption)
-    "monitoring"      # CloudWatch Metrics
-  ]
-}
+
+
+#--------------------------------------------------------------
+# Tags
+#--------------------------------------------------------------
 
 variable "common_tags" {
   description = "Common tags applied to all resources"

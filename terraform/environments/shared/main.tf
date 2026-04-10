@@ -4,7 +4,7 @@
 #--------------------------------------------------------------
 
 #--------------------------------------------------------------
-# Module 1: Network (VPC, Subnets, NAT, VPC Endpoints, Flow Logs)
+# Module 1: Network (VPC, Subnets, NAT, Flow Logs)
 #--------------------------------------------------------------
 module "network" {
   source = "../../modules/network"
@@ -22,16 +22,43 @@ module "network" {
   # VPC Flow Logs: ghi network traffic vào CloudWatch
   enable_flow_logs = var.enable_flow_logs
 
-  # Interface Endpoints: tốn phí, chỉ bật khi test
-  enable_interface_endpoints = var.enable_interface_endpoints
-
   common_tags = {
     Module = "network"
   }
 }
 
 #--------------------------------------------------------------
-# Module 2: Security (SG, IAM) — sẽ thêm sau
+# Module 2: VPC Endpoints (S3, DynamoDB Gateway + Interface)
+# Tách riêng khỏi network module theo Single Responsibility Principle.
+# Uncomment khi sẵn sàng sử dụng.
+#--------------------------------------------------------------
+# module "vpc_endpoints" {
+#   source = "../../modules/vpc-endpoints"
+#
+#   project_name = var.project_name
+#   aws_region   = var.aws_region
+#   vpc_id       = module.network.vpc_id
+#   vpc_cidr     = module.network.vpc_cidr_block
+#
+#   # Gateway Endpoints cần tất cả route tables
+#   route_table_ids = concat(
+#     [module.network.public_route_table_id],
+#     values(module.network.private_route_table_ids),
+#     values(module.network.mgmt_route_table_ids),
+#     [module.network.data_route_table_id]
+#   )
+#
+#   # Interface Endpoints (costs ~$7.2/month per endpoint per AZ)
+#   enable_interface_endpoints = var.enable_interface_endpoints
+#   private_subnet_ids         = module.network.private_subnet_ids
+#
+#   common_tags = {
+#     Module = "vpc-endpoints"
+#   }
+# }
+
+#--------------------------------------------------------------
+# Module 3: Security (SG, IAM) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "security" {
 #   source = "../../modules/security"
@@ -39,7 +66,7 @@ module "network" {
 # }
 
 #--------------------------------------------------------------
-# Module 3: Data (RDS, Redis, MSK) — sẽ thêm sau
+# Module 4: Data (RDS, Redis, MSK) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "data" {
 #   source = "../../modules/data"

@@ -33,8 +33,11 @@ variable "enable_flow_logs" {
   default     = true
 }
 
-variable "enable_interface_endpoints" {
-  description = "Enable Interface VPC Endpoints (costs money)"
-  type        = bool
-  default     = false
-}
+#--------------------------------------------------------------
+# VPC Endpoints (uncomment khi bật module vpc-endpoints)
+#--------------------------------------------------------------
+# variable "enable_interface_endpoints" {
+#   description = "Enable Interface VPC Endpoints (costs money)"
+#   type        = bool
+#   default     = false
+# }

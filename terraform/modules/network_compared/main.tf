@@ -224,3 +224,21 @@ resource "aws_route" "private" {
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id = aws_nat_gateway.main[var.single_nat_gateway ? 0 : each.key].id
 }
+
+#--------------------------------------------------------------
+# Route Tables: Data (local only — NO internet access)
+#--------------------------------------------------------------
+resource "aws_route_table" "data" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-rt-data"
+  })
+}
+
+resource "aws_route_table_association" "data" {
+  for_each = aws_subnet.data
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.data.id
+}
