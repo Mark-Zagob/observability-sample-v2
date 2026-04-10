@@ -42,7 +42,7 @@ resource "aws_subnet" "data" {
   for_each = local.az_map
 
   vpc_id            = aws_vpc.this.id
-  cidr_block        = local.data_cidrs_v2[each.key]
+  cidr_block        = local.data_cidrs[each.key]
   availability_zone = each.value
 
   tags = merge(var.common_tags, {

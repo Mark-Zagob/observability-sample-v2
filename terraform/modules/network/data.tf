@@ -51,8 +51,6 @@ locals {
   # Level 4: Public subnets — /24 from block[0]
   public_cidrs = { for k, az in local.az_map : k => cidrsubnet(local.others_blocks[0], 4, index(keys(local.az_map), k)) }
 
-  # Level 4: Data subnets — /26 from block[1] (compact: shares block with Mgmt)
-  data_cidrs = { for k, az in local.az_map : k => cidrsubnet(local.others_blocks[1], 6, index(keys(local.az_map), k)) }
 
   # Level 4: Mgmt subnets — /27 from block[1] (offset after Data CIDRs)
   # Data uses indices 0-2 of /26 (each /26 = 2 × /27), so Mgmt starts at /27 index 6+
@@ -62,6 +60,6 @@ locals {
   shared_block_data = cidrsubnet(local.others_blocks[1], 1, 0)
   shared_block_mgmt = cidrsubnet(local.others_blocks[1], 1, 1)
 
-  data_cidrs_v2 = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_data, 5, index(keys(local.az_map), k)) }
+  data_cidrs = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_data, 5, index(keys(local.az_map), k)) }
   mgmt_cidrs    = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_mgmt, 6, index(keys(local.az_map), k)) }
 }
