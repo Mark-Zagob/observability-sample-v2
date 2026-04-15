@@ -41,3 +41,30 @@ variable "enable_flow_logs" {
 #   type        = bool
 #   default     = false
 # }
+
+#--------------------------------------------------------------
+# Security
+#--------------------------------------------------------------
+variable "app_port" {
+  description = "Application container port"
+  type        = number
+  default     = 8080
+}
+
+variable "enable_bastion" {
+  description = "Enable bastion host resources (SG, IAM, Key Pair)"
+  type        = bool
+  default     = true
+}
+
+variable "allowed_ssh_cidrs" {
+  description = "CIDR blocks allowed to SSH to bastion host"
+  type        = list(string)
+  default     = []
+}
+
+variable "generate_ssh_key" {
+  description = "Auto-generate SSH key pair (true for lab, false for production)"
+  type        = bool
+  default     = true
+}

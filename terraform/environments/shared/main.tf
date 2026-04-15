@@ -58,12 +58,30 @@ module "network" {
 # }
 
 #--------------------------------------------------------------
-# Module 3: Security (SG, IAM) — sẽ thêm sau
+# Module 3: Security (SGs, IAM Roles, Key Pair)
 #--------------------------------------------------------------
-# module "security" {
-#   source = "../../modules/security"
-#   ...
-# }
+module "security" {
+  source = "../../modules/security"
+
+  project_name   = var.project_name
+  vpc_id         = module.network.vpc_id
+  vpc_cidr_block = module.network.vpc_cidr_block
+
+  # Application
+  app_port = var.app_port
+
+  # Bastion
+  enable_bastion    = var.enable_bastion
+  allowed_ssh_cidrs = var.allowed_ssh_cidrs
+  generate_ssh_key  = var.generate_ssh_key
+
+  # Port maps: sử dụng defaults từ module
+  # Override nếu cần: db_ports = { postgres = 5432 }
+
+  common_tags = {
+    Module = "security"
+  }
+}
 
 #--------------------------------------------------------------
 # Module 4: Data (RDS, Redis, MSK) — sẽ thêm sau
