@@ -1,7 +1,7 @@
 #--------------------------------------------------------------
 # Network Module — Integration Tests (Apply + Destroy)
 #--------------------------------------------------------------
-# Run with: terraform test
+# Run with: terraform test -filter=tests/integration.tftest.hcl
 # These tests APPLY real AWS resources and then DESTROY them.
 # Cost: ~$0.10-0.15 per full run (NAT GW + EIP charged per hour)
 # Duration: ~3-5 minutes
@@ -11,11 +11,16 @@
 #   - Permissions: VPC, Subnet, NAT GW, EIP, IGW, Route Table,
 #     CloudWatch Logs, KMS, IAM (for flow logs role)
 #
-# Design Principles (from terraform-module-library, cloud-architect):
-#   - Each run block tests ONE scenario
-#   - Apply creates real infra → assert on actual AWS state
-#   - Destroy cleans up automatically (Terraform test framework)
-#   - Tests are idempotent — can re-run without manual cleanup
+# IMPORTANT — Test Ordering Strategy:
+#   All run blocks share state. NAT Gateway mode changes trigger
+#   EIP create/destroy. AWS has a known race condition where
+#   releasing an EIP fails if the NAT GW's ENI isn't fully
+#   detached yet. To avoid this:
+#     - Tests 1-6: single_nat_gateway = true (no NAT state change)
+#     - Test 7: HA NAT (scale UP only — safe)
+#     - Tests 8-10: flow logs + output validation (back to single)
+#   The final teardown does a full destroy which handles cleanup
+#   more reliably than mid-run scale-down.
 #--------------------------------------------------------------
 
 variables {
@@ -190,40 +195,10 @@ run "single_nat_creates_one_gateway" {
 }
 
 #--------------------------------------------------------------
-# 5. NAT Gateway — HA Mode
-#    Production-grade: 1 NAT per AZ for fault isolation.
-#    Cloud architect: verify each AZ has independent NAT path.
-#--------------------------------------------------------------
-
-run "ha_nat_creates_per_az" {
-  command = apply
-
-  variables {
-    single_nat_gateway = false
-    enable_flow_logs   = false
-  }
-
-  assert {
-    condition     = length(output.nat_gateway_ids) == 2
-    error_message = "HA NAT mode must create 1 NAT Gateway per AZ (2)"
-  }
-
-  assert {
-    condition     = length(output.nat_public_ips) == 2
-    error_message = "HA NAT mode must allocate 1 EIP per AZ (2)"
-  }
-
-  # Each NAT must have a distinct public IP
-  assert {
-    condition     = length(distinct(output.nat_public_ips)) == 2
-    error_message = "Each NAT Gateway must have a unique public IP"
-  }
-}
-
-#--------------------------------------------------------------
-# 6. Route Tables — Verify Correct Associations
+# 5. Route Tables — Verify Correct Associations
 #    Security audit: data subnets must NOT have internet route.
 #    Cloud devops: private/mgmt subnets must route via NAT.
+#    NOTE: Runs BEFORE HA NAT test to avoid scale-down race.
 #--------------------------------------------------------------
 
 run "route_table_structure_correct" {
@@ -260,52 +235,7 @@ run "route_table_structure_correct" {
 }
 
 #--------------------------------------------------------------
-# 7. VPC Flow Logs — Enabled Path
-#    Security auditor: flow logs MUST be enabled in production.
-#    Validates CW Log Group + KMS key are created.
-#--------------------------------------------------------------
-
-run "flow_logs_enabled_creates_real_resources" {
-  command = apply
-
-  variables {
-    enable_flow_logs        = true
-    flow_logs_retention_days = 7
-  }
-
-  # VPC still creates normally
-  assert {
-    condition     = startswith(output.vpc_id, "vpc-")
-    error_message = "VPC must be created when flow logs are enabled"
-  }
-}
-
-#--------------------------------------------------------------
-# 8. VPC Flow Logs — Disabled Path
-#    Validates no extra cost resources when flow logs off.
-#--------------------------------------------------------------
-
-run "flow_logs_disabled_still_creates_vpc" {
-  command = apply
-
-  variables {
-    enable_flow_logs = false
-  }
-
-  assert {
-    condition     = startswith(output.vpc_id, "vpc-")
-    error_message = "VPC must still be created when flow logs are disabled"
-  }
-
-  # Subnet count unaffected
-  assert {
-    condition     = length(output.private_subnet_ids) == 2
-    error_message = "Subnets must still be created regardless of flow log setting"
-  }
-}
-
-#--------------------------------------------------------------
-# 9. Output Contract — Map Outputs
+# 6. Output Contract — Map Outputs
 #    Terraform specialist: verify map outputs that downstream
 #    modules (security, data) depend on.
 #--------------------------------------------------------------
@@ -334,9 +264,9 @@ run "map_outputs_have_correct_keys" {
 }
 
 #--------------------------------------------------------------
-# 10. Tagging — Verify Real AWS Tags
-#     Cloud devops: tags applied correctly to actual resources.
-#     Validates common_tags propagation and Tier tags.
+# 7. Tagging — Verify Real AWS Tags
+#    Cloud devops: tags applied correctly to actual resources.
+#    Validates common_tags propagation and Tier tags.
 #--------------------------------------------------------------
 
 run "tags_applied_to_real_resources" {
@@ -377,5 +307,86 @@ run "tags_applied_to_real_resources" {
       for k, v in aws_subnet.data : v.tags["Tier"] == "data"
     ])
     error_message = "All data subnets must have Tier=data tag on real AWS resources"
+  }
+}
+
+#--------------------------------------------------------------
+# 8. NAT Gateway — HA Mode
+#    Production-grade: 1 NAT per AZ for fault isolation.
+#    Cloud architect: verify each AZ has independent NAT path.
+#    NOTE: Placed AFTER single NAT tests. Scale-up (1→2) is safe.
+#    Scale-down (2→1) only happens during final teardown which
+#    handles full resource destruction more reliably.
+#--------------------------------------------------------------
+
+run "ha_nat_creates_per_az" {
+  command = apply
+
+  variables {
+    single_nat_gateway = false
+    enable_flow_logs   = false
+  }
+
+  assert {
+    condition     = length(output.nat_gateway_ids) == 2
+    error_message = "HA NAT mode must create 1 NAT Gateway per AZ (2)"
+  }
+
+  assert {
+    condition     = length(output.nat_public_ips) == 2
+    error_message = "HA NAT mode must allocate 1 EIP per AZ (2)"
+  }
+
+  # Each NAT must have a distinct public IP
+  assert {
+    condition     = length(distinct(output.nat_public_ips)) == 2
+    error_message = "Each NAT Gateway must have a unique public IP"
+  }
+}
+
+#--------------------------------------------------------------
+# 9. VPC Flow Logs — Enabled Path
+#    Security auditor: flow logs MUST be enabled in production.
+#    Validates CW Log Group + KMS key are created.
+#--------------------------------------------------------------
+
+run "flow_logs_enabled_creates_real_resources" {
+  command = apply
+
+  variables {
+    enable_flow_logs         = true
+    flow_logs_retention_days = 7
+  }
+
+  # VPC still creates normally
+  assert {
+    condition     = startswith(output.vpc_id, "vpc-")
+    error_message = "VPC must be created when flow logs are enabled"
+  }
+}
+
+#--------------------------------------------------------------
+# 10. VPC Flow Logs — Disabled Path
+#     Validates no extra cost resources when flow logs off.
+#     NOTE: This is the LAST test. Final teardown destroys
+#     everything (VPC, subnets, NAT GWs, EIPs) in one pass.
+#--------------------------------------------------------------
+
+run "flow_logs_disabled_still_creates_vpc" {
+  command = apply
+
+  variables {
+    enable_flow_logs = false
+  }
+
+  assert {
+    condition     = startswith(output.vpc_id, "vpc-")
+    error_message = "VPC must still be created when flow logs are disabled"
+  }
+
+  # Subnet count unaffected
+  assert {
+    condition     = length(output.private_subnet_ids) == 2
+    error_message = "Subnets must still be created regardless of flow log setting"
   }
 }
