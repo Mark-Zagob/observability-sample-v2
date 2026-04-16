@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-16
+
 ### Added
 - Integration tests (`tests/integration.tftest.hcl`) — 10 apply+destroy tests
   covering VPC creation, AZ spread, CIDR uniqueness, NAT modes, route tables,
   flow logs, output contracts, and tag propagation
+
+### Fixed
+- Integration test ordering to avoid AWS EIP/ENI race condition during
+  NAT Gateway scale-down between `run` blocks (shared state issue)
+- Explicit `enable_flow_logs = false` for tests not requiring flow logs
+  to prevent KMS/CloudWatch permission errors
+- Explicit `single_nat_gateway` pinning in all tests to prevent
+  unintended NAT state transitions
 
 ## [1.0.0] - 2026-04-16
 
