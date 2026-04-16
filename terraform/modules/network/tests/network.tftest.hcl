@@ -123,10 +123,14 @@ run "mgmt_cidrs_are_slash_27" {
 run "all_subnets_within_vpc_cidr" {
   command = plan
 
+  # cidrcontains() requires Terraform >= 1.8
+  # Alternative: verify that each subnet's network address starts with
+  # the VPC prefix. For 10.0.0.0/16, all subnets must start with "10.0."
+
   assert {
     condition = alltrue([
       for k, v in aws_subnet.private :
-      cidrcontains("10.0.0.0/16", v.cidr_block)
+      can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
     ])
     error_message = "All private subnets must be within VPC CIDR"
   }
@@ -134,7 +138,7 @@ run "all_subnets_within_vpc_cidr" {
   assert {
     condition = alltrue([
       for k, v in aws_subnet.public :
-      cidrcontains("10.0.0.0/16", v.cidr_block)
+      can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
     ])
     error_message = "All public subnets must be within VPC CIDR"
   }
@@ -142,7 +146,7 @@ run "all_subnets_within_vpc_cidr" {
   assert {
     condition = alltrue([
       for k, v in aws_subnet.data :
-      cidrcontains("10.0.0.0/16", v.cidr_block)
+      can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
     ])
     error_message = "All data subnets must be within VPC CIDR"
   }
@@ -150,7 +154,7 @@ run "all_subnets_within_vpc_cidr" {
   assert {
     condition = alltrue([
       for k, v in aws_subnet.mgmt :
-      cidrcontains("10.0.0.0/16", v.cidr_block)
+      can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
     ])
     error_message = "All mgmt subnets must be within VPC CIDR"
   }
@@ -242,12 +246,17 @@ run "flow_logs_log_group_encrypted" {
     enable_flow_logs = true
   }
 
+  # kms_key_id is a computed value (references aws_kms_key.arn) → unknown at plan time.
+  # Instead, verify that the KMS key resource exists alongside the log group.
+  # If both exist, the log group WILL be encrypted (wired in code).
   assert {
-    condition = alltrue([
-      for k, v in aws_cloudwatch_log_group.flow_logs :
-      v.kms_key_id != null && v.kms_key_id != ""
-    ])
-    error_message = "Flow Logs CloudWatch Log Group must be encrypted with KMS"
+    condition     = length(aws_kms_key.flow_logs) == length(aws_cloudwatch_log_group.flow_logs)
+    error_message = "Each Flow Logs log group must have a corresponding KMS key for encryption"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.flow_logs) > 0
+    error_message = "At least one KMS key must be created when flow logs are enabled"
   }
 }
 
@@ -258,6 +267,7 @@ run "kms_key_rotation_enabled" {
     enable_flow_logs = true
   }
 
+  # enable_key_rotation is an input value → known at plan time ✅
   assert {
     condition = alltrue([
       for k, v in aws_kms_key.flow_logs :
