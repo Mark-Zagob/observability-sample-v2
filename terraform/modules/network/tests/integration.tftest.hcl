@@ -20,7 +20,7 @@
 
 variables {
   project_name = "inttest-net"
-  aws_region   = "ap-southeast-1"
+  aws_region   = "ap-southeast-2"
   vpc_cidr     = "10.99.0.0/16"   # Use isolated CIDR to avoid conflicts
   az_count     = 2                 # 2 AZs → faster, cheaper tests
   common_tags = {
