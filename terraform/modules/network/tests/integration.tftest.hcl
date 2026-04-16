@@ -39,6 +39,10 @@ variables {
 run "vpc_creates_successfully" {
   command = apply
 
+  variables {
+    enable_flow_logs = false
+  }
+
   assert {
     condition     = startswith(output.vpc_id, "vpc-")
     error_message = "VPC ID must be a valid AWS VPC ID (vpc-xxx)"
@@ -63,6 +67,10 @@ run "vpc_creates_successfully" {
 
 run "subnets_distributed_across_azs" {
   command = apply
+
+  variables {
+    enable_flow_logs = false
+  }
 
   # All subnet lists must have exactly az_count (2) elements
   assert {
@@ -116,6 +124,10 @@ run "subnets_distributed_across_azs" {
 run "cidr_blocks_are_unique" {
   command = apply
 
+  variables {
+    enable_flow_logs = false
+  }
+
   # Collect all CIDRs and verify uniqueness
   assert {
     condition = length(distinct(concat(
@@ -157,6 +169,7 @@ run "single_nat_creates_one_gateway" {
 
   variables {
     single_nat_gateway = true
+    enable_flow_logs   = false
   }
 
   assert {
@@ -187,6 +200,7 @@ run "ha_nat_creates_per_az" {
 
   variables {
     single_nat_gateway = false
+    enable_flow_logs   = false
   }
 
   assert {
@@ -217,6 +231,7 @@ run "route_table_structure_correct" {
 
   variables {
     single_nat_gateway = true
+    enable_flow_logs   = false
   }
 
   # Public route table exists
@@ -298,6 +313,10 @@ run "flow_logs_disabled_still_creates_vpc" {
 run "map_outputs_have_correct_keys" {
   command = apply
 
+  variables {
+    enable_flow_logs = false
+  }
+
   assert {
     condition     = length(output.az_map) == 2
     error_message = "az_map must have 2 entries for 2-AZ mode"
@@ -322,6 +341,10 @@ run "map_outputs_have_correct_keys" {
 
 run "tags_applied_to_real_resources" {
   command = apply
+
+  variables {
+    enable_flow_logs = false
+  }
 
   # VPC has been tagged (checked via resource, not output)
   assert {
