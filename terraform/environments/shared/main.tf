@@ -8,7 +8,7 @@
 #--------------------------------------------------------------
 module "network" {
   source = "../../modules/network"
-
+  #source = "git::ssh://git@github.com/Mark-Zagob/observability-sample-v2.git//terraform/modules/network?ref=network/v1.0.0"
   project_name = var.project_name
   aws_region   = var.aws_region
   vpc_cidr     = var.vpc_cidr
