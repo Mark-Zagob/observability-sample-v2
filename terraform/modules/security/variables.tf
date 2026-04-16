@@ -123,6 +123,16 @@ variable "monitoring_ports" {
 }
 
 #--------------------------------------------------------------
+# KMS Configuration
+#--------------------------------------------------------------
+
+variable "kms_key_arn" {
+  description = "ARN of the KMS key used to encrypt secrets. If empty, uses wildcard with kms:ViaService condition."
+  type        = string
+  default     = ""
+}
+
+#--------------------------------------------------------------
 # Tags
 #--------------------------------------------------------------
 

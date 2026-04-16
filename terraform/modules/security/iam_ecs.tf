@@ -121,7 +121,9 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         Action = [
           "kms:Decrypt"
         ]
-        Resource = "*"
+        # When kms_key_arn is provided, restrict to that specific key.
+        # Otherwise, fall back to wildcard scoped by kms:ViaService condition.
+        Resource = var.kms_key_arn != "" ? var.kms_key_arn : "*"
         Condition = {
           StringEquals = {
             "kms:ViaService" = "secretsmanager.${local.region}.amazonaws.com"
@@ -192,6 +194,9 @@ resource "aws_iam_role_policy" "ecs_task_base" {
         }
       },
       {
+        # X-Ray API does NOT support resource-level permissions.
+        # Resource: "*" is required per AWS docs:
+        # https://docs.aws.amazon.com/xray/latest/devguide/security_iam_id-based-policy-examples.html
         Sid    = "AllowXRayTraces"
         Effect = "Allow"
         Action = [

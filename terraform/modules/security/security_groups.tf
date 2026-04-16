@@ -209,6 +209,27 @@ resource "aws_security_group_rule" "app_egress_dns_udp" {
   cidr_blocks       = [var.vpc_cidr_block]
 }
 
+# OTLP telemetry to Observability tier
+resource "aws_security_group_rule" "app_egress_otlp_grpc" {
+  security_group_id        = aws_security_group.application.id
+  type                     = "egress"
+  description              = "OTLP gRPC to Observability (traces, metrics)"
+  protocol                 = "tcp"
+  from_port                = 4317
+  to_port                  = 4317
+  source_security_group_id = aws_security_group.observability.id
+}
+
+resource "aws_security_group_rule" "app_egress_otlp_http" {
+  security_group_id        = aws_security_group.application.id
+  type                     = "egress"
+  description              = "OTLP HTTP to Observability (logs)"
+  protocol                 = "tcp"
+  from_port                = 4318
+  to_port                  = 4318
+  source_security_group_id = aws_security_group.observability.id
+}
+
 
 ########################################################################
 # 3. Data Security Group
@@ -266,16 +287,31 @@ resource "aws_security_group_rule" "data_ingress_from_bastion" {
 # SGs are stateful: response traffic is automatically allowed.
 # No explicit egress needed for DB servers — they should NEVER
 # initiate outbound connections.
-# We add a restrictive egress to enforce this principle.
+#
+# IMPORTANT: When using separate aws_security_group_rule resources
+# (not inline), AWS removes the default allow-all egress rule.
+# So we only allow ephemeral port responses back to App and Bastion SGs.
 
-resource "aws_security_group_rule" "data_egress_deny_all" {
-  security_group_id = aws_security_group.data.id
-  type              = "egress"
-  description       = "Restrict outbound — Data tier should not initiate connections"
-  protocol          = "tcp"
-  from_port         = 1024
-  to_port           = 65535
-  cidr_blocks       = [var.vpc_cidr_block]
+resource "aws_security_group_rule" "data_egress_response_to_app" {
+  security_group_id        = aws_security_group.data.id
+  type                     = "egress"
+  description              = "Ephemeral port responses to App tier"
+  protocol                 = "tcp"
+  from_port                = 1024
+  to_port                  = 65535
+  source_security_group_id = aws_security_group.application.id
+}
+
+resource "aws_security_group_rule" "data_egress_response_to_bastion" {
+  count = var.enable_bastion ? 1 : 0
+
+  security_group_id        = aws_security_group.data.id
+  type                     = "egress"
+  description              = "Ephemeral port responses to Bastion (admin queries)"
+  protocol                 = "tcp"
+  from_port                = 1024
+  to_port                  = 65535
+  source_security_group_id = aws_security_group.bastion[0].id
 }
 
 
