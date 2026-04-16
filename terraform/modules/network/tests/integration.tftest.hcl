@@ -356,6 +356,7 @@ run "flow_logs_enabled_creates_real_resources" {
   variables {
     enable_flow_logs         = true
     flow_logs_retention_days = 7
+    single_nat_gateway       = false  # Keep HA mode from test 8 — avoid scale-down race
   }
 
   # VPC still creates normally
@@ -376,7 +377,8 @@ run "flow_logs_disabled_still_creates_vpc" {
   command = apply
 
   variables {
-    enable_flow_logs = false
+    enable_flow_logs   = false
+    single_nat_gateway = false  # Keep HA mode — final teardown handles full destroy
   }
 
   assert {
