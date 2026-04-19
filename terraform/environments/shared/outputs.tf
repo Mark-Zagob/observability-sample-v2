@@ -39,3 +39,29 @@ output "nat_public_ips" {
   description = "NAT Gateway public IPs"
   value       = module.network.nat_public_ips
 }
+
+# Security outputs
+output "alb_security_group_id" {
+  description = "ALB Security Group ID"
+  value       = module.security.alb_security_group_id
+}
+
+output "application_security_group_id" {
+  description = "Application Security Group ID"
+  value       = module.security.application_security_group_id
+}
+
+output "data_security_group_id" {
+  description = "Data tier Security Group ID"
+  value       = module.security.data_security_group_id
+}
+
+output "ecs_task_execution_role_arn" {
+  description = "ECS Task Execution Role ARN"
+  value       = module.security.ecs_task_execution_role_arn
+}
+
+output "ecs_task_role_arn" {
+  description = "ECS Task Role ARN"
+  value       = module.security.ecs_task_role_arn
+}

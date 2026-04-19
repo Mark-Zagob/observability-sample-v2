@@ -7,6 +7,17 @@ variable "project_name" {
   type        = string
 }
 
+variable "environment" {
+  description = "Environment name for tagging and resource identification"
+  type        = string
+  default     = "lab"
+
+  validation {
+    condition     = contains(["dev", "staging", "prod", "lab"], var.environment)
+    error_message = "environment must be one of: dev, staging, prod, lab."
+  }
+}
+
 variable "aws_region" {
   description = "AWS region to deploy to"
   type        = string

@@ -41,6 +41,7 @@ resource "aws_cloudwatch_log_group" "flow_logs" {
 #--------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 resource "aws_kms_key" "flow_logs" {
   for_each = local.flow_logs
@@ -67,7 +68,7 @@ resource "aws_kms_key" "flow_logs" {
         Sid    = "AllowCloudWatchLogs"
         Effect = "Allow"
         Principal = {
-          Service = "logs.${var.aws_region}.amazonaws.com"
+          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
         }
         Action = [
           "kms:Encrypt*",
@@ -79,7 +80,7 @@ resource "aws_kms_key" "flow_logs" {
         Resource = "*"
         Condition = {
           ArnLike = {
-            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/vpc/flow-logs/${var.project_name}"
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/vpc/flow-logs/${var.project_name}"
           }
         }
       }

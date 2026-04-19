@@ -4,6 +4,7 @@
 
 project_name = "obs-lab"
 aws_region   = "ap-southeast-2"
+environment  = "lab"
 
 # Network
 vpc_cidr           = "10.0.0.0/16"
