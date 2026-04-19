@@ -45,13 +45,13 @@ variable "enable_flow_logs" {
 }
 
 #--------------------------------------------------------------
-# VPC Endpoints (uncomment khi bật module vpc-endpoints)
+# VPC Endpoints
 #--------------------------------------------------------------
-# variable "enable_interface_endpoints" {
-#   description = "Enable Interface VPC Endpoints (costs money)"
-#   type        = bool
-#   default     = false
-# }
+variable "enable_interface_endpoints" {
+  description = "Enable Interface VPC Endpoints (~$7.2/month per endpoint per AZ)"
+  type        = bool
+  default     = false
+}
 
 #--------------------------------------------------------------
 # Security

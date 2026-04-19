@@ -30,32 +30,32 @@ module "network" {
 #--------------------------------------------------------------
 # Module 2: VPC Endpoints (S3, DynamoDB Gateway + Interface)
 # Tách riêng khỏi network module theo Single Responsibility Principle.
-# Uncomment khi sẵn sàng sử dụng.
+# Gateway endpoints (S3, DynamoDB) = FREE — should always be enabled.
+# Interface endpoints = optional, ~$7.2/month per endpoint per AZ.
 #--------------------------------------------------------------
-# module "vpc_endpoints" {
-#   source = "../../modules/vpc-endpoints"
-#
-#   project_name = var.project_name
-#   aws_region   = var.aws_region
-#   vpc_id       = module.network.vpc_id
-#   vpc_cidr     = module.network.vpc_cidr_block
-#
-#   # Gateway Endpoints cần tất cả route tables
-#   route_table_ids = concat(
-#     [module.network.public_route_table_id],
-#     values(module.network.private_route_table_ids),
-#     values(module.network.mgmt_route_table_ids),
-#     [module.network.data_route_table_id]
-#   )
-#
-#   # Interface Endpoints (costs ~$7.2/month per endpoint per AZ)
-#   enable_interface_endpoints = var.enable_interface_endpoints
-#   private_subnet_ids         = module.network.private_subnet_ids
-#
-#   common_tags = {
-#     Module = "vpc-endpoints"
-#   }
-# }
+module "vpc_endpoints" {
+  source = "../../modules/vpc-endpoints"
+
+  project_name = var.project_name
+  vpc_id       = module.network.vpc_id
+  vpc_cidr     = module.network.vpc_cidr_block
+
+  # Gateway Endpoints cần tất cả route tables
+  route_table_ids = concat(
+    [module.network.public_route_table_id],
+    values(module.network.private_route_table_ids),
+    values(module.network.mgmt_route_table_ids),
+    [module.network.data_route_table_id]
+  )
+
+  # Interface Endpoints (costs ~$7.2/month per endpoint per AZ)
+  enable_interface_endpoints = var.enable_interface_endpoints
+  private_subnet_ids         = module.network.private_subnet_ids
+
+  common_tags = {
+    Module = "vpc-endpoints"
+  }
+}
 
 #--------------------------------------------------------------
 # Module 3: Security (SGs, IAM Roles, Key Pair)

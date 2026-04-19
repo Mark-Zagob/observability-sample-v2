@@ -12,19 +12,14 @@ variable "project_name" {
   }
 }
 
-variable "aws_region" {
-  description = "AWS region for endpoint service names"
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.aws_region))
-    error_message = "aws_region must match format, e.g. ap-southeast-1, us-east-1."
-  }
-}
-
 variable "vpc_id" {
   description = "ID of the VPC to create endpoints in"
   type        = string
+
+  validation {
+    condition     = can(regex("^vpc-[a-z0-9]+$", var.vpc_id))
+    error_message = "vpc_id must be a valid VPC ID (vpc-...)."
+  }
 }
 
 variable "vpc_cidr" {
@@ -54,6 +49,22 @@ variable "private_subnet_ids" {
 }
 
 #--------------------------------------------------------------
+# Gateway Endpoint Controls
+#--------------------------------------------------------------
+
+variable "enable_s3_endpoint" {
+  description = "Enable S3 Gateway Endpoint (FREE — should always be true)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_dynamodb_endpoint" {
+  description = "Enable DynamoDB Gateway Endpoint (FREE — enable if using DynamoDB)"
+  type        = bool
+  default     = true
+}
+
+#--------------------------------------------------------------
 # Interface Endpoints (optional, costs money)
 #--------------------------------------------------------------
 
@@ -67,14 +78,29 @@ variable "interface_endpoint_services" {
   description = "List of AWS services to create Interface Endpoints for"
   type        = list(string)
   default = [
-    "ecr.api",
-    "ecr.dkr",
-    "logs",
-    "ssm",
-    "secretsmanager",
-    "sts",
-    "monitoring"
+    "ecr.api",          # ECS image pull (API calls)
+    "ecr.dkr",          # ECS image pull (Docker registry)
+    "logs",             # CloudWatch Logs (container logs)
+    "ssm",              # SSM Parameter Store (secrets, bastion)
+    "secretsmanager",   # Secrets Manager (DB passwords)
+    "sts",              # STS (IAM role assumption for ECS tasks)
+    "monitoring"        # CloudWatch Metrics (custom metrics)
   ]
+
+  validation {
+    condition     = length(var.interface_endpoint_services) > 0 || !var.enable_interface_endpoints
+    error_message = "interface_endpoint_services must not be empty when enable_interface_endpoints is true."
+  }
+}
+
+#--------------------------------------------------------------
+# S3 Endpoint Policy
+#--------------------------------------------------------------
+
+variable "s3_endpoint_policy" {
+  description = "Custom IAM policy JSON for S3 Gateway Endpoint. If empty, uses default (full S3 access from VPC)."
+  type        = string
+  default     = ""
 }
 
 #--------------------------------------------------------------

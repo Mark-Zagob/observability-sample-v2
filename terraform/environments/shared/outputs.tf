@@ -65,3 +65,19 @@ output "ecs_task_role_arn" {
   description = "ECS Task Role ARN"
   value       = module.security.ecs_task_role_arn
 }
+
+# VPC Endpoints outputs
+output "s3_endpoint_id" {
+  description = "S3 Gateway Endpoint ID"
+  value       = module.vpc_endpoints.s3_endpoint_id
+}
+
+output "s3_endpoint_prefix_list_id" {
+  description = "S3 prefix list ID (for SG rules restricting egress to S3)"
+  value       = module.vpc_endpoints.s3_endpoint_prefix_list_id
+}
+
+output "vpc_endpoints_security_group_id" {
+  description = "Interface Endpoints Security Group ID"
+  value       = module.vpc_endpoints.endpoints_security_group_id
+}
