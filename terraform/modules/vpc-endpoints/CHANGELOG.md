@@ -5,6 +5,15 @@ All notable changes to the **VPC Endpoints Module** will be documented in this f
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
+## [1.0.1] - 2026-04-19
+
+### Fixed
+- **Precondition validation**: Added `lifecycle.precondition` on interface endpoints to fail at plan time when `private_subnet_ids` is empty — prevents cryptic AWS API errors
+- **Cross-variable validation**: Removed invalid cross-reference to `var.enable_interface_endpoints` in `interface_endpoint_services` validation block (Terraform does not allow cross-variable references)
+
+### Removed
+- **`main.tf` placeholder**: Deleted empty redirect file — resources already split into `gateway_endpoints.tf` + `interface_endpoints.tf`
+
 ## [1.0.0] - 2026-04-19
 
 ### Added

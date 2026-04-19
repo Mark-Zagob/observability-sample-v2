@@ -88,8 +88,8 @@ variable "interface_endpoint_services" {
   ]
 
   validation {
-    condition     = length(var.interface_endpoint_services) > 0 || !var.enable_interface_endpoints
-    error_message = "interface_endpoint_services must not be empty when enable_interface_endpoints is true."
+    condition     = length(var.interface_endpoint_services) > 0
+    error_message = "interface_endpoint_services must contain at least one AWS service name."
   }
 }
 

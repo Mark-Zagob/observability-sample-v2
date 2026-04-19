@@ -84,4 +84,11 @@ resource "aws_vpc_endpoint" "interface" {
     Service = each.key
     Type    = "interface"
   })
+
+  lifecycle {
+    precondition {
+      condition     = length(var.private_subnet_ids) > 0
+      error_message = "private_subnet_ids must not be empty when enable_interface_endpoints is true. Interface Endpoints require at least one subnet for ENI placement."
+    }
+  }
 }

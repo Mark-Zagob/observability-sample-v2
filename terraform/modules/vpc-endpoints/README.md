@@ -90,7 +90,7 @@ module "vpc_endpoints" {
 ```
 vpc-endpoints/
 ├── gateway_endpoints.tf      # S3 + DynamoDB (FREE)
-├── interface_endpoints.tf    # SG + Interface Endpoints (paid)
+├── interface_endpoints.tf    # SG + Interface Endpoints (paid) + precondition
 ├── variables.tf              # Input variables with validation
 ├── outputs.tf                # Module outputs (IDs, DNS, maps)
 ├── versions.tf               # Provider constraints (~> 5.0)
