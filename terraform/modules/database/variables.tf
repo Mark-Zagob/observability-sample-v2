@@ -92,6 +92,23 @@ variable "multi_az" {
   default     = false
 }
 
+variable "read_replica_count" {
+  description = "Number of read replicas (0=none, 1=staging, 2=production)"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.read_replica_count >= 0 && var.read_replica_count <= 5
+    error_message = "read_replica_count must be between 0 and 5."
+  }
+}
+
+variable "replica_instance_class" {
+  description = "Instance class for read replicas (can differ from primary for analytics)"
+  type        = string
+  default     = "db.t3.micro"
+}
+
 variable "backup_retention_period" {
   description = "Number of days to retain automated backups (0 = disabled)"
   type        = number

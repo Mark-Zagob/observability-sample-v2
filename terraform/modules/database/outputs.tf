@@ -103,3 +103,22 @@ output "kms_alias_name" {
   description = "KMS key alias name"
   value       = aws_kms_alias.rds.name
 }
+
+#--------------------------------------------------------------
+# Read Replicas
+#--------------------------------------------------------------
+
+output "replica_endpoints" {
+  description = "List of read replica endpoints (host:port)"
+  value       = [for r in aws_db_instance.read_replica : r.endpoint]
+}
+
+output "replica_addresses" {
+  description = "List of read replica hostnames (without port)"
+  value       = [for r in aws_db_instance.read_replica : r.address]
+}
+
+output "replica_instance_ids" {
+  description = "List of read replica instance identifiers"
+  value       = [for r in aws_db_instance.read_replica : r.identifier]
+}

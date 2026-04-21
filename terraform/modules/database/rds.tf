@@ -150,3 +150,66 @@ resource "aws_db_instance" "postgres" {
     Environment = var.environment
   })
 }
+
+#--------------------------------------------------------------
+# Read Replicas (optional — default count = 0)
+#--------------------------------------------------------------
+# Use case: offload read traffic from primary.
+# App connects to replica endpoint for SELECT queries.
+# Replication: async (lag typically < 1s within same region).
+#
+# Scaling guide:
+#   read_replica_count = 0  → lab/dev (no replicas)
+#   read_replica_count = 1  → staging (1 replica for read testing)
+#   read_replica_count = 2  → production (2 replicas for HA reads)
+#--------------------------------------------------------------
+resource "aws_db_instance" "read_replica" {
+  count = var.read_replica_count
+
+  identifier = "${local.identifier}-replica-${count.index}"
+
+  # Replica source — inherits engine, db_name, username, password
+  replicate_source_db = aws_db_instance.postgres.identifier
+
+  # Instance sizing — can differ from primary (e.g., larger for analytics)
+  instance_class = var.replica_instance_class
+
+  # Storage — inherited from primary, but encryption must be explicit
+  storage_encrypted = true
+  kms_key_id        = aws_kms_key.rds.arn
+
+  # Networking — same subnet group and SG as primary
+  # Note: subnet group is inherited from source, but SG must be set
+  vpc_security_group_ids = [var.data_security_group_id]
+  publicly_accessible    = false
+
+  # Replica does NOT need Multi-AZ (it IS the HA mechanism)
+  multi_az = false
+
+  # Monitoring — same as primary
+  performance_insights_enabled          = true
+  performance_insights_retention_period = var.environment == "prod" ? 731 : 7
+  performance_insights_kms_key_id       = aws_kms_key.rds.arn
+  monitoring_interval                   = var.enhanced_monitoring_interval
+  monitoring_role_arn                   = var.enhanced_monitoring_interval > 0 ? aws_iam_role.rds_monitoring[0].arn : null
+  enabled_cloudwatch_logs_exports       = ["postgresql", "upgrade"]
+
+  # Updates
+  auto_minor_version_upgrade = var.auto_minor_version_upgrade
+  apply_immediately          = var.apply_immediately
+
+  # Replica-specific: no backup (primary handles backups)
+  backup_retention_period = 0
+  skip_final_snapshot     = true
+
+  # Parameter group — same tuning as primary
+  parameter_group_name = aws_db_parameter_group.postgres.name
+
+  tags = merge(var.common_tags, {
+    Name        = "${local.identifier}-replica-${count.index}"
+    Component   = "database"
+    Engine      = "postgres"
+    Role        = "replica"
+    Environment = var.environment
+  })
+}

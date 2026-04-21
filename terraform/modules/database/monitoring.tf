@@ -162,3 +162,33 @@ resource "aws_cloudwatch_metric_alarm" "secret_age" {
     Purpose   = "rotation-reminder"
   })
 }
+
+#--------------------------------------------------------------
+# Alarm: Replica Lag (one per replica)
+# Critical for detecting stale reads in production.
+# PostgreSQL async replication: lag > 30s = data inconsistency risk.
+#--------------------------------------------------------------
+resource "aws_cloudwatch_metric_alarm" "replica_lag" {
+  count = var.read_replica_count > 0 && var.enable_cloudwatch_alarms ? var.read_replica_count : 0
+
+  alarm_name          = "${local.identifier}-replica-${count.index}-lag-high"
+  alarm_description   = "Replica ${count.index} replication lag > 30 seconds"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "ReplicaLag"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 30
+
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.read_replica[count.index].identifier
+  }
+
+  alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
+
+  tags = merge(var.common_tags, {
+    Name      = "${local.identifier}-replica-${count.index}-lag-alarm"
+    Component = "database"
+  })
+}
