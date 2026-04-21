@@ -23,4 +23,4 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=5s \
 USER appuser
 
 EXPOSE 5002
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5002", "--access-logfile", "-", "--timeout", "30", "app:app"]

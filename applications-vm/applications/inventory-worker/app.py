@@ -20,14 +20,42 @@ Features:
 import os
 import time
 import json
+import signal
 import logging
 import threading
+import atexit
 
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
 from confluent_kafka import Consumer, KafkaError
 from flask import Flask, jsonify
+
+# ----------------------------------------------------------
+# Connection resilience
+# ----------------------------------------------------------
+MAX_RETRIES = 5
+RETRY_DELAY = 2  # seconds, doubles each retry
+
+
+def retry_connect(name, connect_fn, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
+    """Retry a connection function with exponential backoff."""
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = connect_fn()
+            logging.getLogger("inventory-worker").info(
+                f"{name} connected", extra={"attempt": attempt})
+            return result
+        except Exception as e:
+            last_error = e
+            wait = delay * (2 ** (attempt - 1))
+            logging.getLogger("inventory-worker").warning(
+                f"{name} connection failed, retrying",
+                extra={"attempt": attempt, "max_retries": max_retries,
+                       "wait_seconds": wait, "error": str(e)})
+            time.sleep(wait)
+    raise last_error
 
 # ----------------------------------------------------------
 # OpenTelemetry imports
@@ -147,7 +175,9 @@ db_pool = None
 def get_db_pool():
     global db_pool
     if db_pool is None:
-        db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=5, **db_params)
+        def _connect():
+            return psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=5, **db_params)
+        db_pool = retry_connect("PostgreSQL", _connect)
     return db_pool
 
 
@@ -535,15 +565,36 @@ def inventory_log():
 
 
 # ============================================================
-# Main
+# Graceful Shutdown
+# ============================================================
+def _shutdown_handler(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful Kafka consumer shutdown."""
+    global consumer_running
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received {sig_name}, shutting down gracefully...",
+                extra={"signal": sig_name})
+    consumer_running = False
+
+
+signal.signal(signal.SIGTERM, _shutdown_handler)
+signal.signal(signal.SIGINT, _shutdown_handler)
+atexit.register(lambda: logger.info("Inventory Worker exiting",
+                                     extra={"stats": consumer_stats}))
+
+
+# ============================================================
+# Start Kafka consumer thread (works with both gunicorn and __main__)
+# ============================================================
+_consumer_thread = threading.Thread(target=consume_loop, daemon=True, name="kafka-consumer")
+_consumer_thread.start()
+logger.info("Kafka consumer thread started", extra={"thread": _consumer_thread.name})
+
+
+# ============================================================
+# Main (dev mode only — production uses gunicorn)
 # ============================================================
 if __name__ == "__main__":
-    logger.info("Inventory Worker starting",
+    logger.info("Inventory Worker starting (dev mode)",
                 extra={"port": 5005, "kafka": KAFKA_BOOTSTRAP, "topic": KAFKA_TOPIC})
-
-    # Start Kafka consumer in background thread
-    consumer_thread = threading.Thread(target=consume_loop, daemon=True)
-    consumer_thread.start()
-
-    # Start Flask for health/status endpoints
+    logger.warning("Use gunicorn for production: gunicorn -w 1 -b 0.0.0.0:5005 app:app")
     app.run(host="0.0.0.0", port=5005)

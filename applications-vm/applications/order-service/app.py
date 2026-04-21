@@ -29,6 +29,45 @@ import redis as redis_lib
 from flask import Flask, jsonify, request as flask_request
 
 # ----------------------------------------------------------
+# Connection resilience
+# ----------------------------------------------------------
+MAX_RETRIES = 5
+RETRY_DELAY = 2  # seconds, doubles each retry
+
+
+def retry_connect(name, connect_fn, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
+    """Retry a connection function with exponential backoff.
+
+    Args:
+        name: Human-readable name for logging
+        connect_fn: Callable that returns the connection/client
+        max_retries: Maximum number of retry attempts
+        delay: Initial delay in seconds (doubles each retry)
+
+    Returns:
+        The connection object from connect_fn
+
+    Raises:
+        Last exception if all retries exhausted
+    """
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = connect_fn()
+            logger.info(f"{name} connected", extra={"attempt": attempt})
+            return result
+        except Exception as e:
+            last_error = e
+            wait = delay * (2 ** (attempt - 1))
+            logger.warning(f"{name} connection failed, retrying",
+                           extra={"attempt": attempt, "max_retries": max_retries,
+                                  "wait_seconds": wait, "error": str(e)})
+            time.sleep(wait)
+    logger.error(f"{name} connection failed after {max_retries} retries",
+                 extra={"error": str(last_error)})
+    raise last_error
+
+# ----------------------------------------------------------
 # OpenTelemetry imports
 # ----------------------------------------------------------
 from opentelemetry import trace, metrics
@@ -152,17 +191,22 @@ kafka_producer = None
 
 
 def get_kafka_producer():
-    """Lazy init Kafka producer"""
+    """Lazy init Kafka producer with retry"""
     global kafka_producer
     if kafka_producer is None:
+        def _connect():
+            producer = KafkaProducer({
+                "bootstrap.servers": KAFKA_BOOTSTRAP,
+                "client.id": "order-service",
+                "acks": "all",
+                "retries": 3,
+                "retry.backoff.ms": 100,
+            })
+            # Verify connectivity by listing topics
+            producer.list_topics(timeout=5)
+            return producer
         logger.info("Initializing Kafka producer", extra={"bootstrap": KAFKA_BOOTSTRAP})
-        kafka_producer = KafkaProducer({
-            "bootstrap.servers": KAFKA_BOOTSTRAP,
-            "client.id": "order-service",
-            "acks": "all",
-            "retries": 3,
-            "retry.backoff.ms": 100,
-        })
+        kafka_producer = retry_connect("Kafka", _connect)
     return kafka_producer
 
 
@@ -252,23 +296,29 @@ redis_client = None
 
 
 def get_db_pool():
-    """Lazy init DB connection pool"""
+    """Lazy init DB connection pool with retry"""
     global db_pool
     if db_pool is None:
+        def _connect():
+            return psycopg2.pool.ThreadedConnectionPool(
+                minconn=2, maxconn=10, **db_params
+            )
         logger.info("Initializing PostgreSQL connection pool",
                      extra={"host": db_params["host"], "db": db_params["dbname"]})
-        db_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2, maxconn=10, **db_params
-        )
+        db_pool = retry_connect("PostgreSQL", _connect)
     return db_pool
 
 
 def get_redis():
-    """Lazy init Redis client"""
+    """Lazy init Redis client with retry"""
     global redis_client
     if redis_client is None:
+        def _connect():
+            client = redis_lib.from_url(REDIS_URL, decode_responses=True)
+            client.ping()  # Verify connection
+            return client
         logger.info("Initializing Redis connection", extra={"url": REDIS_URL})
-        redis_client = redis_lib.from_url(REDIS_URL, decode_responses=True)
+        redis_client = retry_connect("Redis", _connect)
     return redis_client
 
 
@@ -507,8 +557,10 @@ def process_order():
     payment = {"status": "skipped"}
     with tracer.start_as_current_span("request_payment") as span:
         try:
-            resp = requests.get(
-                f"{PAYMENT_SERVICE}/charge?order_id={order_id}&amount={total_amount}"
+            resp = requests.post(
+                f"{PAYMENT_SERVICE}/charge",
+                json={"order_id": order_id, "amount": total_amount},
+                timeout=30,
             )
             payment = resp.json()
             payment_status = payment.get("status", "unknown")
@@ -606,7 +658,8 @@ def health():
 
 
 if __name__ == "__main__":
-    logger.info("Order Service starting",
+    logger.info("Order Service starting (dev mode)",
                  extra={"port": 5001, "db_host": db_params["host"],
                         "redis_url": REDIS_URL})
+    logger.warning("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:5001 app:app")
     app.run(host="0.0.0.0", port=5001)

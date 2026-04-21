@@ -84,9 +84,54 @@ module "security" {
 }
 
 #--------------------------------------------------------------
-# Module 4: Data (RDS, Redis, MSK) — sẽ thêm sau
+# Module 4: Database (RDS PostgreSQL + Secrets + SSM + Monitoring)
 #--------------------------------------------------------------
-# module "data" {
-#   source = "../../modules/data"
+module "database" {
+  source = "../../modules/database"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  # From network module
+  vpc_id          = module.network.vpc_id
+  data_subnet_ids = module.network.data_subnet_ids
+
+  # From security module
+  data_security_group_id = module.security.data_security_group_id
+
+  # RDS configuration (override via terraform.tfvars per env)
+  instance_class        = var.db_instance_class
+  db_name               = var.db_name
+  allocated_storage     = var.db_allocated_storage
+  max_allocated_storage = var.db_max_allocated_storage
+
+  # Production toggles
+  multi_az                = var.db_multi_az
+  backup_retention_period = var.db_backup_retention_period
+  deletion_protection     = var.db_deletion_protection
+  skip_final_snapshot     = var.db_skip_final_snapshot
+
+  # Monitoring
+  enhanced_monitoring_interval = var.db_enhanced_monitoring_interval
+  enable_cloudwatch_alarms     = var.db_enable_cloudwatch_alarms
+
+  common_tags = {
+    Module = "database"
+  }
+}
+
+#--------------------------------------------------------------
+# Module 5: Cache (ElastiCache Redis) — sẽ thêm sau
+#--------------------------------------------------------------
+# module "cache" {
+#   source = "../../modules/cache"
+#   ...
+# }
+
+#--------------------------------------------------------------
+# Module 6: Streaming (MSK Kafka) — sẽ thêm sau
+#--------------------------------------------------------------
+# module "streaming" {
+#   source = "../../modules/streaming"
 #   ...
 # }

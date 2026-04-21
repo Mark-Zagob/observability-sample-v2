@@ -249,5 +249,6 @@ def health():
 
 
 if __name__ == "__main__":
-    logger.info("API Gateway starting", extra={"port": 5000})
+    logger.info("API Gateway starting (dev mode)", extra={"port": 5000})
+    logger.warning("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:5000 app:app")
     app.run(host="0.0.0.0", port=5000)

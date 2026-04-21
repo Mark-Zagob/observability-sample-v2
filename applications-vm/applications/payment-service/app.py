@@ -105,11 +105,18 @@ FlaskInstrumentor().instrument_app(app)
 PROVIDERS = ["stripe", "paypal", "square"]
 
 
-@app.route("/charge")
+@app.route("/charge", methods=["POST"])
 def charge():
     """Xử lý thanh toán"""
-    order_id = request.args.get("order_id", "unknown")
-    amount = request.args.get("amount", None)
+    # Support both JSON body (preferred) and query params (backward compat)
+    if request.is_json:
+        data = request.get_json()
+        order_id = data.get("order_id", "unknown")
+        amount = data.get("amount")
+    else:
+        order_id = request.args.get("order_id", "unknown")
+        amount = request.args.get("amount")
+
     if amount:
         amount = float(amount)
     else:
@@ -193,5 +200,6 @@ def health():
 
 
 if __name__ == "__main__":
-    logger.info("Payment Service starting", extra={"port": 5002})
+    logger.info("Payment Service starting (dev mode)", extra={"port": 5002})
+    logger.warning("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:5002 app:app")
     app.run(host="0.0.0.0", port=5002)

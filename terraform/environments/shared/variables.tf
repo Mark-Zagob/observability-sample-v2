@@ -79,3 +79,67 @@ variable "generate_ssh_key" {
   type        = bool
   default     = true
 }
+
+#--------------------------------------------------------------
+# Database (RDS PostgreSQL)
+#--------------------------------------------------------------
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_name" {
+  description = "Database name"
+  type        = string
+  default     = "orders"
+}
+
+variable "db_allocated_storage" {
+  description = "Initial allocated storage in GB"
+  type        = number
+  default     = 20
+}
+
+variable "db_max_allocated_storage" {
+  description = "Maximum storage for autoscaling in GB"
+  type        = number
+  default     = 50
+}
+
+variable "db_multi_az" {
+  description = "Enable Multi-AZ for RDS"
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_retention_period" {
+  description = "Days to retain automated backups (0-35)"
+  type        = number
+  default     = 1
+}
+
+variable "db_deletion_protection" {
+  description = "Prevent accidental deletion of RDS instance"
+  type        = bool
+  default     = false
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip final snapshot on destroy (true for lab)"
+  type        = bool
+  default     = true
+}
+
+variable "db_enhanced_monitoring_interval" {
+  description = "Enhanced Monitoring interval in seconds (0 = disabled)"
+  type        = number
+  default     = 0
+}
+
+variable "db_enable_cloudwatch_alarms" {
+  description = "Create CloudWatch alarms for database monitoring"
+  type        = bool
+  default     = true
+}
