@@ -2,7 +2,7 @@
 # Shared Environment - Values cho lab
 #--------------------------------------------------------------
 
-project_name = "obs-lab"
+project_name = "obs"
 aws_region   = "ap-southeast-2"
 environment  = "lab"
 

@@ -174,12 +174,13 @@ resource "aws_cloudwatch_metric_alarm" "replica_lag" {
   alarm_name          = "${local.identifier}-replica-${count.index}-lag-high"
   alarm_description   = "Replica ${count.index} replication lag > 30 seconds"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
+  evaluation_periods  = 3
   metric_name         = "ReplicaLag"
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Maximum"
   threshold           = 30
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
     DBInstanceIdentifier = aws_db_instance.read_replica[count.index].identifier
