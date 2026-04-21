@@ -16,6 +16,13 @@ locals {
 }
 
 #--------------------------------------------------------------
+# Random suffix for final snapshot (prevent name collision on destroy)
+#--------------------------------------------------------------
+resource "random_id" "snapshot_suffix" {
+  byte_length = 4
+}
+
+#--------------------------------------------------------------
 # DB Subnet Group
 #--------------------------------------------------------------
 resource "aws_db_subnet_group" "main" {
@@ -89,6 +96,7 @@ resource "aws_db_instance" "postgres" {
   max_allocated_storage = var.max_allocated_storage
   storage_type          = "gp3"
   storage_encrypted     = true
+  kms_key_id            = aws_kms_key.rds.arn
 
   # Database
   db_name  = var.db_name
@@ -109,21 +117,26 @@ resource "aws_db_instance" "postgres" {
   # Backup
   backup_retention_period   = var.backup_retention_period
   backup_window             = "03:00-04:00"
-  maintenance_window        = "Mon:04:00-Mon:05:00"
+  maintenance_window        = "Mon:05:00-Mon:06:00"
   copy_tags_to_snapshot     = true
   skip_final_snapshot       = var.skip_final_snapshot
-  final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final"
+  final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final-${random_id.snapshot_suffix.hex}"
   deletion_protection       = var.deletion_protection
 
   # Monitoring
   performance_insights_enabled          = true
   performance_insights_retention_period = var.environment == "prod" ? 731 : 7
+  performance_insights_kms_key_id       = aws_kms_key.rds.arn
   monitoring_interval                   = var.enhanced_monitoring_interval
   monitoring_role_arn                   = var.enhanced_monitoring_interval > 0 ? aws_iam_role.rds_monitoring[0].arn : null
-  enabled_cloudwatch_logs_exports       = ["postgresql"]
+  enabled_cloudwatch_logs_exports       = ["postgresql", "upgrade"]
 
   # Security
   iam_database_authentication_enabled = true
+
+  # Updates
+  auto_minor_version_upgrade = var.auto_minor_version_upgrade
+  apply_immediately          = var.apply_immediately
 
   # Lifecycle
   lifecycle {

@@ -117,8 +117,7 @@ resource "aws_cloudwatch_metric_alarm" "connections_high" {
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
-  # db.t3.micro max_connections ≈ 87, 80% ≈ 70
-  threshold = 70
+  threshold = var.alarm_connections_threshold
 
   dimensions = {
     DBInstanceIdentifier = aws_db_instance.postgres.identifier
@@ -129,5 +128,37 @@ resource "aws_cloudwatch_metric_alarm" "connections_high" {
   tags = merge(var.common_tags, {
     Name      = "${local.identifier}-connections-alarm"
     Component = "database"
+  })
+}
+
+#--------------------------------------------------------------
+# Alarm: Secret Rotation Age
+# Production pattern (Option B): Alert when password hasn't
+# been rotated in 90 days. Manual rotation reminder.
+# Phase 2: Replace with auto-rotation Lambda.
+#--------------------------------------------------------------
+resource "aws_cloudwatch_metric_alarm" "secret_age" {
+  count = var.enable_cloudwatch_alarms ? 1 : 0
+
+  alarm_name          = "${local.identifier}-secret-rotation-due"
+  alarm_description   = "DB master password has not been rotated in ${var.secret_rotation_days} days"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "DaysSinceLastChange"
+  namespace           = "AWS/SecretsManager"
+  period              = 86400 # 24 hours
+  statistic           = "Maximum"
+  threshold           = var.secret_rotation_days
+
+  dimensions = {
+    SecretName = aws_secretsmanager_secret.db_master_password.name
+  }
+
+  alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
+
+  tags = merge(var.common_tags, {
+    Name      = "${local.identifier}-secret-age-alarm"
+    Component = "database"
+    Purpose   = "rotation-reminder"
   })
 }

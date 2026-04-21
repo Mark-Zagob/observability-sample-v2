@@ -106,10 +106,12 @@ module "database" {
   max_allocated_storage = var.db_max_allocated_storage
 
   # Production toggles
-  multi_az                = var.db_multi_az
-  backup_retention_period = var.db_backup_retention_period
-  deletion_protection     = var.db_deletion_protection
-  skip_final_snapshot     = var.db_skip_final_snapshot
+  multi_az                   = var.db_multi_az
+  backup_retention_period    = var.db_backup_retention_period
+  deletion_protection        = var.db_deletion_protection
+  skip_final_snapshot        = var.db_skip_final_snapshot
+  auto_minor_version_upgrade = var.db_auto_minor_version_upgrade
+  apply_immediately          = var.db_apply_immediately
 
   # Monitoring
   enhanced_monitoring_interval = var.db_enhanced_monitoring_interval

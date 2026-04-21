@@ -84,3 +84,22 @@ output "cloudwatch_log_group_name" {
   description = "CloudWatch Log Group name for RDS PostgreSQL logs"
   value       = aws_cloudwatch_log_group.rds_postgres.name
 }
+
+#--------------------------------------------------------------
+# KMS
+#--------------------------------------------------------------
+
+output "kms_key_arn" {
+  description = "ARN of the KMS CMK used for RDS encryption"
+  value       = aws_kms_key.rds.arn
+}
+
+output "kms_key_id" {
+  description = "ID of the KMS CMK"
+  value       = aws_kms_key.rds.key_id
+}
+
+output "kms_alias_name" {
+  description = "KMS key alias name"
+  value       = aws_kms_alias.rds.name
+}

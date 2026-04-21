@@ -132,6 +132,18 @@ variable "db_skip_final_snapshot" {
   default     = true
 }
 
+variable "db_auto_minor_version_upgrade" {
+  description = "Auto-apply minor engine upgrades (security patches)"
+  type        = bool
+  default     = true
+}
+
+variable "db_apply_immediately" {
+  description = "Apply RDS changes immediately or during maintenance window"
+  type        = bool
+  default     = true
+}
+
 variable "db_enhanced_monitoring_interval" {
   description = "Enhanced Monitoring interval in seconds (0 = disabled)"
   type        = number

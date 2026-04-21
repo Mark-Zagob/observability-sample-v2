@@ -115,6 +115,18 @@ variable "skip_final_snapshot" {
   default     = true
 }
 
+variable "auto_minor_version_upgrade" {
+  description = "Auto-apply minor engine upgrades during maintenance window (security patches)"
+  type        = bool
+  default     = true
+}
+
+variable "apply_immediately" {
+  description = "Apply changes immediately (true for lab) or during maintenance window (false for prod)"
+  type        = bool
+  default     = true
+}
+
 #--------------------------------------------------------------
 # Monitoring
 #--------------------------------------------------------------
@@ -146,6 +158,12 @@ variable "alarm_free_storage_threshold" {
   description = "Free storage space threshold for alarm (bytes)"
   type        = number
   default     = 2000000000 # 2 GB
+}
+
+variable "alarm_connections_threshold" {
+  description = "Database connections threshold for alarm (varies by instance class: t3.micro≈87, t3.small≈174, t3.medium≈348)"
+  type        = number
+  default     = 70
 }
 
 variable "alarm_sns_topic_arn" {

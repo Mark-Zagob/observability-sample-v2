@@ -13,8 +13,8 @@ resource "random_password" "db_master" {
   length  = 24
   special = true
 
-  # RDS disallows these characters in master passwords
-  override_special = "!#$%&*()-_=+[]{}|:,.<>?"
+  # RDS disallows @, ", /, \. Also exclude {}[]|<> which break connection strings.
+  override_special = "!#$%&*()-_=+?,."
 
   # Lifecycle: don't regenerate on every apply
   lifecycle {
