@@ -166,6 +166,12 @@ variable "alarm_connections_threshold" {
   default     = 70
 }
 
+variable "secret_rotation_days" {
+  description = "Alert when DB password has not been rotated in this many days (SOC2/HIPAA: 90 days)"
+  type        = number
+  default     = 90
+}
+
 variable "alarm_sns_topic_arn" {
   description = "SNS topic ARN for alarm notifications (empty = no notifications)"
   type        = string
