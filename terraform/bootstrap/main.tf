@@ -102,6 +102,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
     id     = "expire-old-logs"
     status = "Enabled"
 
+    filter {}
+
     expiration {
       days = var.log_retention_days
     }
@@ -170,6 +172,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
   rule {
     id     = "cleanup-old-state-versions"
     status = "Enabled"
+
+    filter {}
 
     noncurrent_version_expiration {
       noncurrent_days = var.state_retention_days
