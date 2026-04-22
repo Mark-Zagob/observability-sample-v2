@@ -11,12 +11,12 @@ name: CI — api-gateway
 # TRIGGER: khi nào workflow chạy?
 # ============================================================
 on:
-  push:
-    # branches: [main]
-    paths:
-      # Chỉ chạy khi code api-gateway hoặc workflow thay đổi
-      - 'applications-vm/applications/api-gateway/**'
-      - '.github/workflows/ci-api-gateway.yml'
+  # push:
+  #   # branches: [main]
+  #   paths:
+  #     # Chỉ chạy khi code api-gateway hoặc workflow thay đổi
+  #     - 'applications-vm/applications/api-gateway/**'
+  #     - '.github/workflows/ci-api-gateway.yml'
 
   # Cho phép chạy thủ công từ GitHub UI (Actions → Run workflow)
   workflow_dispatch:

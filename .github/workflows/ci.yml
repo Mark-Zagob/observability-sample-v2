@@ -24,13 +24,13 @@ name: CI — Orchestrator
 # TRIGGER
 # ============================================================
 on:
-  push:
-    # branches: [main, develop]
-    paths:
-      - 'applications-vm/applications/**'
-      - 'observability-vm/phase1-metrics/webhook-receiver/**'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/_reusable-*.yml'
+  # push:
+  #   # branches: [main, develop]
+  #   paths:
+  #     - 'applications-vm/applications/**'
+  #     - 'observability-vm/phase1-metrics/webhook-receiver/**'
+  #     - '.github/workflows/ci.yml'
+  #     - '.github/workflows/_reusable-*.yml'
 
   pull_request:
     branches: [main, develop]
