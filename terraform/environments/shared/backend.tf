@@ -18,33 +18,33 @@
 #
 # Uncomment after running bootstrap module:
 
-# terraform {
-#   backend "s3" {
-#     #----------------------------------------------------------
-#     # State Storage
-#     #----------------------------------------------------------
-#     bucket = "obs-terraform-state-ACCOUNT_ID"   # ← Replace with bootstrap output
-#     key    = "shared/terraform.tfstate"          # ← Unique per environment
-#     region = "ap-southeast-2"
-#
-#     #----------------------------------------------------------
-#     # State Locking (prevent concurrent apply)
-#     #----------------------------------------------------------
-#     dynamodb_table = "terraform-state-locks"     # ← From bootstrap output
-#
-#     #----------------------------------------------------------
-#     # Encryption at-rest (KMS CMK)
-#     #----------------------------------------------------------
-#     encrypt    = true
-#     kms_key_id = "arn:aws:kms:ap-southeast-2:ACCOUNT_ID:alias/obs-terraform-state"  # ← From bootstrap
-#
-#     #----------------------------------------------------------
-#     # Extra Security (optional but recommended)
-#     #----------------------------------------------------------
-#     # skip_metadata_api_check     = true    # Skip IMDS check in CI/CD
-#     # skip_region_validation      = true    # Skip region validation
-#   }
-# }
+terraform {
+  backend "s3" {
+    #----------------------------------------------------------
+    # State Storage
+    #----------------------------------------------------------
+    bucket = "obs-terraform-state-730335245469"   # ← Replace with bootstrap output
+    key    = "shared/terraform.tfstate"          # ← Unique per environment
+    region = "ap-southeast-2"
+
+    #----------------------------------------------------------
+    # State Locking (prevent concurrent apply)
+    #----------------------------------------------------------
+    dynamodb_table = "terraform-state-locks"     # ← From bootstrap output
+
+    #----------------------------------------------------------
+    # Encryption at-rest (KMS CMK)
+    #----------------------------------------------------------
+    encrypt    = true
+    kms_key_id = "arn:aws:kms:ap-southeast-2:730335245469:alias/obs-terraform-state"  # ← From bootstrap
+
+    #----------------------------------------------------------
+    # Extra Security (optional but recommended)
+    #----------------------------------------------------------
+    # skip_metadata_api_check     = true    # Skip IMDS check in CI/CD
+    # skip_region_validation      = true    # Skip region validation
+  }
+}
 
 
 #--------------------------------------------------------------
