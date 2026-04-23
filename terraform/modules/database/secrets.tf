@@ -29,8 +29,11 @@ resource "aws_secretsmanager_secret" "db_master_password" {
   name        = "${var.project_name}/${var.environment}/database/master-password"
   description = "RDS PostgreSQL master password for ${var.project_name} (${var.environment})"
 
-  # Allow Terraform to delete the secret (no recovery window in lab)
-  recovery_window_in_days = var.environment == "prod" ? 30 : 0
+  # Encrypt with the same CMK used for RDS storage
+  kms_key_id = aws_kms_key.rds.arn
+
+  # Recovery window: prod=30d, non-prod=7d (minimum per security policy)
+  recovery_window_in_days = var.environment == "prod" ? 30 : 7
 
   tags = merge(var.common_tags, {
     Name      = "${var.project_name}-db-master-password"

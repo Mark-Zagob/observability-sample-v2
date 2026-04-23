@@ -20,7 +20,8 @@ module "network" {
   single_nat_gateway = var.single_nat_gateway
 
   # VPC Flow Logs: ghi network traffic vào CloudWatch
-  enable_flow_logs = var.enable_flow_logs
+  enable_flow_logs         = var.enable_flow_logs
+  flow_logs_retention_days = 30   # Minimum per logging compliance policy
 
   common_tags = {
     Module = "network"

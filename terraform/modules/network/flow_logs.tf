@@ -47,7 +47,7 @@ resource "aws_kms_key" "flow_logs" {
   for_each = local.flow_logs
 
   description             = "KMS key for VPC Flow Logs encryption - ${var.project_name}"
-  deletion_window_in_days = 7
+  deletion_window_in_days = 14
   enable_key_rotation     = true
 
   policy = jsonencode({

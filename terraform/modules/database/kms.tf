@@ -12,7 +12,7 @@
 
 resource "aws_kms_key" "rds" {
   description             = "CMK for RDS encryption at-rest — ${local.identifier}"
-  deletion_window_in_days = var.environment == "prod" ? 30 : 7
+  deletion_window_in_days = var.environment == "prod" ? 30 : 14
   enable_key_rotation     = true
 
   # Key policy: restrict to this account + RDS service
@@ -63,6 +63,27 @@ resource "aws_kms_key" "rds" {
           "kms:GenerateDataKey*"
         ]
         Resource = "*"
+      },
+      # Allow CloudWatch Logs to encrypt log groups with this key
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/rds/*"
+          }
+        }
       }
     ]
   })

@@ -7,7 +7,8 @@
 #--------------------------------------------------------------
 resource "aws_cloudwatch_log_group" "rds_postgres" {
   name              = "/aws/rds/instance/${local.identifier}/postgresql"
-  retention_in_days = var.environment == "prod" ? 90 : 14
+  retention_in_days = var.environment == "prod" ? 90 : 30
+  kms_key_id        = aws_kms_key.rds.arn
 
   tags = merge(var.common_tags, {
     Name      = "${local.identifier}-pg-logs"
