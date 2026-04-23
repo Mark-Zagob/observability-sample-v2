@@ -41,7 +41,9 @@ import rego.v1
 has_exception(rc, policy_name) if {
     tags := object.get(rc.change.after, "tags_all", {})
     exception := object.get(tags, "PolicyException", "")
-    startswith(exception, concat(":", [policy_name, ""]))
+    prefix := concat(":", [policy_name, ""])
+    startswith(exception, prefix)
+    count(exception) > count(prefix)    # phải có ticket ID sau ":"
 }
 
 # Danh sách tags bắt buộc
@@ -64,9 +66,8 @@ deny contains msg if {
     rc.mode == "managed"
     rc.type in taggable_types
 
-    # Chỉ check khi resource đang được tạo hoặc update
-    some action in rc.change.actions
-    action != "delete"
+    # Chỉ check khi resource đang được tạo hoặc update (không check delete)
+    not "delete" in rc.change.actions
 
     # tags_all = resource tags + provider default_tags (null-safe)
     tags := object.get(rc.change.after, "tags_all", {})

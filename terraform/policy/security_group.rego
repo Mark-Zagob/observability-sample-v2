@@ -99,3 +99,48 @@ port_in_range(port, from_port, to_port) if {
     port >= from_port
     port <= to_port
 }
+
+# ----- DENY: Inline ingress 0.0.0.0/0 trong aws_security_group -----
+# Bắt cả trường hợp SG dùng inline ingress {} block thay vì aws_security_group_rule
+
+deny contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_security_group"
+    rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
+
+    some rule in rc.change.after.ingress
+    some cidr in object.get(rule, "cidr_blocks", [])
+    cidr == "0.0.0.0/0"
+
+    from_port := object.get(rule, "from_port", 0)
+    to_port := object.get(rule, "to_port", 0)
+    not is_standard_web_port(from_port, to_port)
+
+    msg := sprintf(
+        "🔴 [NETWORK] SG '%s' có inline ingress 0.0.0.0/0 trên port %d-%d. Dùng separate aws_security_group_rule thay thế.",
+        [rc.address, from_port, to_port]
+    )
+}
+
+# ----- DENY: Inline SSH (port 22) từ 0.0.0.0/0 -----
+
+deny contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_security_group"
+    rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
+
+    some rule in rc.change.after.ingress
+    some cidr in object.get(rule, "cidr_blocks", [])
+    cidr == "0.0.0.0/0"
+
+    from_port := object.get(rule, "from_port", 0)
+    to_port := object.get(rule, "to_port", 0)
+    port_in_range(22, from_port, to_port)
+
+    msg := sprintf(
+        "🔴 [CRITICAL] SG '%s' có inline rule mở SSH (port 22) từ 0.0.0.0/0.",
+        [rc.address]
+    )
+}

@@ -14,6 +14,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_kms_key"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     rc.change.after.enable_key_rotation != true
     msg := sprintf(
         "🔴 [SECURITY][CIS-AWS-3.8] KMS key '%s' phải bật enable_key_rotation",

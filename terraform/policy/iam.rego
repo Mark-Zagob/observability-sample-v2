@@ -63,8 +63,8 @@ deny contains msg if {
 
 # ----- DENY: IAM role trust policy không được allow external accounts không nằm trong allow-list -----
 
-# Thêm trusted account IDs vào đây
-trusted_account_ids := set()
+# Thêm trusted account IDs vào đây (account của bạn + partners)
+trusted_account_ids := {"730335245469"}
 
 deny contains msg if {
     some rc in input.resource_changes

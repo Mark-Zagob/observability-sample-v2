@@ -14,6 +14,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_s3_bucket_public_access_block"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
 
     checks := {
         "block_public_acls":       rc.change.after.block_public_acls,
@@ -36,6 +37,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_s3_bucket_server_side_encryption_configuration"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     not rc.change.after.rule
     msg := sprintf(
         "🔴 [CRITICAL][CIS-AWS-2.1.1] S3 '%s' phải có server-side encryption configuration",

@@ -22,6 +22,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_db_instance"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     rc.change.after.storage_encrypted != true
     msg := sprintf(
         "🔴 [CRITICAL][CIS-AWS-2.3.1] RDS '%s' phải bật storage encryption (storage_encrypted = true)",
@@ -34,6 +35,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_db_instance"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     rc.change.after.publicly_accessible == true
     msg := sprintf(
         "🔴 [CRITICAL][CIS-AWS-2.3.2] RDS '%s' KHÔNG được publicly accessible",
@@ -46,6 +48,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_db_instance"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     rc.change.after.iam_database_authentication_enabled != true
     msg := sprintf(
         "🔴 [SECURITY][SOC2-CC6.1] RDS '%s' phải bật IAM database authentication",
@@ -58,6 +61,7 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_db_instance"
     rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
     not rc.change.after.replicate_source_db
     retention := rc.change.after.backup_retention_period
     retention < 7
