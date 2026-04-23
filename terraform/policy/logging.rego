@@ -21,6 +21,9 @@ deny contains msg if {
     kms_key := object.get(rc.change.after, "kms_key_id", null)
     kms_key == null
 
+    after_unknown := object.get(rc.change, "after_unknown", {})
+    not object.get(after_unknown, "kms_key_id", false)
+
     msg := sprintf(
         "🔴 [SECURITY] CloudWatch Log Group '%s' phải có kms_key_id để encrypt logs at rest.",
         [rc.address]

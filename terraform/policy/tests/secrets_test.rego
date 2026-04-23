@@ -77,3 +77,39 @@ test_no_warn_secret_good_recovery if {
     }
     count(secrets.warn) == 0 with input as make_input(rc)
 }
+
+# === after_unknown: kms_key_id chưa biết lúc plan (known after apply) ===
+
+test_allow_secret_kms_known_after_apply if {
+    rc := {
+        "address": "module.database.aws_secretsmanager_secret.db_master_password",
+        "type": "aws_secretsmanager_secret",
+        "mode": "managed",
+        "change": {
+            "actions": ["create"],
+            "after": {
+                "name": "myproject/prod/database/master-password",
+            },
+            "after_unknown": {
+                "kms_key_id": true,
+            },
+        },
+    }
+    count(secrets.deny) == 0 with input as make_input(rc)
+}
+
+test_deny_secret_truly_no_kms if {
+    rc := {
+        "address": "module.database.aws_secretsmanager_secret.no_cmk",
+        "type": "aws_secretsmanager_secret",
+        "mode": "managed",
+        "change": {
+            "actions": ["create"],
+            "after": {
+                "name": "test-no-cmk",
+            },
+            "after_unknown": {},
+        },
+    }
+    count(secrets.deny) > 0 with input as make_input(rc)
+}

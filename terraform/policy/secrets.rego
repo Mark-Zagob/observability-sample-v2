@@ -21,6 +21,9 @@ deny contains msg if {
     kms_key := object.get(rc.change.after, "kms_key_id", null)
     kms_key == null
 
+    after_unknown := object.get(rc.change, "after_unknown", {})
+    not object.get(after_unknown, "kms_key_id", false)
+
     msg := sprintf(
         "🔴 [SECURITY] Secret '%s' phải dùng CMK (kms_key_id) thay vì default AWS managed key.",
         [rc.address]

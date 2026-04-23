@@ -95,3 +95,41 @@ test_no_warn_log_group_good_retention if {
     }
     count(logging.warn) == 0 with input as make_input(rc)
 }
+
+# === after_unknown: kms_key_id chưa biết lúc plan (known after apply) ===
+
+test_allow_log_group_kms_known_after_apply if {
+    rc := {
+        "address": "module.database.aws_cloudwatch_log_group.rds_postgres",
+        "type": "aws_cloudwatch_log_group",
+        "mode": "managed",
+        "change": {
+            "actions": ["create"],
+            "after": {
+                "name": "/aws/rds/instance/test/postgresql",
+                "retention_in_days": 90,
+            },
+            "after_unknown": {
+                "kms_key_id": true,
+            },
+        },
+    }
+    count(logging.deny) == 0 with input as make_input(rc)
+}
+
+test_deny_log_group_truly_no_kms if {
+    rc := {
+        "address": "module.database.aws_cloudwatch_log_group.no_kms",
+        "type": "aws_cloudwatch_log_group",
+        "mode": "managed",
+        "change": {
+            "actions": ["create"],
+            "after": {
+                "name": "/ecs/no-kms",
+                "retention_in_days": 90,
+            },
+            "after_unknown": {},
+        },
+    }
+    count(logging.deny) > 0 with input as make_input(rc)
+}
