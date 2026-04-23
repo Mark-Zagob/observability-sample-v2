@@ -11,10 +11,10 @@
 name: Terraform — Policy Check
 
 on:
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'observability-sample-v2/terraform/**'
+  # pull_request:
+  #   branches: [main, develop]
+  #   paths:
+  #     - 'observability-sample-v2/terraform/**'
 
   workflow_dispatch:
     inputs:
