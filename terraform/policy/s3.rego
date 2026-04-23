@@ -8,7 +8,7 @@ package terraform.s3
 
 import rego.v1
 
-# ----- DENY: S3 phải block public access -----
+# ----- DENY: S3 phải block public access [CIS-AWS-2.1.5] [SOC2-CC6.6] -----
 
 deny contains msg if {
     some rc in input.resource_changes
@@ -26,19 +26,19 @@ deny contains msg if {
     value != true
 
     msg := sprintf(
-        "🔴 [CRITICAL] S3 '%s' phải set %s = true",
+        "🔴 [CRITICAL][CIS-AWS-2.1.5] S3 '%s' phải set %s = true",
         [rc.address, field_name]
     )
 }
 
-# Rule 2: S3 bucket phải có encryption
+# Rule 2: S3 bucket phải có encryption [CIS-AWS-2.1.1] [SOC2-CC6.1]
 deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_s3_bucket_server_side_encryption_configuration"
     rc.mode == "managed"
     not rc.change.after.rule
     msg := sprintf(
-        "🔴 [CRITICAL] S3 '%s' phải có server-side encryption configuration",
+        "🔴 [CRITICAL][CIS-AWS-2.1.1] S3 '%s' phải có server-side encryption configuration",
         [rc.address]
     )
 }

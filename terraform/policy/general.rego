@@ -27,6 +27,23 @@ package terraform.general
 
 import rego.v1
 
+# =============================================================
+# POLICY EXCEPTION MECHANISM
+# =============================================================
+# Để skip policy check cho 1 resource cụ thể, thêm tag:
+#   PolicyException = "<policy_name>:<ticket_id>"
+# Ví dụ: PolicyException = "cost_guard:OPS-1234"
+#
+# Resource có tag này sẽ được skip khỏi cost guard rule.
+# Mỗi exception PHẢI có ticket ID để audit trail.
+# =============================================================
+
+has_exception(rc, policy_name) if {
+    tags := object.get(rc.change.after, "tags_all", {})
+    exception := object.get(tags, "PolicyException", "")
+    startswith(exception, concat(":", [policy_name, ""]))
+}
+
 # Danh sách tags bắt buộc
 required_tags := ["Project", "Environment", "ManagedBy"]
 
@@ -51,10 +68,8 @@ deny contains msg if {
     some action in rc.change.actions
     action != "delete"
 
-    # Dùng tags_all (bao gồm cả default_tags từ provider)
-    # tags = chỉ resource-level tags
-    # tags_all = tags + default_tags ← dùng cái này
-    tags := rc.change.after.tags_all
+    # tags_all = resource tags + provider default_tags (null-safe)
+    tags := object.get(rc.change.after, "tags_all", {})
     some tag in required_tags
     not tags[tag]
 
@@ -76,10 +91,11 @@ deny contains msg if {
     some rc in input.resource_changes
     rc.type == "aws_db_instance"
     rc.mode == "managed"
+    not has_exception(rc, "cost_guard")
     instance_class := rc.change.after.instance_class
     instance_class in expensive_rds_classes
     msg := sprintf(
-        "🔴 [COST] RDS '%s' dùng instance class '%s' quá đắt. Cần approval.",
+        "🔴 [COST] RDS '%s' dùng instance class '%s' quá đắt. Cần approval. (skip: tag PolicyException=cost_guard:<ticket>)",
         [rc.address, instance_class]
     )
 }

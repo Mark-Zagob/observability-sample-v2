@@ -1,0 +1,135 @@
+# ============================================================
+# Terraform OPA Policy Check
+# ============================================================
+# Validates Terraform plans against Rego security policies.
+#
+# Trigger:
+#   - PR touching terraform/ files
+#   - Manual dispatch
+# ============================================================
+
+name: Terraform — Policy Check
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'observability-sample-v2/terraform/**'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check (shared, dev)'
+        required: true
+        type: choice
+        options:
+          - shared
+          - dev
+      fail_on_warn:
+        description: 'Fail on warnings (production mode)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CONFTEST_VERSION: "0.50.0"
+  POLICY_DIR: "observability-sample-v2/terraform/policy"
+
+jobs:
+  # ============================================================
+  # JOB 1: OPA Policy Unit Tests
+  # ============================================================
+  policy-unit-tests:
+    name: Policy Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install OPA
+        run: |
+          curl -sL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/
+
+      - name: Run Rego unit tests
+        run: |
+          echo "## 🧪 Policy Unit Tests" >> $GITHUB_STEP_SUMMARY
+          opa test ${{ env.POLICY_DIR }}/ ${{ env.POLICY_DIR }}/tests/ -v 2>&1 | tee test-output.txt
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat test-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 2: Conftest Plan Validation
+  # ============================================================
+  policy-check:
+    name: Policy Check (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: policy-unit-tests
+
+    strategy:
+      matrix:
+        environment: [shared]
+      fail-fast: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          curl -sL "https://github.com/open-policy-agent/conftest/releases/download/v${{ env.CONFTEST_VERSION }}/conftest_${{ env.CONFTEST_VERSION }}_Linux_x86_64.tar.gz" \
+            | tar xz -C /usr/local/bin conftest
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init & Plan
+        working-directory: observability-sample-v2/terraform/environments/${{ matrix.environment }}
+        run: |
+          terraform init -backend=false
+          terraform plan -out=tfplan.binary -input=false || true
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Run Conftest (table output)
+        working-directory: observability-sample-v2/terraform/environments/${{ matrix.environment }}
+        run: |
+          echo "## 🔍 Policy Check — ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+
+          CONFTEST_ARGS="--policy ../../policy/ --all-namespaces"
+          if [ "${{ inputs.fail_on_warn }}" = "true" ]; then
+            CONFTEST_ARGS="$CONFTEST_ARGS --fail-on-warn"
+          fi
+
+          conftest test tfplan.json $CONFTEST_ARGS --output table 2>&1 | tee conftest-table.txt || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat conftest-table.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Conftest (JSON for artifacts)
+        working-directory: observability-sample-v2/terraform/environments/${{ matrix.environment }}
+        run: |
+          conftest test tfplan.json --policy ../../policy/ --all-namespaces --output json > conftest-results.json || true
+
+      - name: Upload policy results
+        uses: actions/upload-artifact@v4
+        with:
+          name: policy-results-${{ matrix.environment }}
+          path: observability-sample-v2/terraform/environments/${{ matrix.environment }}/conftest-results.json
+
+      - name: Enforce deny rules (blocking)
+        working-directory: observability-sample-v2/terraform/environments/${{ matrix.environment }}
+        run: |
+          CONFTEST_ARGS="--policy ../../policy/ --all-namespaces"
+          if [ "${{ inputs.fail_on_warn }}" = "true" ]; then
+            CONFTEST_ARGS="$CONFTEST_ARGS --fail-on-warn"
+          fi
+          conftest test tfplan.json $CONFTEST_ARGS

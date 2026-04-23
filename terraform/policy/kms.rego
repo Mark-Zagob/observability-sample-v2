@@ -8,7 +8,7 @@ package terraform.kms
 
 import rego.v1
 
-# ----- DENY: KMS key phải có auto-rotation -----
+# ----- DENY: KMS key phải có auto-rotation [CIS-AWS-3.8] [SOC2-CC6.1] -----
 
 deny contains msg if {
     some rc in input.resource_changes
@@ -16,7 +16,7 @@ deny contains msg if {
     rc.mode == "managed"
     rc.change.after.enable_key_rotation != true
     msg := sprintf(
-        "🔴 [SECURITY] KMS key '%s' phải bật enable_key_rotation",
+        "🔴 [SECURITY][CIS-AWS-3.8] KMS key '%s' phải bật enable_key_rotation",
         [rc.address]
     )
 }
