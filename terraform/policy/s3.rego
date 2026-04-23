@@ -1,0 +1,58 @@
+# =============================================================
+# S3 Security Policies
+# =============================================================
+# Kiểm tra: public access block, encryption, versioning
+# =============================================================
+
+package terraform.s3
+
+import rego.v1
+
+# ----- DENY: S3 phải block public access -----
+
+deny contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_s3_bucket_public_access_block"
+    rc.mode == "managed"
+
+    checks := {
+        "block_public_acls":       rc.change.after.block_public_acls,
+        "block_public_policy":     rc.change.after.block_public_policy,
+        "ignore_public_acls":      rc.change.after.ignore_public_acls,
+        "restrict_public_buckets": rc.change.after.restrict_public_buckets,
+    }
+
+    some field_name, value in checks
+    value != true
+
+    msg := sprintf(
+        "🔴 [CRITICAL] S3 '%s' phải set %s = true",
+        [rc.address, field_name]
+    )
+}
+
+# Rule 2: S3 bucket phải có encryption
+deny contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_s3_bucket_server_side_encryption_configuration"
+    rc.mode == "managed"
+    not rc.change.after.rule
+    msg := sprintf(
+        "🔴 [CRITICAL] S3 '%s' phải có server-side encryption configuration",
+        [rc.address]
+    )
+}
+
+# ----- WARN: S3 nên có versioning -----
+
+warn contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_s3_bucket_versioning"
+    rc.mode == "managed"
+    some vc in rc.change.after.versioning_configuration
+    vc.status != "Enabled"
+    msg := sprintf(
+        "🟡 [WARNING] S3 '%s' nên bật versioning để rollback data",
+        [rc.address]
+    )
+}
