@@ -133,34 +133,31 @@ resource "aws_cloudwatch_metric_alarm" "connections_high" {
 }
 
 #--------------------------------------------------------------
-# Alarm: Secret Rotation Age
-# Production pattern (Option B): Alert when password hasn't
-# been rotated in 90 days. Manual rotation reminder.
-# Phase 2: Replace with auto-rotation Lambda.
+# Alarm: Secret Rotation Failure
+# AWS auto-rotates the RDS managed secret every 7 days.
+# This alarm fires if rotation FAILS (e.g., network issue,
+# KMS key unavailable, insufficient IAM permissions).
 #--------------------------------------------------------------
-resource "aws_cloudwatch_metric_alarm" "secret_age" {
+resource "aws_cloudwatch_metric_alarm" "secret_rotation_failure" {
   count = var.enable_cloudwatch_alarms ? 1 : 0
 
-  alarm_name          = "${local.identifier}-secret-rotation-due"
-  alarm_description   = "DB master password has not been rotated in ${var.secret_rotation_days} days"
+  alarm_name          = "${local.identifier}-secret-rotation-failed"
+  alarm_description   = "RDS managed secret rotation has failed. Check CloudTrail for RotationFailed events."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
-  metric_name         = "DaysSinceLastChange"
+  metric_name         = "RotationFailed"
   namespace           = "AWS/SecretsManager"
   period              = 86400 # 24 hours
-  statistic           = "Maximum"
-  threshold           = var.secret_rotation_days
-
-  dimensions = {
-    SecretName = aws_secretsmanager_secret.db_master_password.name
-  }
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
 
   alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
 
   tags = merge(var.common_tags, {
-    Name      = "${local.identifier}-secret-age-alarm"
+    Name      = "${local.identifier}-rotation-failure-alarm"
     Component = "database"
-    Purpose   = "rotation-reminder"
+    Purpose   = "rotation-monitoring"
   })
 }
 

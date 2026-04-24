@@ -101,7 +101,13 @@ resource "aws_db_instance" "postgres" {
   # Database
   db_name  = var.db_name
   username = var.db_username
-  password = random_password.db_master.result
+
+  # Password: AWS manages creation + auto-rotation every 7 days
+  # → Creates secret in Secrets Manager automatically
+  # → No random_password resource needed
+  # → No Lambda needed (unlike Level 2 rotation)
+  manage_master_user_password   = true
+  master_user_secret_kms_key_id = aws_kms_key.rds.arn
 
   # Networking
   db_subnet_group_name   = aws_db_subnet_group.main.name
@@ -140,7 +146,7 @@ resource "aws_db_instance" "postgres" {
 
   # Lifecycle
   lifecycle {
-    ignore_changes = [password]
+    ignore_changes = []
   }
 
   tags = merge(var.common_tags, {

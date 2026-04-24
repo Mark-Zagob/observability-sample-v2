@@ -68,9 +68,9 @@ resource "aws_ssm_parameter" "db_username" {
 
 resource "aws_ssm_parameter" "db_secret_arn" {
   name        = "/${var.project_name}/${var.environment}/database/secret-arn"
-  description = "ARN of Secrets Manager secret containing DB credentials"
+  description = "ARN of RDS-managed Secrets Manager secret (auto-rotated)"
   type        = "String"
-  value       = aws_secretsmanager_secret.db_master_password.arn
+  value       = aws_db_instance.postgres.master_user_secret[0].secret_arn
 
   tags = merge(var.common_tags, {
     Name      = "${var.project_name}-db-secret-arn"

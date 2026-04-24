@@ -46,13 +46,13 @@ output "rds_arn" {
 #--------------------------------------------------------------
 
 output "db_secret_arn" {
-  description = "ARN of the Secrets Manager secret containing DB credentials"
-  value       = aws_secretsmanager_secret.db_master_password.arn
+  description = "ARN of the RDS-managed Secrets Manager secret (auto-rotated every 7 days)"
+  value       = aws_db_instance.postgres.master_user_secret[0].secret_arn
 }
 
-output "db_secret_name" {
-  description = "Name of the Secrets Manager secret"
-  value       = aws_secretsmanager_secret.db_master_password.name
+output "db_secret_status" {
+  description = "Status of the RDS-managed secret (Active = healthy)"
+  value       = aws_db_instance.postgres.master_user_secret[0].secret_status
 }
 
 #--------------------------------------------------------------

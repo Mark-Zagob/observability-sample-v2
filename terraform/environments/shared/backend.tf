@@ -23,20 +23,20 @@ terraform {
     #----------------------------------------------------------
     # State Storage
     #----------------------------------------------------------
-    bucket = "obs-terraform-state-730335245469"   # ← Replace with bootstrap output
-    key    = "shared/terraform.tfstate"          # ← Unique per environment
+    bucket = "obs-terraform-state-730335245469" # ← Replace with bootstrap output
+    key    = "shared/terraform.tfstate"         # ← Unique per environment
     region = "ap-southeast-2"
 
     #----------------------------------------------------------
     # State Locking (prevent concurrent apply)
     #----------------------------------------------------------
-    dynamodb_table = "terraform-state-locks"     # ← From bootstrap output
+    dynamodb_table = "terraform-state-locks" # ← From bootstrap output
 
     #----------------------------------------------------------
     # Encryption at-rest (KMS CMK)
     #----------------------------------------------------------
     encrypt    = true
-    kms_key_id = "arn:aws:kms:ap-southeast-2:730335245469:alias/obs-terraform-state"  # ← From bootstrap
+    kms_key_id = "arn:aws:kms:ap-southeast-2:730335245469:alias/obs-terraform-state" # ← From bootstrap
 
     #----------------------------------------------------------
     # Extra Security (optional but recommended)

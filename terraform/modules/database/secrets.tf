@@ -1,56 +1,30 @@
 #--------------------------------------------------------------
 # Database Module — Secrets Management
 #--------------------------------------------------------------
-# Pattern: random_password → Secrets Manager
-# ECS tasks read secrets at runtime via Task Execution Role.
-# Password NEVER appears in terraform.tfvars or env vars.
+# Pattern: RDS Managed Secret (Level 3)
+#
+# AWS manages the master password lifecycle:
+#   1. Creates secret in Secrets Manager automatically
+#   2. Rotates password every 7 days
+#   3. Encrypts with CMK (master_user_secret_kms_key_id)
+#   4. No Lambda function needed
+#
+# App reads secret via:
+#   aws_db_instance.postgres.master_user_secret[0].secret_arn
+#
+# Previous approach (Level 1 — manual):
+#   random_password → aws_secretsmanager_secret → password arg
+#   → No rotation, manual management, password in state file
 #--------------------------------------------------------------
 
-#--------------------------------------------------------------
-# Generate a random password for the RDS master user
-#--------------------------------------------------------------
-resource "random_password" "db_master" {
-  length  = 24
-  special = true
-
-  # RDS disallows @, ", /, \. Also exclude {}[]|<> which break connection strings.
-  override_special = "!#$%&*()-_=+?,."
-
-  # Lifecycle: don't regenerate on every apply
-  lifecycle {
-    ignore_changes = [length, special, override_special]
-  }
-}
-
-#--------------------------------------------------------------
-# Store the password in AWS Secrets Manager
-#--------------------------------------------------------------
-resource "aws_secretsmanager_secret" "db_master_password" {
-  name        = "${var.project_name}/${var.environment}/database/master-password"
-  description = "RDS PostgreSQL master password for ${var.project_name} (${var.environment})"
-
-  # Encrypt with the same CMK used for RDS storage
-  kms_key_id = aws_kms_key.rds.arn
-
-  # Recovery window: prod=30d, non-prod=7d (minimum per security policy)
-  recovery_window_in_days = var.environment == "prod" ? 30 : 7
-
-  tags = merge(var.common_tags, {
-    Name      = "${var.project_name}-db-master-password"
-    Component = "database"
-  })
-}
-
-resource "aws_secretsmanager_secret_version" "db_master_password" {
-  secret_id = aws_secretsmanager_secret.db_master_password.id
-  secret_string = jsonencode({
-    username = var.db_username
-    password = random_password.db_master.result
-    engine   = "postgres"
-    host     = aws_db_instance.postgres.address
-    port     = aws_db_instance.postgres.port
-    dbname   = var.db_name
-    # Full connection string for convenience
-    url = "postgresql://${var.db_username}:${urlencode(random_password.db_master.result)}@${aws_db_instance.postgres.address}:${aws_db_instance.postgres.port}/${var.db_name}"
-  })
-}
+# Note: random_password and aws_secretsmanager_secret resources
+# have been REMOVED. AWS RDS now manages the secret lifecycle
+# via manage_master_user_password = true in rds.tf.
+#
+# The secret ARN is available at:
+#   aws_db_instance.postgres.master_user_secret[0].secret_arn
+#
+# To retrieve the secret value in app code:
+#   aws secretsmanager get-secret-value \
+#     --secret-id <secret_arn> \
+#     --query SecretString --output text
