@@ -62,6 +62,13 @@ resource "aws_db_parameter_group" "postgres" {
     value = "1"
   }
 
+  # Security: force SSL/TLS for all connections (encryption in transit)
+  # CKV2_AWS_69 — PostgreSQL parameter to reject non-SSL connections
+  parameter {
+    name  = "rds.force_ssl"
+    value = "1"
+  }
+
   # Performance: shared_buffers (25% of RAM is typical)
   # For db.t3.micro (1GB RAM) → 256MB is fine
   parameter {
@@ -207,6 +214,10 @@ resource "aws_db_instance" "read_replica" {
   # Replica-specific: no backup (primary handles backups)
   backup_retention_period = 0
   skip_final_snapshot     = true
+  copy_tags_to_snapshot   = true
+
+  # Security — same as primary
+  iam_database_authentication_enabled = true
 
   # Parameter group — same tuning as primary
   parameter_group_name = aws_db_parameter_group.postgres.name
