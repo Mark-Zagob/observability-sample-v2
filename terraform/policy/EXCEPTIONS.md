@@ -22,8 +22,8 @@
 | RDS | 2 | 3 | 0 | 5 |
 | SSM | 6 | 0 | 0 | 6 |
 | Log Retention | 0 | 1 | 0 | 1 |
-| Network/SG | 0 | 0 | 3 | 3 |
-| **Total** | **8** | **4** | **3** | **15** |
+| Network/SG | 1 | 1 | 3 | 5 |
+| **Total** | **9** | **5** | **3** | **17** |
 
 ---
 
@@ -36,7 +36,7 @@
 | Rule | Ensure RDS instance with copy tags to snapshots is enabled |
 | Resource | `aws_db_instance.read_replica` |
 | File | `rds.tf:172-221` |
-| Decision | **FIX** |
+| Decision | **FIX** ✅ |
 | Action | Thêm `copy_tags_to_snapshot = true` vào read replica |
 
 ### PE-002: CKV2_AWS_69 — RDS encryption in transit
@@ -46,8 +46,8 @@
 | Rule | Ensure AWS RDS instance configured with encryption in transit |
 | Resource | `aws_db_instance.postgres`, `aws_db_instance.read_replica` |
 | File | `rds.tf` |
-| Decision | **FIX** |
-| Action | Thêm `ca_cert_identifier` + enforce SSL trong parameter group (`rds.force_ssl = 1`) |
+| Decision | **FIX** ✅ |
+| Action | Enforce SSL trong parameter group (`rds.force_ssl = 1`) |
 
 ### PE-003: CKV2_AWS_34 — SSM Parameters encrypted
 
@@ -55,9 +55,18 @@
 |-------|-------|
 | Rule | Ensure AWS SSM Parameter is Encrypted |
 | Resource | 6 SSM parameters trong `parameters.tf` |
-| Decision | **FIX** |
+| Decision | **FIX** ✅ |
 | Action | Đổi `type = "String"` → `type = "SecureString"` + `key_id = aws_kms_key.rds.arn` |
-| Note | Chỉ `db_secret_arn` chứa sensitive data, nhưng encrypt tất cả cho consistency |
+
+### PE-031: CKV2_AWS_12 — VPC Default Security Group
+
+| Field | Value |
+|-------|-------|
+| Rule | Ensure the default security group of every VPC restricts all traffic |
+| Resource | `aws_vpc.this` |
+| File | `network/vpc.tf` |
+| Decision | **FIX** ✅ |
+| Action | Thêm `aws_default_security_group` lockdown (deny all ingress/egress) |
 
 ---
 
@@ -68,7 +77,7 @@
 | Field | Value |
 |-------|-------|
 | Rule | Ensure CloudWatch log groups retain logs for at least 1 year |
-| Resource | `aws_cloudwatch_log_group.rds_postgres` |
+| Resource | `aws_cloudwatch_log_group.rds_postgres`, `aws_cloudwatch_log_group.flow_logs` |
 | Decision | **SKIP** |
 | Owner | @mark |
 | Date | 2026-04-24 |
@@ -136,11 +145,31 @@
 **Justification:**
 - Deletion protection gây khó khăn khi `terraform destroy` lab environment
 - Đã có OPA `rds.rego` environment-aware: prod → DENY, dev → WARN
-- Checkov không phân biệt environment
 
 **Compensating Control:**
 - OPA policy enforce deletion_protection cho production
 - Variable `deletion_protection` sẵn sàng bật khi cần
+
+### PE-030: CKV_AWS_130 — Public Subnet auto-assign public IP
+
+| Field | Value |
+|-------|-------|
+| Rule | Ensure VPC subnets do not assign public IP by default |
+| Resource | `aws_subnet.public` |
+| File | `network/subnets.tf` |
+| Decision | **SKIP** |
+| Owner | @mark |
+| Date | 2026-04-24 |
+| Review | 2026-10-24 |
+
+**Justification:**
+- Public subnet **cần** public IP cho NAT Gateway và ALB
+- Private/data subnets đã có `map_public_ip_on_launch = false`
+- **False positive** — Checkov không phân biệt subnet tier
+
+**Compensating Control:**
+- 3-tier subnet architecture: public / private / data
+- Services (ECS, RDS) deploy vào private/data subnet, KHÔNG vào public
 
 ---
 
@@ -177,24 +206,25 @@ không phải production infrastructure code.
 
 ## Checkov Config
 
-File `.checkov.yml` tại `terraform/modules/database/`:
+### Database Module — `terraform/modules/database/.checkov.yml`
 
 ```yaml
-# .checkov.yml
-compact: true
-quiet: true
-framework: terraform
 skip-check:
-  # Test fixtures — not production code
   - CKV_AWS_382    # PE-020: SG egress in test setup
   - CKV2_AWS_5     # PE-021: SG attachment in test setup
   - CKV2_AWS_12    # PE-022: VPC default SG in test
   - CKV2_AWS_11    # PE-022: VPC flow logs in test
-  # Environment-aware — handled by OPA policies
   - CKV_AWS_157    # PE-012: Multi-AZ (OPA env-aware)
   - CKV_AWS_293    # PE-013: Deletion Protection (OPA env-aware)
-  # False positive
-  - CKV_AWS_118    # PE-011: Enhanced Monitoring (var not evaluated)
-  # Retention — managed by OPA
+  - CKV_AWS_118    # PE-011: Enhanced Monitoring (false positive)
   - CKV_AWS_338    # PE-010: Log retention (OPA enforce 30d min)
 ```
+
+### Network Module — `terraform/modules/network/.checkov.yml`
+
+```yaml
+skip-check:
+  - CKV_AWS_130    # PE-030: Public subnets need public IPs
+  - CKV_AWS_338    # PE-010: Log retention (OPA enforce 30d min)
+```
+

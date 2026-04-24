@@ -1,6 +1,7 @@
 #--------------------------------------------------------------
 # Public Subnets — /24 (ALB, NAT Gateway)
 #--------------------------------------------------------------
+#checkov:skip=CKV_AWS_130:Public subnets require public IPs for NAT Gateway and ALB. Private/data subnets have map_public_ip_on_launch=false.
 resource "aws_subnet" "public" {
   for_each = local.az_map
 
