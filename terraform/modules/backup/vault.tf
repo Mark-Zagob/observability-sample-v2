@@ -96,3 +96,50 @@ resource "aws_backup_vault" "dr" {
     Purpose   = "disaster-recovery"
   })
 }
+
+#--------------------------------------------------------------
+# DR Vault Lock — same protection as primary
+#--------------------------------------------------------------
+resource "aws_backup_vault_lock_configuration" "dr" {
+  count    = var.enable_cross_region_copy ? 1 : 0
+  provider = aws.dr
+
+  backup_vault_name = aws_backup_vault.dr[0].name
+
+  min_retention_days  = var.vault_lock_min_retention_days
+  max_retention_days  = var.vault_lock_max_retention_days
+  changeable_for_days = var.vault_lock_mode == "compliance" ? var.vault_lock_changeable_days : null
+}
+
+#--------------------------------------------------------------
+# DR Vault Access Policy — deny delete (same as primary)
+#--------------------------------------------------------------
+resource "aws_backup_vault_policy" "dr" {
+  count    = var.enable_cross_region_copy ? 1 : 0
+  provider = aws.dr
+
+  backup_vault_name = aws_backup_vault.dr[0].name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DenyDeleteRecoveryPoints"
+        Effect = "Deny"
+        Principal = {
+          AWS = "*"
+        }
+        Action = [
+          "backup:DeleteRecoveryPoint",
+          "backup:UpdateRecoveryPointLifecycle"
+        ]
+        Resource = "*"
+        Condition = {
+          StringNotEquals = {
+            "aws:PrincipalArn" = aws_iam_role.backup.arn
+          }
+        }
+      }
+    ]
+  })
+}

@@ -82,9 +82,31 @@ variable "daily_retention_days" {
 }
 
 variable "daily_cold_storage_after_days" {
-  description = "Move daily backups to cold storage after N days (0 = disabled)"
+  description = "Move daily backups to cold storage after N days (0 = disabled). If enabled, daily_retention_days must be >= cold_storage_after + 90 (AWS minimum cold storage period)"
   type        = number
   default     = 0
+}
+
+variable "daily_start_window" {
+  description = "Minutes after scheduled time that a backup job must start before being canceled (60-480)"
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.daily_start_window >= 60 && var.daily_start_window <= 480
+    error_message = "daily_start_window must be between 60 and 480 minutes."
+  }
+}
+
+variable "daily_completion_window" {
+  description = "Minutes after backup job starts that it must complete (120-10080). For large databases (100GB+), increase to 720+ minutes"
+  type        = number
+  default     = 180
+
+  validation {
+    condition     = var.daily_completion_window >= 120
+    error_message = "daily_completion_window must be >= 120 minutes."
+  }
 }
 
 #--------------------------------------------------------------
@@ -110,9 +132,31 @@ variable "monthly_retention_days" {
 }
 
 variable "monthly_cold_storage_after_days" {
-  description = "Move monthly backups to cold storage after N days (0 = disabled)"
+  description = "Move monthly backups to cold storage after N days (0 = disabled). If enabled, monthly_retention_days must be >= cold_storage_after + 90 (AWS minimum cold storage period)"
   type        = number
   default     = 30
+}
+
+variable "monthly_start_window" {
+  description = "Minutes after scheduled time that a monthly backup must start (60-480)"
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.monthly_start_window >= 60 && var.monthly_start_window <= 480
+    error_message = "monthly_start_window must be between 60 and 480 minutes."
+  }
+}
+
+variable "monthly_completion_window" {
+  description = "Minutes after monthly backup starts that it must complete (120-10080). Monthly backups can be large; 480 (8h) is default"
+  type        = number
+  default     = 480
+
+  validation {
+    condition     = var.monthly_completion_window >= 120
+    error_message = "monthly_completion_window must be >= 120 minutes."
+  }
 }
 
 #--------------------------------------------------------------
@@ -161,6 +205,27 @@ variable "enable_cloudwatch_alarms" {
   description = "Create CloudWatch alarms for backup job failures"
   type        = bool
   default     = true
+}
+
+#--------------------------------------------------------------
+# Compliance Reporting
+#--------------------------------------------------------------
+
+variable "enable_backup_reports" {
+  description = "Enable daily backup compliance reports to S3 (recommended for SOC2/HIPAA)"
+  type        = bool
+  default     = true
+}
+
+variable "backup_reports_retention_days" {
+  description = "Days to retain backup reports in S3 before auto-expiry"
+  type        = number
+  default     = 365
+
+  validation {
+    condition     = var.backup_reports_retention_days >= 30
+    error_message = "backup_reports_retention_days must be >= 30 for compliance."
+  }
 }
 
 #--------------------------------------------------------------

@@ -21,13 +21,35 @@
 resource "aws_backup_plan" "main" {
   name = "${local.identifier}-plan"
 
+  # Validate retention fits within vault lock bounds
+  lifecycle {
+    precondition {
+      condition     = var.daily_retention_days <= var.vault_lock_max_retention_days
+      error_message = "daily_retention_days (${var.daily_retention_days}) must be <= vault_lock_max_retention_days (${var.vault_lock_max_retention_days})."
+    }
+    precondition {
+      condition     = !var.enable_monthly_plan || var.monthly_retention_days <= var.vault_lock_max_retention_days
+      error_message = "monthly_retention_days (${var.monthly_retention_days}) must be <= vault_lock_max_retention_days (${var.vault_lock_max_retention_days})."
+    }
+    # AWS enforces minimum 90 days in cold storage.
+    # If cold_storage_after is enabled, retention must be >= cold_storage_after + 90.
+    precondition {
+      condition     = var.daily_cold_storage_after_days == 0 || var.daily_retention_days >= (var.daily_cold_storage_after_days + 90)
+      error_message = "daily_retention_days (${var.daily_retention_days}) must be >= daily_cold_storage_after_days (${var.daily_cold_storage_after_days}) + 90 days (AWS cold storage minimum)."
+    }
+    precondition {
+      condition     = !var.enable_monthly_plan || var.monthly_cold_storage_after_days == 0 || var.monthly_retention_days >= (var.monthly_cold_storage_after_days + 90)
+      error_message = "monthly_retention_days (${var.monthly_retention_days}) must be >= monthly_cold_storage_after_days (${var.monthly_cold_storage_after_days}) + 90 days (AWS cold storage minimum)."
+    }
+  }
+
   # --- Rule 1: Daily Backup ---
   rule {
     rule_name         = "daily-backup"
     target_vault_name = aws_backup_vault.primary.name
     schedule          = var.daily_schedule
-    start_window      = 60  # Must start within 60 minutes
-    completion_window = 180 # Must complete within 3 hours
+    start_window      = var.daily_start_window
+    completion_window = var.daily_completion_window
 
     lifecycle {
       delete_after       = var.daily_retention_days
@@ -56,8 +78,8 @@ resource "aws_backup_plan" "main" {
       rule_name         = "monthly-backup"
       target_vault_name = aws_backup_vault.primary.name
       schedule          = var.monthly_schedule
-      start_window      = 60
-      completion_window = 480 # 8 hours (monthly can be larger)
+      start_window      = var.monthly_start_window
+      completion_window = var.monthly_completion_window
 
       lifecycle {
         delete_after       = var.monthly_retention_days

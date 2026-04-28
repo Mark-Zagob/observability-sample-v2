@@ -86,6 +86,39 @@ resource "aws_kms_key" "backup_dr" {
   deletion_window_in_days = 30
   enable_key_rotation     = true
 
+  # Must match primary key policy — AWS Backup needs encrypt/decrypt
+  # to write and read recovery points in the DR vault.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowRootAccountFullAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${local.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowBackupServiceEncryptDecrypt"
+        Effect = "Allow"
+        Principal = {
+          Service = "backup.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+
   tags = merge(var.common_tags, {
     Name      = "${local.identifier}-dr-kms"
     Component = "backup"

@@ -160,6 +160,9 @@ module "backup" {
   notification_email       = var.backup_notification_email
   enable_cloudwatch_alarms = var.backup_enable_cloudwatch_alarms
 
+  # Compliance reporting (SOC2/HIPAA)
+  enable_backup_reports = true
+
   common_tags = {
     Module = "backup"
   }

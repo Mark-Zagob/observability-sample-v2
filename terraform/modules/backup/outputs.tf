@@ -83,3 +83,17 @@ output "selection_tag" {
     value = var.selection_tag_value
   }
 }
+
+#--------------------------------------------------------------
+# Reporting
+#--------------------------------------------------------------
+
+output "report_plan_arn" {
+  description = "ARN of the backup compliance report plan (null if disabled)"
+  value       = var.enable_backup_reports ? aws_backup_report_plan.compliance[0].arn : null
+}
+
+output "report_bucket_name" {
+  description = "S3 bucket name for backup compliance reports (null if disabled)"
+  value       = var.enable_backup_reports ? aws_s3_bucket.backup_reports[0].id : null
+}

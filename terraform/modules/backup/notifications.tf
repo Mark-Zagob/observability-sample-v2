@@ -7,8 +7,8 @@
 #
 # AWS Backup emits vault events to SNS:
 #   BACKUP_JOB_COMPLETED, BACKUP_JOB_FAILED,
-#   COPY_JOB_COMPLETED, COPY_JOB_FAILED,
-#   RESTORE_JOB_COMPLETED, RESTORE_JOB_FAILED
+#   COPY_JOB_SUCCESSFUL, COPY_JOB_FAILED,
+#   RESTORE_JOB_FAILED
 #--------------------------------------------------------------
 
 ########################################################################

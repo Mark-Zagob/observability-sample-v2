@@ -23,7 +23,8 @@
 | SSM | 6 | 0 | 0 | 6 |
 | Log Retention | 0 | 1 | 0 | 1 |
 | Network/SG | 1 | 1 | 3 | 5 |
-| **Total** | **9** | **5** | **3** | **17** |
+| Backup/S3 | 0 | 7 | 0 | 7 |
+| **Total** | **9** | **12** | **3** | **24** |
 
 ---
 
@@ -171,6 +172,72 @@
 - 3-tier subnet architecture: public / private / data
 - Services (ECS, RDS) deploy vào private/data subnet, KHÔNG vào public
 
+### PE-040 → PE-044: CKV_AWS_145, CKV_AWS_21, CKV2_AWS_6, CKV2_AWS_61, CKV_AWS_18 — S3 Backup Reports (False Positives)
+
+| Field | Value |
+|-------|-------|
+| Rule | S3 bucket encryption, versioning, public access block, lifecycle, access logging |
+| Resource | `aws_s3_bucket.backup_reports` |
+| File | `backup/reporting.tf` |
+| Decision | **SKIP** |
+| Owner | @mark |
+| Date | 2026-04-28 |
+| Review | 2026-10-28 |
+
+**Justification:**
+- Tất cả 5 controls **ĐÃ implement** qua separate Terraform resources:
+  - `aws_s3_bucket_server_side_encryption_configuration.backup_reports` (KMS)
+  - `aws_s3_bucket_versioning.backup_reports` (Versioning)
+  - `aws_s3_bucket_public_access_block.backup_reports` (Public block)
+  - `aws_s3_bucket_lifecycle_configuration.backup_reports` (Lifecycle)
+  - `aws_s3_bucket_logging.backup_reports` (Access logging)
+- **False positive** — Checkov cannot correlate `aws_s3_bucket_*` resources with `count`
+
+**Compensating Control:**
+- OPA `backup.rego` Rule #6-7 enforce public access block + KMS encryption
+- Bucket policy enforces TLS + deny unencrypted uploads
+
+### PE-045: CKV_AWS_144 — S3 Cross-Region Replication
+
+| Field | Value |
+|-------|-------|
+| Rule | Ensure S3 bucket has cross-region replication enabled |
+| Resource | `aws_s3_bucket.backup_reports` |
+| File | `backup/reporting.tf` |
+| Decision | **SKIP** |
+| Owner | @mark |
+| Date | 2026-04-28 |
+| Review | 2026-10-28 |
+
+**Justification:**
+- Report bucket chứa CSV compliance reports — **có thể regenerate**
+- Actual backup data ĐÃ cross-region copy qua AWS Backup `copy_action`
+- CRR cho report bucket = chi phí không cần thiết
+
+**Compensating Control:**
+- AWS Backup cross-region copy bảo vệ actual backup data
+- Report plan tự generate daily — mất data cũ chỉ cần re-run
+
+### PE-046: CKV2_AWS_62 — S3 Event Notifications
+
+| Field | Value |
+|-------|-------|
+| Rule | Ensure S3 buckets should have event notifications enabled |
+| Resource | `aws_s3_bucket.backup_reports` |
+| File | `backup/reporting.tf` |
+| Decision | **SKIP** |
+| Owner | @mark |
+| Date | 2026-04-28 |
+| Review | 2026-10-28 |
+
+**Justification:**
+- Report bucket nhận CSV từ AWS Backup service — không cần event notifications
+- Backup job failures được monitor qua SNS + CloudWatch alarms (separate channel)
+
+**Compensating Control:**
+- `aws_backup_vault_notifications` → SNS events cho BACKUP_JOB_FAILED
+- `aws_cloudwatch_metric_alarm.backup_job_failed` → alarm cho backup failures
+
 ---
 
 ## SKIP (TEST ONLY) — Fail trong test fixtures
@@ -228,3 +295,15 @@ skip-check:
   - CKV_AWS_338    # PE-010: Log retention (OPA enforce 30d min)
 ```
 
+### Backup Module — `terraform/modules/backup/.checkov.yml`
+
+```yaml
+skip-check:
+  - CKV_AWS_145    # PE-040: KMS → separate resource
+  - CKV_AWS_21     # PE-041: Versioning → separate resource
+  - CKV2_AWS_6     # PE-042: Public access block → separate resource
+  - CKV2_AWS_61    # PE-043: Lifecycle → separate resource
+  - CKV_AWS_18     # PE-044: Access logging → separate resource
+  - CKV_AWS_144    # PE-045: CRR not needed (reports regenerable)
+  - CKV2_AWS_62    # PE-046: Event notifications not needed
+```
