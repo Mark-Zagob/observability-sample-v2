@@ -64,6 +64,8 @@ Deploy hệ thống observability lab lên AWS bằng Terraform theo **productio
 | Bastion | EC2 + SSM Session Manager |
 | Observability | Dual: Grafana stack (self-hosted) + CloudWatch |
 | Backup | AWS Backup (centralized, cross-service) |
+| DR Strategy | Tier 2 — Pilot Light (cross-region backup + RDS replica) |
+| DR Region | `ap-southeast-1` (Singapore) |
 
 ---
 
@@ -84,8 +86,9 @@ Deploy hệ thống observability lab lên AWS bằng Terraform theo **productio
 | 9 | `loadbalancer` | 🔲 TODO | ALB + ACM + Route53 |
 | 10 | `bastion` | 🔲 TODO | EC2 Jump Host + SSM |
 | 11 | `cicd` | 🔲 TODO | OIDC Provider + GitHub Actions IAM |
-| 12 | `backup` | 🔲 TODO | AWS Backup (centralized) |
+| 12 | `backup` | 🔲 TODO | AWS Backup + Cross-Region Copy (DR Tier 1) |
 | 13 | `budgets` | 🔲 TODO | AWS Budgets + Cost Anomaly Detection |
+| 14 | `dr` | 🔲 TODO | Pilot Light DR (RDS replica + infra ở DR region) |
 
 ---
 
@@ -274,23 +277,27 @@ Push ECR / Deploy ECS/EKS
 ### Module 12: `backup` 🔲
 
 > [!IMPORTANT]
-> Module này **không có trong plan cũ** nhưng bắt buộc cho production-grade. AWS Backup cung cấp centralized backup management cho nhiều services.
+> Bắt buộc cho production-grade. Centralized backup management + cross-region copy (DR Tier 1 foundation).
 
 | Resource | Config |
 |----------|--------|
-| Backup Vault | KMS encrypted, access policy |
-| Backup Plan | Daily backup, retention 7 days (lab) / 35 days (prod) |
-| Backup Selection | RDS instances, EFS file systems |
+| Backup Vault (primary) | KMS encrypted, access policy, vault lock (governance) |
+| Backup Vault (DR region) | Cross-region copy destination (`ap-southeast-1`) |
+| Backup Plan — Daily | Daily 3AM UTC, retention 35 days |
+| Backup Plan — Monthly | 1st of month, retention 365 days, cold storage after 30d |
+| Backup Selection | Tag-based: `Backup = true` (auto-discover new resources) |
+| Cross-Region Copy | Daily backup → DR region vault |
 | IAM Role | AWS Backup service role |
-| Vault Lock (prod) | Prevent deletion of backups (compliance) |
-| SNS Notification | Alert on backup failures |
+| Vault Lock | Governance mode (admin can override for lab) |
+| SNS Topic + Subscription | Alert on backup/copy failures |
+| CloudWatch Alarm | Backup job failure detection |
 
 **Backup schedule:**
 
 | Resource | RPO | Retention | Cross-Region |
 |----------|-----|-----------|-------------|
-| RDS | Daily + continuous (PITR) | 7-35 days | Optional |
-| EFS | Daily | 7-35 days | Optional |
+| RDS | Daily + PITR (seconds) | 35 days daily / 365 days monthly | ✅ Daily copy to DR |
+| EFS | Daily | 35 days daily / 365 days monthly | ✅ Daily copy to DR |
 
 ---
 
@@ -305,6 +312,33 @@ Push ECR / Deploy ECS/EKS
 | Budget Alert | 80% threshold → email notification |
 | Cost Anomaly Monitor | Detect unusual spending patterns |
 | SNS Topic | Shared topic cho budget + backup alerts |
+
+---
+
+### Module 14: `dr` 🔲
+
+> [!NOTE]
+> DR Pilot Light module — triển khai **sau khi app chạy ổn ở primary region**. Tách riêng vì DR infra có lifecycle khác (ít thay đổi, cần stability).
+
+**Học được:** Cross-region architecture, RDS promotion, DNS failover, DR drill.
+
+| Resource | Config |
+|----------|--------|
+| VPC (DR region) | Mirror primary VPC topology (`ap-southeast-1`) |
+| Subnets (DR region) | Public/Private/Data × 2 AZs (minimum cho DR) |
+| RDS Cross-Region Read Replica | Async replication từ primary |
+| ALB (DR region) | Pre-provisioned, empty target groups |
+| Route53 Failover Routing | Primary → active, DR → standby |
+| Route53 Health Check | Monitor primary ALB endpoint |
+
+**DR Drill procedure:**
+```
+1. Promote RDS replica → standalone primary       (~5 min)
+2. Scale compute from 0 → desired count            (~3-5 min)
+3. Verify app health in DR region                   (~2 min)
+4. Switch Route53 DNS → DR ALB (or auto-failover)  (~60s TTL)
+Total RTO: ~10-15 minutes
+```
 
 ---
 
@@ -393,8 +427,9 @@ Push ECR / Deploy ECS/EKS
 
 ```
 terraform/
-├── terraform_plan.md             ← Tài liệu này
-├── aws_architecture.md           ← Sơ đồ Mermaid kiến trúc AWS
+├── README.md                     ← Overview + quick start
+├── IMPLEMENTATION_PLAN.md        ← Tài liệu này (chi tiết modules)
+├── ARCHITECTURE.md               ← Sơ đồ Mermaid kiến trúc AWS
 │
 ├── bootstrap/                    # S3 + DynamoDB state backend
 │
@@ -410,8 +445,9 @@ terraform/
 │   ├── loadbalancer/         🔲  # ALB + ACM + Route53 + WAF
 │   ├── bastion/              🔲  # EC2 Jump Host + SSM
 │   ├── cicd/                 🔲  # OIDC + GitHub Actions IAM
-│   ├── backup/               🔲  # AWS Backup vault + plans
+│   ├── backup/               🔲  # AWS Backup + cross-region copy
 │   ├── budgets/              🔲  # AWS Budgets + Cost Anomaly
+│   ├── dr/                   🔲  # Pilot Light DR (VPC + RDS replica)
 │   ├── ecs-ec2/              🔲  # Phase 8A compute
 │   ├── ecs-fargate/          🔲  # Phase 8B compute
 │   ├── eks-nodegroup/        🔲  # Phase 8C compute
@@ -448,15 +484,23 @@ terraform/
 
 ## Thứ tự triển khai (Dependency-based)
 
-### Step 1: Hoàn tất Shared Data Layer
+### Step 1: Protect existing infrastructure
+
+```
+backup (bảo vệ RDS đang chạy)
+```
+
+Lý do: **"Protect what you have before building more."** RDS đã live, cần backup centralized + cross-region copy trước.
+
+### Step 2: Hoàn tất Shared Data Layer
 
 ```
 cache → streaming
 ```
 
-Lý do: cần trước khi deploy ứng dụng (apps depend on Redis + Kafka).
+Lý do: apps depend on Redis + Kafka.
 
-### Step 2: Platform Services
+### Step 3: Platform Services
 
 ```
 ecr → efs → loadbalancer
@@ -464,24 +508,30 @@ ecr → efs → loadbalancer
 
 Lý do: ECR cần trước khi push images. EFS cần cho Fargate observability. ALB cần cho traffic routing.
 
-### Step 3: Operations
+### Step 4: Operations
 
 ```
-bastion → cicd → backup → budgets
+bastion → cicd → budgets
 ```
 
-Lý do: bastion cho admin access. CICD cho automated deployment. Backup + budgets cho production safety.
+Lý do: bastion cho admin access. CICD cho automated deployment. Budgets cho cost monitoring.
 
-### Step 4: First Compute Phase
+### Step 5: First Compute Phase
 
 ```
-phase-8a (ECS on EC2) → deploy apps → test → destroy
+phase-8a (ECS on EC2) → deploy apps → test → compare
 ```
 
-### Step 5: Subsequent Phases
+### Step 6: Subsequent Compute Phases
 
 ```
 phase-8b → phase-8c → phase-8d (mỗi phase: deploy → learn → compare → destroy)
+```
+
+### Step 7: Disaster Recovery (sau khi app chạy ổn)
+
+```
+dr (Pilot Light — VPC + RDS replica ở ap-southeast-1) → DR drill test
 ```
 
 ---

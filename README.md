@@ -300,8 +300,8 @@ docker compose up -d
 |------|---------|
 | [`on-premises/ARCHITECTURE_DETAIL.md`](on-premises/ARCHITECTURE_DETAIL.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns |
 | [`on-premises/architecture_summary.md`](on-premises/architecture_summary.md) | Tổng kết kiến thức DevOps đã học (tiếng Việt) |
-| [`terraform/aws_architecture.md`](terraform/aws_architecture.md) | Kiến trúc AWS — VPC topology, compute phases, security flow |
-| [`terraform/terraform_plan.md`](terraform/terraform_plan.md) | Kế hoạch triển khai Terraform chi tiết |
+| [`terraform/ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | Kiến trúc AWS — VPC topology, compute phases, security flow |
+| [`terraform/IMPLEMENTATION_PLAN.md`](terraform/IMPLEMENTATION_PLAN.md) | Kế hoạch triển khai Terraform chi tiết |
 | [`terraform/policy/README.md`](terraform/policy/README.md) | Hướng dẫn OPA policy-as-code |
 
 ### Công nghệ sử dụng
