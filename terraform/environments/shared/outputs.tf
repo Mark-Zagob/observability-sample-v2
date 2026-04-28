@@ -81,3 +81,45 @@ output "vpc_endpoints_security_group_id" {
   description = "Interface Endpoints Security Group ID"
   value       = module.vpc_endpoints.endpoints_security_group_id
 }
+
+# Database outputs
+output "rds_endpoint" {
+  description = "RDS PostgreSQL endpoint (host:port)"
+  value       = module.database.rds_endpoint
+}
+
+output "rds_arn" {
+  description = "ARN of the RDS instance"
+  value       = module.database.rds_arn
+}
+
+output "db_secret_arn" {
+  description = "ARN of the RDS-managed secret"
+  value       = module.database.db_secret_arn
+}
+
+# Backup outputs
+output "backup_vault_arn" {
+  description = "Primary backup vault ARN"
+  value       = module.backup.vault_arn
+}
+
+output "backup_vault_dr_arn" {
+  description = "DR region backup vault ARN"
+  value       = module.backup.vault_dr_arn
+}
+
+output "backup_plan_arn" {
+  description = "Backup plan ARN"
+  value       = module.backup.plan_arn
+}
+
+output "backup_sns_topic_arn" {
+  description = "SNS topic ARN for backup notifications (reusable by other modules)"
+  value       = module.backup.sns_topic_arn
+}
+
+output "backup_selection_tag" {
+  description = "Tag key/value to add to resources for backup protection"
+  value       = module.backup.selection_tag
+}

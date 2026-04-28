@@ -155,3 +155,65 @@ variable "db_enable_cloudwatch_alarms" {
   type        = bool
   default     = true
 }
+
+#--------------------------------------------------------------
+# DR Region
+#--------------------------------------------------------------
+
+variable "dr_region" {
+  description = "AWS region for disaster recovery (cross-region backup copy)"
+  type        = string
+  default     = "ap-southeast-1" # Singapore — nearest to primary (Sydney)
+}
+
+#--------------------------------------------------------------
+# Backup (AWS Backup)
+#--------------------------------------------------------------
+
+variable "backup_vault_lock_mode" {
+  description = "Vault lock mode: governance or compliance"
+  type        = string
+  default     = "governance"
+}
+
+variable "backup_daily_retention_days" {
+  description = "Days to retain daily backups"
+  type        = number
+  default     = 35
+}
+
+variable "backup_enable_monthly_plan" {
+  description = "Enable monthly long-term backup plan"
+  type        = bool
+  default     = true
+}
+
+variable "backup_monthly_retention_days" {
+  description = "Days to retain monthly backups"
+  type        = number
+  default     = 365
+}
+
+variable "backup_enable_cross_region_copy" {
+  description = "Enable cross-region backup copy to DR region"
+  type        = bool
+  default     = true
+}
+
+variable "backup_cross_region_retention_days" {
+  description = "Days to retain cross-region backup copies"
+  type        = number
+  default     = 35
+}
+
+variable "backup_notification_email" {
+  description = "Email for backup failure notifications (empty = no email)"
+  type        = string
+  default     = ""
+}
+
+variable "backup_enable_cloudwatch_alarms" {
+  description = "Create CloudWatch alarms for backup job failures"
+  type        = bool
+  default     = true
+}

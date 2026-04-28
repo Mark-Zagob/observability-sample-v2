@@ -86,7 +86,7 @@ Deploy hệ thống observability lab lên AWS bằng Terraform theo **productio
 | 9 | `loadbalancer` | 🔲 TODO | ALB + ACM + Route53 |
 | 10 | `bastion` | 🔲 TODO | EC2 Jump Host + SSM |
 | 11 | `cicd` | 🔲 TODO | OIDC Provider + GitHub Actions IAM |
-| 12 | `backup` | 🔲 TODO | AWS Backup + Cross-Region Copy (DR Tier 1) |
+| 12 | `backup` | ✅ Done | AWS Backup + Cross-Region Copy (DR Tier 1) |
 | 13 | `budgets` | 🔲 TODO | AWS Budgets + Cost Anomaly Detection |
 | 14 | `dr` | 🔲 TODO | Pilot Light DR (RDS replica + infra ở DR region) |
 

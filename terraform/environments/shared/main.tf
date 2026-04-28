@@ -120,11 +120,53 @@ module "database" {
 
   common_tags = {
     Module = "database"
+    Backup = "true" # ← AWS Backup auto-discovers this resource
   }
 }
 
 #--------------------------------------------------------------
-# Module 5: Cache (ElastiCache Redis) — sẽ thêm sau
+# Module 5: Backup (AWS Backup + Cross-Region Copy)
+# Centralized backup for all resources tagged Backup=true.
+# Must be deployed early to protect existing infrastructure.
+#--------------------------------------------------------------
+module "backup" {
+  source = "../../modules/backup"
+
+  providers = {
+    aws    = aws
+    aws.dr = aws.dr
+  }
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  # Vault configuration
+  vault_lock_mode = var.backup_vault_lock_mode
+
+  # Daily backup: 35 days retention
+  daily_schedule       = "cron(0 3 * * ? *)"
+  daily_retention_days = var.backup_daily_retention_days
+
+  # Monthly backup: 365 days retention, cold storage after 30d
+  enable_monthly_plan             = var.backup_enable_monthly_plan
+  monthly_retention_days          = var.backup_monthly_retention_days
+  monthly_cold_storage_after_days = 30
+
+  # Cross-region copy (DR Tier 1)
+  enable_cross_region_copy        = var.backup_enable_cross_region_copy
+  cross_region_copy_retention_days = var.backup_cross_region_retention_days
+
+  # Notifications
+  notification_email       = var.backup_notification_email
+  enable_cloudwatch_alarms = var.backup_enable_cloudwatch_alarms
+
+  common_tags = {
+    Module = "backup"
+  }
+}
+
+#--------------------------------------------------------------
+# Module 6: Cache (ElastiCache Redis) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "cache" {
 #   source = "../../modules/cache"
@@ -132,7 +174,7 @@ module "database" {
 # }
 
 #--------------------------------------------------------------
-# Module 6: Streaming (MSK Kafka) — sẽ thêm sau
+# Module 7: Streaming (MSK Kafka) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "streaming" {
 #   source = "../../modules/streaming"
