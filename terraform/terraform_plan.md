@@ -1,34 +1,51 @@
-# Phase 8: AWS Infrastructure — Multi-Platform Learning Path (FINAL)
+# Phase 8: AWS Infrastructure — Production-Grade Deployment Plan
 
 ## Mục tiêu
 
-Deploy hệ thống observability lab lên AWS bằng Terraform, **so sánh 4 compute platforms** trên cùng shared infrastructure.
+Deploy hệ thống observability lab lên AWS bằng Terraform theo **production-grade standards**. Shared infrastructure deploy 1 lần, sau đó swap giữa các compute platforms (ECS / EKS) để học và so sánh.
 
 ---
 
 ## Kiến trúc tổng quan
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│  SHARED INFRASTRUCTURE (deploy 1 lần, dùng chung)         │
-│                                                            │
-│  Network → Security → Data → ALB → Secrets → ECR → EFS   │
-│  (VPC)    (SG/IAM)   (RDS,   (Route53) (SSM)    (NFS)    │
-│                      ElastiCache,                          │
-│                      MSK)                                  │
-│           Bastion → CI/CD                                  │
-│           (SSH/SSM)  (OIDC + GitHub Actions IAM Role)      │
-├────────────────────────────────────────────────────────────┤
-│  COMPUTE LAYER (swap giữa 4 phases)                       │
-│                                                            │
-│  8A: ECS on EC2          8B: ECS on Fargate               │
-│  8C: EKS + Node Group    8D: EKS + Fargate Profile        │
-├────────────────────────────────────────────────────────────┤
-│  OBSERVABILITY (dual-stack)                                │
-│                                                            │
-│  Self-hosted: Prometheus, Grafana, Loki, Tempo, OTel      │
-│  AWS-native:  CloudWatch, Container Insights               │
-└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                    SHARED INFRASTRUCTURE                           │
+│                                                                    │
+│  Layer 1 — Foundation                                              │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐                │
+│  │ Network  │→ │ VPC Endpoints│→ │   Security   │                │
+│  │ (VPC)    │  │ (S3/DDB/ECR) │  │ (SG/IAM)     │                │
+│  └──────────┘  └──────────────┘  └──────────────┘                │
+│                                                                    │
+│  Layer 2 — Data                                                    │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐                │
+│  │ Database │  │    Cache     │  │  Streaming   │                │
+│  │ (RDS PG) │  │ (ElastiCache)│  │  (MSK Kafka) │                │
+│  └──────────┘  └──────────────┘  └──────────────┘                │
+│                                                                    │
+│  Layer 3 — Platform Services                                       │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐                │
+│  │   ECR    │  │     EFS      │  │  Loadbalancer│                │
+│  │ (Images) │  │ (Persistent) │  │ (ALB/ACM/R53)│                │
+│  └──────────┘  └──────────────┘  └──────────────┘                │
+│                                                                    │
+│  Layer 4 — Operations                                              │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
+│  │ Bastion  │  │   CI/CD      │  │   Backup     │  │ Budgets  │ │
+│  │ (SSM)    │  │ (OIDC+GHA)   │  │ (AWS Backup) │  │ (Cost)   │ │
+│  └──────────┘  └──────────────┘  └──────────────┘  └──────────┘ │
+├────────────────────────────────────────────────────────────────────┤
+│                    COMPUTE LAYER (swap)                             │
+│                                                                    │
+│  Phase 8A: ECS on EC2        │  Phase 8B: ECS on Fargate          │
+│  Phase 8C: EKS + Node Group  │  Phase 8D: EKS + Fargate Profile   │
+├────────────────────────────────────────────────────────────────────┤
+│                    OBSERVABILITY (dual-stack)                       │
+│                                                                    │
+│  Self-hosted: Prometheus, Grafana, Loki, Tempo, OTel               │
+│  AWS-native:  CloudWatch, Container Insights, X-Ray                │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -36,26 +53,43 @@ Deploy hệ thống observability lab lên AWS bằng Terraform, **so sánh 4 co
 ## Quyết định đã confirm ✅
 
 | Quyết định | Giá trị |
-|-----------|---------|
+|-----------|---------| 
 | Region | `ap-southeast-2` (Sydney) |
-| Domain | `bd-apa-coi.com` |
-| State | Local (S3 backend commented sẵn) |
+| State Backend | S3 + DynamoDB (KMS encrypted, state locking) |
 | Cross-state sharing | `terraform_remote_state` data source |
-| Budget | Không giới hạn, destroy sau test |
 | Data services | AWS Managed: RDS, ElastiCache, MSK |
 | Container registry | **Dual: ECR + GHCR** (CI push cả hai) |
-| Service discovery | Cloud Map (ECS) / K8s Service (EKS) |
-| Bastion | Bastion Host + SSM Session Manager |
-| NAT Gateway | Standard NAT Gateway |
-| Observability | Dual: Grafana stack + CloudWatch |
-| Fargate storage | EFS cho Phase 8B observability |
 | CI/CD auth | OIDC → IAM Role (không dùng Access Key) |
+| NAT Gateway | Standard NAT (single = save cost, multi = HA) |
+| Bastion | EC2 + SSM Session Manager |
+| Observability | Dual: Grafana stack (self-hosted) + CloudWatch |
+| Backup | AWS Backup (centralized, cross-service) |
 
 ---
 
-## Shared Modules
+## Shared Modules — Chi Tiết
 
-### 1. `network` — VPC (3 AZs, 9 Subnets)
+### Tiến độ tổng quan
+
+| # | Module | Trạng thái | Mô tả |
+|---|--------|-----------|-------|
+| 1 | `network` | ✅ Done | VPC, Subnets (4-tier × 3 AZs), NAT, NACLs, Flow Logs |
+| 2 | `vpc-endpoints` | ✅ Done | S3/DynamoDB Gateway + Interface Endpoints |
+| 3 | `security` | ✅ Done | 6 SGs, ECS IAM Roles, Key Pair |
+| 4 | `database` | ✅ Done | RDS PostgreSQL, KMS, Secrets Manager, Monitoring |
+| 5 | `cache` | 🔲 TODO | ElastiCache Redis |
+| 6 | `streaming` | 🔲 TODO | MSK Kafka |
+| 7 | `ecr` | 🔲 TODO | Container Registry (7 repos) |
+| 8 | `efs` | 🔲 TODO | Elastic File System |
+| 9 | `loadbalancer` | 🔲 TODO | ALB + ACM + Route53 |
+| 10 | `bastion` | 🔲 TODO | EC2 Jump Host + SSM |
+| 11 | `cicd` | 🔲 TODO | OIDC Provider + GitHub Actions IAM |
+| 12 | `backup` | 🔲 TODO | AWS Backup (centralized) |
+| 13 | `budgets` | 🔲 TODO | AWS Budgets + Cost Anomaly Detection |
+
+---
+
+### Module 1: `network` ✅
 
 | Resource | Config |
 |----------|--------|
@@ -63,225 +97,281 @@ Deploy hệ thống observability lab lên AWS bằng Terraform, **so sánh 4 co
 | Public Subnets × 3 | 10.0.1-3.0/24 — ALB, NAT, Bastion |
 | Private Subnets × 3 | 10.0.11-13.0/24 — Compute workloads |
 | Data Subnets × 3 | 10.0.21-23.0/24 — RDS, Redis, MSK, EFS |
-| Internet Gateway | Public → Internet |
+| Mgmt Subnets × 3 | 10.0.31-33.0/24 — Bastion, admin tools |
 | NAT Gateway | Configurable: 1 (save cost) or 3 (HA, per-AZ) |
+| NACLs | Stateless deny rules per tier |
+| VPC Flow Logs | CloudWatch (30-day retention) |
 
 ---
 
-### 2. `security` — SG, IAM
+### Module 2: `vpc-endpoints` ✅
 
-**Security Groups**:
-
-| SG | Inbound Rules |
-|----|---------------|
-| ALB | 80/443 from 0.0.0.0/0 |
-| Applications | From ALB SG |
-| Data | From Application SG |
-| Observability | From Application SG |
-| Bastion | SSH from your IP |
-| EFS | NFS (2049) from Application + Observability SG |
-
-**IAM Roles (service-level)**:
-
-| Role | Gắn vào | Permissions |
-|------|---------|-------------|
-| ECS Task Execution Role | ECS tasks | Pull ECR, read Secrets, write CW Logs |
-| ECS Task Role | App containers | Read SSM, write CW Metrics |
-| EKS Node Role | EC2 node group | ECR pull, CW, EBS CSI |
-| EKS Pod Role (IRSA) | K8s pods | Read SSM, read Secrets Manager |
-| Bastion Role | Bastion EC2 | SSM managed instance |
-| Key Pair | SSH access | — |
+| Type | Endpoints | Cost |
+|------|-----------|------|
+| Gateway (FREE) | S3, DynamoDB | $0 |
+| Interface | ECR (api + dkr), SSM, Secrets Manager, Logs, STS | ~$7.2/month/endpoint/AZ |
 
 ---
 
-### 3. `data` — Managed Services
+### Module 3: `security` ✅
 
-| Resource | Replaces | Size |
-|----------|----------|------|
-| RDS PostgreSQL | Docker PostgreSQL | db.t3.micro, single-AZ |
-| ElastiCache Redis | Docker Redis | cache.t3.micro |
-| MSK Kafka | Docker Kafka | kafka.t3.small, 2 brokers |
+**Security Groups (Defense-in-Depth):**
+
+| SG | Inbound | Outbound |
+|----|---------|----------|
+| ALB | 80/443 from Internet | app_port to App SG |
+| Application | app_port from ALB, SSH from Bastion | Data ports, EFS, HTTPS, OTLP to Obs |
+| Data | DB ports from App + Bastion | Ephemeral responses only |
+| EFS | NFS (2049) from App | Ephemeral responses |
+| Observability | OTLP 4317/4318 from App, monitoring ports from VPC | HTTPS, scrape ports |
+| Bastion | SSH from trusted CIDRs | SSH/DB ports/HTTPS/DNS |
+
+**IAM Roles:**
+
+| Role | Permissions |
+|------|-------------|
+| ECS Task Execution | ECR pull, CloudWatch Logs, SSM/Secrets read, KMS decrypt |
+| ECS Task | CloudWatch metrics, X-Ray traces, ECS Exec (SSM) |
+| Bastion | SSM managed instance |
 
 ---
 
-### 4. `loadbalancer` — ALB & DNS
+### Module 4: `database` ✅
 
 | Resource | Config |
 |----------|--------|
-| ALB | Internet-facing |
-| Target Groups | api-gateway, web-ui, grafana |
-| ACM Certificate | `*.bd-apa-coi.com` |
-| Route53 | A record → ALB |
+| RDS PostgreSQL 16 | db.t3.micro, gp3, encrypted (CMK) |
+| Secrets Manager | RDS-managed auto-rotation (7 days) |
+| SSM Parameters | endpoint, host, port, db_name, username, secret_arn |
+| CloudWatch Alarms | CPU, storage, connections, secret rotation failure |
+| Performance Insights | Enabled (7d free, 731d prod) |
+| Read Replicas | Configurable count (0 for lab) |
+| KMS | Dedicated CMK for RDS + Secrets |
+| Enhanced Monitoring | Configurable interval |
 
 ---
 
-### 5. `secrets` — SSM & Secrets Manager
+### Module 5: `cache` 🔲
 
-| Resource | Content |
-|----------|---------|
-| SSM Parameters | DB URL, Redis URL, Kafka brokers, service endpoints |
-| Secrets Manager | DB password |
-
----
-
-### 6. `ecr` — Container Registry
+Replaces **Docker Redis** from on-premises.
 
 | Resource | Config |
 |----------|--------|
-| ECR Repos | 1 per service (7 repos) |
-| Lifecycle | Keep last 5 images |
+| ElastiCache Replication Group | Redis 7.x, cache.t3.micro |
+| Subnet Group | Data subnets |
+| Parameter Group | Custom Redis tuning (maxmemory-policy, timeout) |
+| KMS Key | Encryption at-rest (CMK) |
+| Auth Token | Secrets Manager + auto-rotation |
+| SSM Parameters | Primary endpoint, reader endpoint, port |
+| CloudWatch Alarms | CPU, memory, connections, replication lag |
+| Slow Log | CloudWatch Log Group |
+
+**Production features:** encryption in-transit (TLS), automatic failover, Multi-AZ option.
 
 ---
 
-### 7. `efs` — Shared File System
+### Module 6: `streaming` 🔲
 
-| Resource | Used By |
-|----------|---------|
-| EFS File System | Prometheus, Loki, Tempo data (Phase 8B, 8D) |
-| EFS Access Points | 1 per observability component |
-| EFS Mount Targets | 1 per private subnet |
-
----
-
-### 8. `bastion` — Jump Host
+Replaces **Docker Kafka (KRaft)** from on-premises.
 
 | Resource | Config |
 |----------|--------|
-| EC2 t3.micro | Public subnet, SSH + SSM |
-| Security Group | SSH from your IP |
-| IAM Role | SSM managed instance |
+| MSK Cluster | kafka.t3.small, 2 brokers (lab) / 3 (prod) |
+| MSK Configuration | Custom broker config (auto.create.topics, retention) |
+| KMS Key | Encryption at-rest (CMK) |
+| CloudWatch Log Group | Broker logs |
+| SSM Parameters | Bootstrap brokers (TLS), ZooKeeper connect |
+| CloudWatch Alarms | Under-replicated partitions, offline partitions, disk usage |
+
+**Production features:** TLS encryption, IAM auth, Multi-AZ, S3 log delivery.
+
+> [!WARNING]
+> MSK là resource **tốn chi phí nhất** (~$5/ngày với 2 brokers t3.small). Nên destroy khi không dùng.
 
 ---
 
-### 9. `cicd` — OIDC & GitHub Actions IAM
+### Module 7: `ecr` 🔲
 
-Setup GitHub Actions → AWS authentication **không cần Access Key**.
+| Resource | Config |
+|----------|--------|
+| ECR Repositories × 7 | api-gateway, order-service, payment-service, notification-worker, inventory-worker, traffic-gen, web-ui |
+| Lifecycle Policy | Keep last 10 tagged images, expire untagged after 7 days |
+| Image Scanning | Scan on push (basic) |
+| Encryption | KMS (CMK) hoặc AES-256 default |
+| Repository Policy | Allow pull from ECS/EKS task roles |
 
-| Resource | Mô tả |
+---
+
+### Module 8: `efs` 🔲
+
+Persistent storage cho observability stack (Phase 8B/8D Fargate cần EFS vì không có EBS).
+
+| Resource | Config |
+|----------|--------|
+| EFS File System | Encrypted (CMK), Bursting throughput |
+| Access Points × 4 | prometheus-data, loki-data, tempo-data, grafana-data |
+| Mount Targets × 3 | 1 per private subnet |
+| Backup Policy | Enabled (integrated với AWS Backup) |
+| Lifecycle Policy | Transition to IA after 30 days |
+
+---
+
+### Module 9: `loadbalancer` 🔲
+
+Entry point cho tất cả traffic vào ứng dụng.
+
+| Resource | Config |
+|----------|--------|
+| ALB | Internet-facing, public subnets |
+| Target Groups | web-ui (:8580), api-gateway (:5000), grafana (:3000) |
+| Listener Rules | Host-based routing: app.*, api.*, grafana.* |
+| ACM Certificate | `*.bd-apa-coi.com` (DNS validation) |
+| Route53 Records | A records → ALB alias |
+| WAF v2 (optional) | AWS Managed Rules: CommonRuleSet, SQLi, XSS, rate limiting |
+| Access Logs | S3 bucket |
+
+---
+
+### Module 10: `bastion` 🔲
+
+| Resource | Config |
+|----------|--------|
+| EC2 Instance | t3.micro, Amazon Linux 2023, mgmt subnet |
+| SSM Agent | Pre-installed, no SSH key needed cho SSM access |
+| User Data | Install PostgreSQL client, Redis CLI, Kafka tools |
+| Instance Profile | Bastion IAM role (from security module) |
+| Security Group | Bastion SG (from security module) |
+| CloudWatch Agent | System metrics + memory/disk |
+
+> [!TIP]
+> Bastion + SSM Session Manager = SSH access **without** opening port 22 from Internet. Secure by default.
+
+---
+
+### Module 11: `cicd` 🔲
+
+GitHub Actions → AWS authentication **without Access Keys**.
+
+| Resource | Config |
 |----------|--------|
 | OIDC Provider | Trust `token.actions.githubusercontent.com` |
-| IAM Role `github-actions-ecr` | Push images lên ECR |
-| IAM Role `github-actions-deploy` | Deploy ECS/EKS (Phase sau) |
-
-**Trust Policy**: Chỉ cho phép repo + branch cụ thể assume role
+| IAM Role: `ecr-push` | Push images to ECR |
+| IAM Role: `deploy` | Update ECS services / kubectl apply |
+| Trust Policy | Scoped to repo + branch (main only) |
 
 ```
 GitHub Actions Workflow
     ↓ (OIDC JWT Token)
-AWS STS verify token
-    ↓ (check repo, branch, audience)
+AWS STS verify
+    ↓ (check repo, branch)
 Assume IAM Role
-    ↓ (temporary credentials, 1h expire)
-Push ECR / Deploy ECS / Run Terraform
+    ↓ (temp credentials, 1h)
+Push ECR / Deploy ECS/EKS
 ```
 
-**Roles chi tiết**:
+---
 
-| Role | Permissions | Condition |
-|------|-------------|----------|
-| `github-actions-ecr` | `ecr:PushImage`, `ecr:GetAuthorizationToken` | repo:`YOUR_ORG/observability-sample-v2`, branch: `main` |
-| `github-actions-deploy` | `ecs:UpdateService`, `eks:DescribeCluster` | repo:`YOUR_ORG/observability-sample-v2`, branch: `main` |
+### Module 12: `backup` 🔲
 
-**CI Workflow update**:
-```yaml
-# Thêm vào _reusable-build-push.yml
-permissions:
-  id-token: write    # Request OIDC token
-  contents: read
+> [!IMPORTANT]
+> Module này **không có trong plan cũ** nhưng bắt buộc cho production-grade. AWS Backup cung cấp centralized backup management cho nhiều services.
 
-steps:
-  - uses: aws-actions/configure-aws-credentials@v4
-    with:
-      role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-      aws-region: ap-southeast-2
-  # Không cần AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-```
+| Resource | Config |
+|----------|--------|
+| Backup Vault | KMS encrypted, access policy |
+| Backup Plan | Daily backup, retention 7 days (lab) / 35 days (prod) |
+| Backup Selection | RDS instances, EFS file systems |
+| IAM Role | AWS Backup service role |
+| Vault Lock (prod) | Prevent deletion of backups (compliance) |
+| SNS Notification | Alert on backup failures |
+
+**Backup schedule:**
+
+| Resource | RPO | Retention | Cross-Region |
+|----------|-----|-----------|-------------|
+| RDS | Daily + continuous (PITR) | 7-35 days | Optional |
+| EFS | Daily | 7-35 days | Optional |
+
+---
+
+### Module 13: `budgets` 🔲
+
+> [!IMPORTANT]
+> Module này cũng **không có trong plan cũ**. Bắt buộc để tránh chi phí bất ngờ khi chạy lab.
+
+| Resource | Config |
+|----------|--------|
+| AWS Budget | Monthly cost budget ($50/month cho lab) |
+| Budget Alert | 80% threshold → email notification |
+| Cost Anomaly Monitor | Detect unusual spending patterns |
+| SNS Topic | Shared topic cho budget + backup alerts |
 
 ---
 
 ## Compute Phases
 
+> [!NOTE]
+> Mỗi compute phase là **một module riêng**, deploy độc lập trên shared infrastructure. Chỉ chạy 1 phase tại một thời điểm, destroy trước khi chuyển sang phase tiếp.
+
 ### Phase 8A: ECS on EC2
 
-**Học**: EC2 management, ECS scheduling, capacity provider
+**Học được:** EC2 management, ECS scheduling, capacity provider, ASG.
 
-| Component | Config |
-|-----------|--------|
+| Resource | Config |
+|----------|--------|
 | ECS Cluster | EC2 capacity provider |
 | ASG | t3.medium, min=2 max=4, ECS-optimized AMI |
-| Task Definitions | 1 per service, `awslogs` log driver |
-| ECS Services | Cloud Map service discovery |
-| Observability | ECS tasks trên cùng EC2 cluster (EBS volumes) |
-
-**CloudWatch**: CW Agent on EC2, Container Insights, CW Logs
-
----
+| Capacity Provider | Managed scaling, target 80% utilization |
+| Task Definitions × 7 | 1 per service, `awslogs` log driver |
+| ECS Services × 7 | Desired count, health check, deployment circuit breaker |
+| Service Discovery | AWS Cloud Map (private DNS namespace) |
+| Observability Tasks | ECS tasks on same cluster (EBS volumes) |
 
 ### Phase 8B: ECS on Fargate
 
-**Học**: Serverless containers, `awsvpc` networking, EFS integration
+**Học được:** Serverless containers, `awsvpc` networking, EFS integration.
 
-| Component | Config |
-|-----------|--------|
+| Resource | Config |
+|----------|--------|
 | ECS Cluster | Fargate capacity provider |
-| Task Definitions | Fargate-compatible, `awsvpc` mode |
+| Task Definitions × 7 | Fargate-compatible, `awsvpc` mode |
 | Auto Scaling | Target tracking (CPU/Memory) |
-| Observability | Fargate tasks + **EFS** cho persistent data |
+| Platform Version | LATEST (1.4.0+) |
+| EFS Volumes | Observability persistent data |
 
-**CloudWatch**: `awslogs` driver (default), Container Insights Fargate
+**So sánh với 8A:**
 
-**So sánh key với 8A**:
 | | 8A (EC2) | 8B (Fargate) |
 |---|---|---|
 | EC2 quản lý | Bạn | AWS |
-| Startup | Nhanh | ~30s |
-| Cost | Per instance | Per task |
+| Cold start | Instant | ~30s |
+| Cost model | Per instance | Per task |
 | Storage | EBS | EFS |
-
----
 
 ### Phase 8C: EKS + Managed Node Group
 
-**Học**: K8s core (Deployments, Services, Ingress, Helm), IRSA
+**Học được:** K8s core (Deployments, Services, Ingress, Helm), IRSA.
 
-| Component | Config |
-|-----------|--------|
-| EKS Cluster | Managed control plane |
-| Node Group | t3.medium, min=2 max=4 |
-| K8s Resources | Deployments, Services, ConfigMaps, Ingress |
-| Helm Charts | Package apps as charts |
-| LB Controller | K8s Ingress → ALB |
-| Cluster Autoscaler | Scale nodes per pending pods |
-| Observability | DaemonSets (node-exporter, Fluent Bit) + StatefulSets (Prometheus, Loki, Tempo) |
+| Resource | Config |
+|----------|--------|
+| EKS Cluster | Managed control plane v1.29+ |
+| Managed Node Group | t3.medium, min=2 max=4 |
+| K8s Manifests | Deployments, Services, ConfigMaps, Secrets, Ingress |
+| IRSA | Pod-level IAM roles |
+| AWS LB Controller | Ingress → ALB integration |
+| Cluster Autoscaler | Scale nodes based on pending pods |
+| Observability | DaemonSets + StatefulSets (EBS PVCs) |
 
-**CloudWatch**: Container Insights for EKS, Fluent Bit DaemonSet → CW Logs
+### Phase 8D: EKS + Fargate Profile
 
----
+**Học được:** Fargate Profile selectors, mixed scheduling (apps on Fargate, observability on EC2).
 
-### Phase 8D: EKS + Fargate Profile (mixed mode)
-
-**Học**: Fargate Profile selectors, mixed scheduling
-
-| Component | Config |
-|-----------|--------|
+| Resource | Config |
+|----------|--------|
 | EKS Cluster | Reuse từ 8C |
-| Fargate Profile | namespace=[applications](file:///root/workspace/observability-lab/applications-vm/applications) |
-| Node Group | Giữ cho observability (DaemonSet, EBS) |
-| CoreDNS | Patched cho Fargate |
-
-**Kiến trúc mixed**:
-```
-EKS Cluster
-├── Node Group (EC2)       ← Observability
-│   ├── prometheus, loki, tempo (StatefulSet + EBS)
-│   ├── grafana (Deployment)
-│   └── node-exporter, fluent-bit (DaemonSet)
-│
-└── Fargate Profile        ← Applications
-    ├── api-gateway, order-service, payment-service
-    ├── notification-worker, inventory-worker
-    └── fluent-bit sidecar per pod → CW Logs
-```
+| Fargate Profile | namespace: applications |
+| Node Group | Keep cho observability (DaemonSet, EBS) |
+| CoreDNS | Patched for Fargate |
 
 ---
 
@@ -289,14 +379,13 @@ EKS Cluster
 
 | Signal | Self-hosted | AWS-native |
 |--------|------------|------------|
-| App metrics | Prometheus | — |
-| App logs | Loki | CloudWatch Logs |
-| Traces | Tempo (OTel) | — |
+| App metrics | Prometheus (OTel) | CloudWatch Metrics |
+| App logs | Loki (structured JSON) | CloudWatch Logs |
+| Traces | Tempo (OTel) | X-Ray (optional) |
 | Dashboards | Grafana | CloudWatch Dashboards |
-| Infra metrics | — | CloudWatch Metrics |
-| Container metrics | — | Container Insights |
-| DB perf | — | RDS Performance Insights |
-| Alerting | Alertmanager | CloudWatch Alarms |
+| Infra metrics | Node Exporter | CloudWatch + Container Insights |
+| DB performance | — | RDS Performance Insights |
+| Alerting | Alertmanager → Telegram | CloudWatch Alarms → SNS |
 
 ---
 
@@ -304,68 +393,95 @@ EKS Cluster
 
 ```
 terraform/
-├── modules/
-│   ├── network/           # VPC, Subnets, IGW, NAT
-│   ├── security/          # SG, IAM, Key Pair
-│   ├── data/              # RDS, ElastiCache, MSK
-│   ├── loadbalancer/      # ALB, Route53, ACM
-│   ├── secrets/           # SSM, Secrets Manager
-│   ├── ecr/               # Container registries
-│   ├── efs/               # Elastic File System
-│   ├── bastion/           # Jump host + SSM
-│   ├── cicd/              # OIDC Provider + GitHub Actions IAM Roles
-│   ├── ecs-ec2/           # Phase 8A
-│   ├── ecs-fargate/       # Phase 8B
-│   ├── eks-nodegroup/     # Phase 8C
-│   └── eks-fargate/       # Phase 8D
+├── terraform_plan.md             ← Tài liệu này
+├── aws_architecture.md           ← Sơ đồ Mermaid kiến trúc AWS
+│
+├── bootstrap/                    # S3 + DynamoDB state backend
+│
+├── modules/                      # Reusable modules
+│   ├── network/              ✅  # VPC, Subnets, NAT, NACLs, Flow Logs
+│   ├── vpc-endpoints/        ✅  # S3/DDB Gateway + Interface Endpoints
+│   ├── security/             ✅  # SGs, IAM, Key Pair
+│   ├── database/             ✅  # RDS PostgreSQL + Secrets + Monitoring
+│   ├── cache/                🔲  # ElastiCache Redis
+│   ├── streaming/            🔲  # MSK Kafka
+│   ├── ecr/                  🔲  # Container Registry
+│   ├── efs/                  🔲  # Elastic File System
+│   ├── loadbalancer/         🔲  # ALB + ACM + Route53 + WAF
+│   ├── bastion/              🔲  # EC2 Jump Host + SSM
+│   ├── cicd/                 🔲  # OIDC + GitHub Actions IAM
+│   ├── backup/               🔲  # AWS Backup vault + plans
+│   ├── budgets/              🔲  # AWS Budgets + Cost Anomaly
+│   ├── ecs-ec2/              🔲  # Phase 8A compute
+│   ├── ecs-fargate/          🔲  # Phase 8B compute
+│   ├── eks-nodegroup/        🔲  # Phase 8C compute
+│   └── eks-fargate/          🔲  # Phase 8D compute
 │
 ├── environments/
-│   ├── shared/            # Network, Security, Data, ALB, ECR, EFS, Bastion, OIDC
+│   ├── shared/               ✅  # All shared modules wired here
 │   │   ├── main.tf
 │   │   ├── variables.tf
 │   │   ├── outputs.tf
 │   │   ├── providers.tf
-│   │   ├── terraform.tfvars
-│   │   └── backend.tf    # S3 (commented)
-│   │
-│   ├── phase-8a/          # ECS on EC2
-│   ├── phase-8b/          # ECS on Fargate + EFS
-│   ├── phase-8c/          # EKS + Node Group
-│   └── phase-8d/          # EKS + Fargate Profile
+│   │   └── backend.tf           # S3 backend (active)
+│   ├── dev/                      # Terraform Cloud backend (testing)
+│   ├── phase-8a/             🔲  # ECS on EC2
+│   ├── phase-8b/             🔲  # ECS on Fargate + EFS
+│   ├── phase-8c/             🔲  # EKS + Node Group
+│   └── phase-8d/             🔲  # EKS + Fargate Profile
 │
-└── README.md
+└── policy/                   ✅  # OPA/Rego policy-as-code + tests
+    ├── general.rego
+    ├── network.rego
+    ├── rds.rego
+    ├── security_group.rego
+    ├── iam.rego
+    ├── kms.rego
+    ├── s3.rego
+    ├── secrets.rego
+    ├── logging.rego
+    ├── vpc_endpoint.rego
+    └── tests/
 ```
 
 ---
 
-## Deployment Workflow
+## Thứ tự triển khai (Dependency-based)
+
+### Step 1: Hoàn tất Shared Data Layer
 
 ```
-# 1. Deploy shared infra (1 lần)
-terraform apply -chdir=environments/shared
+cache → streaming
+```
 
-# 2. Test Phase 8A
-terraform apply  -chdir=environments/phase-8a
-# → Learn → Destroy
-terraform destroy -chdir=environments/phase-8a
+Lý do: cần trước khi deploy ứng dụng (apps depend on Redis + Kafka).
 
-# 3. Test Phase 8B
-terraform apply  -chdir=environments/phase-8b
-# → Learn, compare vs 8A → Destroy
-terraform destroy -chdir=environments/phase-8b
+### Step 2: Platform Services
 
-# 4. Test Phase 8C
-terraform apply  -chdir=environments/phase-8c
-# → Learn K8s → Destroy
-terraform destroy -chdir=environments/phase-8c
+```
+ecr → efs → loadbalancer
+```
 
-# 5. Test Phase 8D
-terraform apply  -chdir=environments/phase-8d
-# → Learn mixed mode → Destroy
-terraform destroy -chdir=environments/phase-8d
+Lý do: ECR cần trước khi push images. EFS cần cho Fargate observability. ALB cần cho traffic routing.
 
-# 6. Cleanup
-terraform destroy -chdir=environments/shared
+### Step 3: Operations
+
+```
+bastion → cicd → backup → budgets
+```
+
+Lý do: bastion cho admin access. CICD cho automated deployment. Backup + budgets cho production safety.
+
+### Step 4: First Compute Phase
+
+```
+phase-8a (ECS on EC2) → deploy apps → test → destroy
+```
+
+### Step 5: Subsequent Phases
+
+```
+phase-8b → phase-8c → phase-8d (mỗi phase: deploy → learn → compare → destroy)
 ```
 
 ---
@@ -374,28 +490,36 @@ terraform destroy -chdir=environments/shared
 
 | Resource | $/hr | $/day |
 |----------|------|-------|
-| NAT Gateway | $0.045 | $1.08 |
-| MSK (2 brokers) | $0.21 | $5.04 |
+| NAT Gateway (×1) | $0.045 | $1.08 |
+| MSK (2 brokers t3.small) | $0.21 | $5.04 |
 | RDS (t3.micro) | $0.018 | $0.43 |
 | ElastiCache (t3.micro) | $0.017 | $0.41 |
 | ALB | $0.023 | $0.54 |
-| ECS/EC2 (2x t3.medium) | $0.084 | $2.02 |
+| ECS/EC2 (2× t3.medium) | $0.084 | $2.02 |
 | EFS | ~$0.01 | ~$0.24 |
 | Bastion (t3.micro) | $0.01 | $0.25 |
 | **Total shared + 1 phase** | **~$0.42** | **~$10** |
 
 > [!TIP]
 > `terraform destroy` → **$0/day**. Apply sáng, destroy tối ≈ $10/ngày.
+> NAT Gateway + MSK chiếm ~60% chi phí. Cân nhắc `single_nat_gateway = true` cho lab.
 
 ---
 
-## Implementation Order
+## OPA Policy Coverage
 
-| Step | What | Modules |
-|------|------|---------|
-| 1 | Shared infra | network → security → data → loadbalancer → secrets → ecr → efs → bastion → cicd |
-| 2 | CI update | Add ECR push + OIDC auth to [_reusable-build-push.yml](file:///root/workspace/observability-sample-v2/.github/workflows/_reusable-build-push.yml) |
-| 3 | Phase 8A | ecs-ec2 module → deploy → test → destroy |
-| 4 | Phase 8B | ecs-fargate module → deploy → compare → destroy |
-| 5 | Phase 8C | eks-nodegroup module → deploy → test → destroy |
-| 6 | Phase 8D | eks-fargate module → deploy → compare → destroy |
+| Policy File | Validates |
+|-------------|-----------|
+| `general.rego` | Tagging, description requirements |
+| `network.rego` | Subnet CIDR, public access restrictions |
+| `rds.rego` | Encryption, backup, multi-AZ, public access |
+| `security_group.rego` | Port ranges, CIDR validation, no 0.0.0.0/0 on data tier |
+| `iam.rego` | No wildcard permissions, trust policy constraints |
+| `kms.rego` | Key rotation, deletion window |
+| `s3.rego` | Encryption, versioning, public access block |
+| `secrets.rego` | Encryption, recovery window |
+| `logging.rego` | Retention, encryption |
+| `vpc_endpoint.rego` | Policy validation |
+
+> [!NOTE]
+> Cần thêm policies cho: `elasticache.rego`, `msk.rego`, `efs.rego`, `alb.rego`, `backup.rego` khi modules tương ứng được triển khai.
