@@ -68,18 +68,34 @@ terraform/
 ├── README.md                     ← File này
 ├── IMPLEMENTATION_PLAN.md        ← Chi tiết modules + deployment order
 ├── ARCHITECTURE.md               ← Sơ đồ Mermaid kiến trúc AWS
+├── devops-question-m1-iac-core.md ← DevOps interview (IaC Core)
 ├── bootstrap/                    # S3 + DynamoDB state backend
 ├── modules/                      # Reusable Terraform modules
 │   ├── network/              ✅
 │   ├── vpc-endpoints/        ✅
 │   ├── security/             ✅
 │   ├── database/             ✅
+│   ├── backup/               ✅
 │   └── ... (xem IMPLEMENTATION_PLAN.md)
 ├── environments/
 │   ├── shared/               ✅  # Shared infra (S3 backend)
 │   └── dev/                      # Terraform Cloud backend (testing)
 └── policy/                   ✅  # OPA/Rego policies + tests
 ```
+
+---
+
+## 📝 DevOps Interview Practice
+
+Bộ câu hỏi phỏng vấn DevOps dựa trên Terraform/AWS infrastructure:
+
+| File | Level | Số câu | Focus |
+|------|-------|--------|-------|
+| [devops-question-m1-iac-core.md](devops-question-m1-iac-core.md) | Junior–Mid + Senior | 54 | Terraform fundamentals, state, modules, architecture, troubleshooting |
+| M2: Networking & Security | 🔲 Planned | — | VPC, IAM, KMS, OPA, multi-account |
+| M3: DR, Backup & Compliance | 🔲 Planned | — | RPO/RTO, vault lock, checkov, compliance |
+
+> Câu hỏi dựa trên modules thực tế trong repo này. Thêm milestones mới sau mỗi module hoàn thành.
 
 ---
 
