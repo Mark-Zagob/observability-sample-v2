@@ -68,13 +68,13 @@ backend "s3" {
 ```
 Why do we use remote state instead of keeping `terraform.tfstate` as a local file? What would happen if two team members ran `terraform apply` at the same time without DynamoDB locking?
 
-**Q9.** You accidentally deleted a security group using `terraform destroy -target=aws_security_group.data`. The RDS instance that depends on it is now in a broken state. How would you recover? What Terraform commands might help?
+**Q9.** *(Mid-Senior)* You accidentally deleted a security group using `terraform destroy -target=aws_security_group.data`. The RDS instance that depends on it is now in a broken state. How would you recover? What Terraform commands might help?
 
 **Q10.** What does `terraform refresh` do? Why has HashiCorp recommended against running it directly in recent versions? What replaced it?
 
 **Q11.** A colleague asks you to check what resources Terraform is currently managing. How do you list them? What command would you use, and what does the output look like?
 
-**Q12.** You need to rename a resource from `aws_s3_bucket.reports` to `aws_s3_bucket.backup_reports` in your code. If you just rename it and run `terraform plan`, what will Terraform propose? How do you avoid destroying and recreating the bucket?
+**Q12.** *(Mid)* You need to rename a resource from `aws_s3_bucket.reports` to `aws_s3_bucket.backup_reports` in your code. If you just rename it and run `terraform plan`, what will Terraform propose? How do you avoid destroying and recreating the bucket?
 
 ---
 
@@ -130,7 +130,7 @@ Why do we use `>= 5.0, < 6.0` instead of just `>= 5.0`? What could go wrong with
 
 ---
 
-## Section 4: Day-to-Day Operations (5 questions)
+## Section 4: Day-to-Day Operations & Team Workflow (8 questions)
 
 **Q19.** You need to update the RDS instance class from `db.t3.micro` to `db.t3.small`. Walk through the steps you would take from editing the code to the change being live. What should you check in the `terraform plan` output before applying?
 
@@ -150,6 +150,12 @@ common_tags = {
 ```
 Why is tagging important in AWS? How would you enforce that all resources have these tags?
 
+**Q24.** A team member opens a Pull Request that modifies the database module's `variables.tf`. Describe the ideal review process for Terraform changes. What should the reviewer check beyond normal code review? How does `terraform plan` output help in the review?
+
+**Q25.** You run `terraform plan` on a module change and it shows it will create 3 new resources. Your team lead asks: "What's the estimated monthly cost impact?" How would you answer this question? Is there a way to automate this in the team's workflow?
+
+**Q26.** In a team of 5, everyone has AWS credentials and can run `terraform apply` directly. What risks does this create? At what team size would you enforce that only CI/CD pipelines can apply changes? What is the simplest first step to add this control?
+
 ---
 
 # Part B: Senior Level and Above
@@ -161,13 +167,13 @@ Why is tagging important in AWS? How would you enforce that all resources have t
 
 ---
 
-## Section 5: Architecture & Design Decisions (7 questions)
+## Section 5: Architecture & Design Decisions (8 questions)
 
-**Q24.** Our project uses **one state file** for all modules (`shared/terraform.tfstate`). The network, database, and backup modules are all managed together. What are the risks of this approach as the team grows? At what point would you recommend splitting into separate state files, and how would you do it?
+**Q27.** Our project uses **one state file** for all modules (`shared/terraform.tfstate`). The network, database, and backup modules are all managed together. What are the risks of this approach as the team grows? At what point would you recommend splitting into separate state files, and how would you do it?
 
-**Q25.** We have a `modules/` directory alongside `environments/`. A colleague proposes creating an `environments/prod/` that reuses the same modules with different variables. Another colleague says we should use Terraform workspaces instead. Compare these two approaches. Which would you recommend and why?
+**Q28.** We have a `modules/` directory alongside `environments/`. A colleague proposes creating an `environments/prod/` that reuses the same modules with different variables. Another colleague says we should use Terraform workspaces instead. Compare these two approaches. Which would you recommend and why?
 
-**Q26.** The backup module creates resources in **two AWS regions** (ap-southeast-2 for primary, ap-southeast-1 for DR) using provider aliases:
+**Q29.** The backup module creates resources in **two AWS regions** (ap-southeast-2 for primary, ap-southeast-1 for DR) using provider aliases:
 ```hcl
 provider "aws" {
   alias  = "dr"
@@ -176,33 +182,35 @@ provider "aws" {
 ```
 What are the challenges of managing multi-region infrastructure in a single Terraform configuration? When would you split it into separate configurations?
 
-**Q27.** Our database module handles RDS, KMS, monitoring, secrets, and SSM parameters — all in one module. A new team member argues it should be split into smaller modules (one for RDS, one for KMS, one for monitoring). What are the trade-offs? How would you decide?
+**Q30.** Our database module handles RDS, KMS, monitoring, secrets, and SSM parameters — all in one module. A new team member argues it should be split into smaller modules (one for RDS, one for KMS, one for monitoring). What are the trade-offs? How would you decide?
 
-**Q28.** You are designing the module interface (variables/outputs) for a new module. What principles guide which values should be variables vs hardcoded? Give an example of something that should NOT be a variable even though it could be.
+**Q31.** You are designing the module interface (variables/outputs) for a new module. What principles guide which values should be variables vs hardcoded? Give an example of something that should NOT be a variable even though it could be.
 
-**Q29.** We use `local.identifier` (e.g., `obs-lab-backup`) as a naming prefix throughout modules. What naming collision risks exist? How would you design a naming strategy that works across multiple environments, teams, and AWS accounts?
+**Q32.** We use `local.identifier` (e.g., `obs-lab-backup`) as a naming prefix throughout modules. What naming collision risks exist? How would you design a naming strategy that works across multiple environments, teams, and AWS accounts?
 
-**Q30.** Our modules use `merge(var.common_tags, { ... })` for tagging. In a multi-team organization, how would you enforce a mandatory tagging policy? Compare three approaches: Terraform validation, OPA policy, and AWS Organizations SCP. When would you use each?
+**Q33.** Our modules use `merge(var.common_tags, { ... })` for tagging. In a multi-team organization, how would you enforce a mandatory tagging policy? Compare three approaches: Terraform validation, OPA policy, and AWS Organizations SCP. When would you use each?
+
+**Q34.** Currently, if someone runs `terraform apply` on the shared environment, a mistake in the backup module could force-replace the RDS instance (blast radius = everything). How would you redesign the state architecture to isolate blast radius? What is the trade-off between isolation and operational complexity?
 
 ---
 
 ## Section 6: State Management — Advanced (5 questions)
 
-**Q31.** You need to refactor the network module — moving `aws_subnet` resources from a flat list (`count`) to a map (`for_each` with AZ keys). This changes resource addresses from `aws_subnet.private[0]` to `aws_subnet.private["ap-southeast-2a"]`. How do you perform this migration without destroying and recreating subnets? Walk through the exact steps.
+**Q35.** You need to refactor the network module — moving `aws_subnet` resources from a flat list (`count`) to a map (`for_each` with AZ keys). This changes resource addresses from `aws_subnet.private[0]` to `aws_subnet.private["ap-southeast-2a"]`. How do you perform this migration without destroying and recreating subnets? Walk through the exact steps.
 
-**Q32.** A failed `terraform apply` left your state file locked in DynamoDB. The engineer who started the apply has gone home. How do you safely unlock the state? What risks does force-unlocking carry?
+**Q36.** A failed `terraform apply` left your state file locked in DynamoDB. The engineer who started the apply has gone home. How do you safely unlock the state? What risks does force-unlocking carry?
 
-**Q33.** Your state file contains sensitive data (RDS master password, KMS key ARNs). How does Terraform handle sensitive values in state? What additional measures should you take to protect the state file at rest and in transit?
+**Q37.** Your state file contains sensitive data (RDS master password, KMS key ARNs). How does Terraform handle sensitive values in state? What additional measures should you take to protect the state file at rest and in transit?
 
-**Q34.** You discover that a resource in AWS was modified manually (someone changed a security group rule via the Console). Terraform doesn't know about this change. How do you detect drift? What are your options for resolving it — and what factors influence which option you choose?
+**Q38.** You discover that a resource in AWS was modified manually (someone changed a security group rule via the Console). Terraform doesn't know about this change. How do you detect drift? What are your options for resolving it — and what factors influence which option you choose?
 
-**Q35.** An engineer accidentally ran `terraform state rm aws_db_instance.postgres` on the production state. The RDS instance still exists in AWS but Terraform no longer tracks it. Describe the recovery process. What is the blast radius, and how would you prevent this from happening again?
+**Q39.** An engineer accidentally ran `terraform state rm aws_db_instance.postgres` on the production state. The RDS instance still exists in AWS but Terraform no longer tracks it. Describe the recovery process. What is the blast radius, and how would you prevent this from happening again?
 
 ---
 
 ## Section 7: Module Design — Advanced (5 questions)
 
-**Q36.** Our backup module uses `lifecycle { precondition }` to validate that retention periods satisfy AWS constraints:
+**Q40.** Our backup module uses `lifecycle { precondition }` to validate that retention periods satisfy AWS constraints:
 ```hcl
 lifecycle {
   precondition {
@@ -213,56 +221,56 @@ lifecycle {
 ```
 What is the difference between variable `validation` blocks, `precondition`, and `postcondition`? When would you use each? Can you give a scenario where `postcondition` is the only correct choice?
 
-**Q37.** You are publishing a module to a private Terraform registry for other teams to consume. How do you handle **breaking changes** (e.g., renaming a variable)? Describe a complete versioning and communication strategy that doesn't break consumers.
+**Q41.** You are publishing a module to a private Terraform registry for other teams to consume. How do you handle **breaking changes** (e.g., renaming a variable)? Describe a complete versioning and communication strategy that doesn't break consumers.
 
-**Q38.** Our modules don't use `terraform_remote_state` data source — instead, module outputs are passed directly via module composition in `main.tf`. Why is direct composition preferred over `terraform_remote_state`? When is `terraform_remote_state` actually appropriate?
+**Q42.** Our modules don't use `terraform_remote_state` data source — instead, module outputs are passed directly via module composition in `main.tf`. Why is direct composition preferred over `terraform_remote_state`? When is `terraform_remote_state` actually appropriate?
 
-**Q39.** A module currently works for a single environment. You need to deploy it to dev, staging, and prod with different configurations. Compare three approaches:
+**Q43.** A module currently works for a single environment. You need to deploy it to dev, staging, and prod with different configurations. Compare three approaches:
 - A) Copy-paste the module call three times with different variables
 - B) Use `for_each` on the module block
 - C) Use separate directories per environment
 
 What are the trade-offs of each? What would you recommend for a team of 10?
 
-**Q40.** Our backup module creates its own KMS key internally. The database module also creates its own KMS key. A security architect asks: "Should we have a centralized KMS module that all other modules reference?" Analyze this proposal — what are the benefits and risks?
+**Q44.** Our backup module creates its own KMS key internally. The database module also creates its own KMS key. A security architect asks: "Should we have a centralized KMS module that all other modules reference?" Analyze this proposal — what are the benefits and risks?
 
 ---
 
 ## Section 8: Troubleshooting & Edge Cases (6 questions)
 
-**Q41.** You run `terraform plan` and see `~ (forces replacement)` on the RDS instance due to a change in `engine_version`. What does "forces replacement" mean for a database? How would you handle this in production to avoid data loss?
+**Q45.** You run `terraform plan` and see `~ (forces replacement)` on the RDS instance due to a change in `engine_version`. What does "forces replacement" mean for a database? How would you handle this in production to avoid data loss?
 
-**Q42.** Terraform apply fails with the error:
+**Q46.** Terraform apply fails with the error:
 ```
 Error: creating IAM Role: LimitExceededException: 
 Cannot exceed quota for RolesPerAccount: 1000
 ```
 How do you resolve this? What does this tell you about how the infrastructure has been managed?
 
-**Q43.** A module that has been working for months suddenly fails during `terraform init` with:
+**Q47.** A module that has been working for months suddenly fails during `terraform init` with:
 ```
 Error: Failed to query available provider packages
 │ Could not retrieve the list of available versions for provider hashicorp/aws
 ```
 What are the possible causes? How do you make your Terraform configuration resilient to registry outages?
 
-**Q44.** You run `terraform plan` and see **200+ changes** even though you only modified one variable. What could cause Terraform to show a "blast radius" much larger than expected? How do you investigate which change is cascading?
+**Q48.** You run `terraform plan` and see **200+ changes** even though you only modified one variable. What could cause Terraform to show a "blast radius" much larger than expected? How do you investigate which change is cascading?
 
-**Q45.** Your team uses a shared S3 bucket for state, and one morning you discover the state file is 0 bytes (corrupted/empty). How do you recover? What preventive measures should have been in place?
+**Q49.** Your team uses a shared S3 bucket for state, and one morning you discover the state file is 0 bytes (corrupted/empty). How do you recover? What preventive measures should have been in place?
 
-**Q46.** A colleague submits a PR that adds a `provisioner "local-exec"` block to run a database migration script after RDS creation. What are your concerns with this approach? What alternatives would you suggest?
+**Q50.** A colleague submits a PR that adds a `provisioner "local-exec"` block to run a database migration script after RDS creation. What are your concerns with this approach? What alternatives would you suggest?
 
 ---
 
 ## Section 9: Strategic Thinking (4 questions)
 
-**Q47.** You join a company that manages 50+ AWS accounts with no IaC — everything was created via Console. You're tasked with "terraforming" the infrastructure. Describe your strategy. What do you import first? How do you structure the project? What is your 3-month roadmap?
+**Q51.** You join a company that manages 50+ AWS accounts with no IaC — everything was created via Console. You're tasked with "terraforming" the infrastructure. Describe your strategy. What do you import first? How do you structure the project? What is your 3-month roadmap?
 
-**Q48.** Your CTO asks: "Why don't we just use AWS CloudFormation instead of Terraform? It's native to AWS and we only use AWS." How do you respond? Be balanced — give honest pros and cons of each.
+**Q52.** Your CTO asks: "Why don't we just use AWS CloudFormation instead of Terraform? It's native to AWS and we only use AWS." How do you respond? Be balanced — give honest pros and cons of each.
 
-**Q49.** A startup with 3 engineers asks you to set up their Terraform workflow. An enterprise with 50 engineers asks the same thing. How would your recommendations differ? Focus on state management, module governance, and pipeline design.
+**Q53.** A startup with 3 engineers asks you to set up their Terraform workflow. An enterprise with 50 engineers asks the same thing. How would your recommendations differ? Focus on state management, module governance, and pipeline design.
 
-**Q50.** You are reviewing another team's Terraform code and notice they have:
+**Q54.** You are reviewing another team's Terraform code and notice they have:
 - No tests
 - No `.checkov.yml`
 - No `CHANGELOG.md`
@@ -281,13 +289,13 @@ How do you prioritize improvements? What do you fix first, second, third? Justif
 | Terraform Fundamentals | A | Junior–Mid | 7 |
 | State Management Basics | A | Junior–Mid | 5 |
 | Module Design Basics | A | Junior–Mid | 6 |
-| Day-to-Day Operations | A | Junior–Mid | 5 |
-| Architecture Decisions | B | Senior+ | 7 |
+| Day-to-Day Ops & Team Workflow | A | Junior–Mid | 8 |
+| Architecture & Blast Radius | B | Senior+ | 8 |
 | State Management Advanced | B | Senior+ | 5 |
 | Module Design Advanced | B | Senior+ | 5 |
 | Troubleshooting & Edge Cases | B | Senior+ | 6 |
 | Strategic Thinking | B | Senior+ | 4 |
-| **Total** | | | **50** |
+| **Total** | | | **54** |
 
 > **Evaluation criteria:**
 > - **Technical accuracy** — Is the answer correct?
