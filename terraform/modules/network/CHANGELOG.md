@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-05
+
+### Added
+- **Dual-destination VPC Flow Logs** — S3 archive alongside existing CloudWatch
+  - `aws_flow_log.s3` → ALL traffic to S3 (Hive-compatible partitions, 10-min batches)
+  - `aws_flow_log.cloudwatch` → configurable traffic type (default ALL)
+  - S3 bucket ARN passed from external `logging` module (separate lifecycle)
+- **Variables:**
+  - `flow_logs_s3_bucket_arn` — S3 destination (empty = disabled)
+  - `flow_logs_cloudwatch_traffic_type` — ALL, ACCEPT, or REJECT
+
+### Changed
+- Renamed `aws_flow_log.this` → `aws_flow_log.cloudwatch` for clarity
+  (**breaking**: existing flow log will be recreated on next apply)
+
+### Investigated
+- `AllowKMSForFlowLogs` in IAM role policy — likely unnecessary because
+  CloudWatch Logs service (not the Flow Logs role) calls KMS for encryption.
+  Commented out with explanation for verification on next deploy.
+
 ## [1.0.1] - 2026-04-16
 
 ### Added

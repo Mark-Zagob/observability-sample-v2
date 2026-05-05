@@ -33,7 +33,7 @@ conftest test tfplan.json --policy ../../policy/ --fail-on-warn
 | File | deny | warn | Level | Kiểm tra gì |
 |------|------|------|-------|-------------|
 | `rds.rego` | 4 | 3 | CRITICAL | Encryption, public access, IAM auth, backup >= 7d |
-| `s3.rego` | 2 | 1 | CRITICAL | Public access block, encryption, versioning |
+| `s3.rego` | 3 | 1 | CRITICAL | Public access block, encryption, versioning, log lifecycle |
 | `kms.rego` | 1 | 1 | SECURITY | Key rotation, deletion window |
 | `general.rego` | 2 | 1 | COMPLIANCE | Tagging, cost guard, naming |
 | `iam.rego` | 3 | 1 | SECURITY | Wildcard actions, trust policy, admin access |

@@ -58,3 +58,35 @@ warn contains msg if {
         [rc.address]
     )
 }
+
+# ----- DENY: S3 log bucket phải có lifecycle configuration [SOC2-A1.2] -----
+# Log data without lifecycle → storage cost grows unbounded.
+# Applies to S3 buckets used for log storage (matched by name pattern).
+
+deny contains msg if {
+    some rc in input.resource_changes
+    rc.type == "aws_s3_bucket"
+    rc.mode == "managed"
+    rc.change.actions[_] in ["create", "update"]
+
+    # Only apply to log-related buckets
+    contains(rc.address, "log")
+
+    # Check no lifecycle configuration references this bucket
+    not has_lifecycle(rc.address)
+
+    msg := sprintf(
+        "🔴 [COMPLIANCE][SOC2-A1.2] S3 log bucket '%s' phải có lifecycle configuration để tránh chi phí lưu trữ không giới hạn",
+        [rc.address]
+    )
+}
+
+# Helper: check if a bucket address has a matching lifecycle configuration
+has_lifecycle(bucket_address) if {
+    some rc in input.resource_changes
+    rc.type == "aws_s3_bucket_lifecycle_configuration"
+    rc.mode == "managed"
+    # Same module prefix means they belong together
+    startswith(rc.address, trim_suffix(bucket_address, split(bucket_address, ".")[count(split(bucket_address, ".")) - 1]))
+}
+
