@@ -144,19 +144,28 @@ resource "aws_iam_role_policy" "flow_logs" {
           aws_cloudwatch_log_group.flow_logs[each.key].arn,
           "${aws_cloudwatch_log_group.flow_logs[each.key].arn}:*"
         ]
-      },
-      {
-        Sid    = "AllowKMSForFlowLogs"
-        Effect = "Allow"
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:GenerateDataKey*"
-        ]
-        Resource = [
-          aws_kms_key.flow_logs[each.key].arn
-        ]
       }
+      #----------------------------------------------------------
+      # NOTE: AllowKMSForFlowLogs is likely unnecessary here.
+      # Flow Logs calls logs:PutLogEvents → CloudWatch Logs.
+      # CloudWatch Logs (not Flow Logs role) calls KMS to encrypt.
+      # KMS access is granted via KMS key policy (line 68-86)
+      # to principal: logs.<region>.amazonaws.com
+      # Keeping commented for reference — verify by deploying
+      # without this block and confirming logs still flow.
+      #----------------------------------------------------------
+      # {
+      #   Sid    = "AllowKMSForFlowLogs"
+      #   Effect = "Allow"
+      #   Action = [
+      #     "kms:Encrypt",
+      #     "kms:Decrypt",
+      #     "kms:GenerateDataKey*"
+      #   ]
+      #   Resource = [
+      #     aws_kms_key.flow_logs[each.key].arn
+      #   ]
+      # }
     ]
   })
 }
