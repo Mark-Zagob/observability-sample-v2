@@ -71,6 +71,23 @@ variable "flow_logs_retention_days" {
   }
 }
 
+variable "flow_logs_cloudwatch_traffic_type" {
+  description = "Traffic type for CloudWatch flow logs: ALL or REJECT. REJECT reduces cost while capturing security-relevant events."
+  type        = string
+  default     = "ALL"
+
+  validation {
+    condition     = contains(["ALL", "ACCEPT", "REJECT"], var.flow_logs_cloudwatch_traffic_type)
+    error_message = "flow_logs_cloudwatch_traffic_type must be ALL, ACCEPT, or REJECT."
+  }
+}
+
+variable "flow_logs_s3_bucket_arn" {
+  description = "S3 bucket ARN for flow log archive. Empty string disables S3 destination."
+  type        = string
+  default     = ""
+}
+
 
 
 #--------------------------------------------------------------

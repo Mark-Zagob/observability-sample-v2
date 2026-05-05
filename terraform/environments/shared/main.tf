@@ -4,7 +4,27 @@
 #--------------------------------------------------------------
 
 #--------------------------------------------------------------
-# Module 1: Network (VPC, Subnets, NAT, Flow Logs)
+# Module 1: Logging (S3 + Athena for centralized log storage)
+# Must be deployed before network — network needs bucket ARN.
+# Separate lifecycle: destroying VPC does NOT destroy log archive.
+#--------------------------------------------------------------
+module "logging" {
+  source = "../../modules/logging"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  # Lifecycle: Standard (0-90d) → Glacier (90-365d) → Delete
+  flow_logs_glacier_transition_days = 90
+  flow_logs_expiration_days         = 365
+
+  common_tags = {
+    Module = "logging"
+  }
+}
+
+#--------------------------------------------------------------
+# Module 2: Network (VPC, Subnets, NAT, Flow Logs)
 #--------------------------------------------------------------
 module "network" {
   source = "../../modules/network"
@@ -19,9 +39,11 @@ module "network" {
   # NAT Gateway: true = 1 NAT (save $2/day), false = 3 NAT (HA)
   single_nat_gateway = var.single_nat_gateway
 
-  # VPC Flow Logs: ghi network traffic vào CloudWatch
-  enable_flow_logs         = var.enable_flow_logs
-  flow_logs_retention_days = 30 # Minimum per logging compliance policy
+  # VPC Flow Logs: dual-destination (CloudWatch + S3)
+  enable_flow_logs                  = var.enable_flow_logs
+  flow_logs_retention_days          = 30                                  # Minimum per logging compliance policy
+  flow_logs_cloudwatch_traffic_type = "REJECT"                            # Cost: only security events to CloudWatch
+  flow_logs_s3_bucket_arn           = module.logging.flow_logs_bucket_arn # ALL traffic to S3
 
   common_tags = {
     Module = "network"
@@ -29,7 +51,7 @@ module "network" {
 }
 
 #--------------------------------------------------------------
-# Module 2: VPC Endpoints (S3, DynamoDB Gateway + Interface)
+# Module 3: VPC Endpoints (S3, DynamoDB Gateway + Interface)
 # Tách riêng khỏi network module theo Single Responsibility Principle.
 # Gateway endpoints (S3, DynamoDB) = FREE — should always be enabled.
 # Interface endpoints = optional, ~$7.2/month per endpoint per AZ.
@@ -59,7 +81,7 @@ module "vpc_endpoints" {
 }
 
 #--------------------------------------------------------------
-# Module 3: Security (SGs, IAM Roles, Key Pair)
+# Module 4: Security (SGs, IAM Roles, Key Pair)
 #--------------------------------------------------------------
 module "security" {
   source = "../../modules/security"
@@ -85,7 +107,7 @@ module "security" {
 }
 
 #--------------------------------------------------------------
-# Module 4: Database (RDS PostgreSQL + Secrets + SSM + Monitoring)
+# Module 5: Database (RDS PostgreSQL + Secrets + SSM + Monitoring)
 #--------------------------------------------------------------
 module "database" {
   source = "../../modules/database"
@@ -125,7 +147,7 @@ module "database" {
 }
 
 #--------------------------------------------------------------
-# Module 5: Backup (AWS Backup + Cross-Region Copy)
+# Module 6: Backup (AWS Backup + Cross-Region Copy)
 # Centralized backup for all resources tagged Backup=true.
 # Must be deployed early to protect existing infrastructure.
 #--------------------------------------------------------------
@@ -153,7 +175,7 @@ module "backup" {
   monthly_cold_storage_after_days = 30
 
   # Cross-region copy (DR Tier 1)
-  enable_cross_region_copy        = var.backup_enable_cross_region_copy
+  enable_cross_region_copy         = var.backup_enable_cross_region_copy
   cross_region_copy_retention_days = var.backup_cross_region_retention_days
 
   # Notifications
@@ -169,7 +191,7 @@ module "backup" {
 }
 
 #--------------------------------------------------------------
-# Module 6: Cache (ElastiCache Redis) — sẽ thêm sau
+# Module 7: Cache (ElastiCache Redis) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "cache" {
 #   source = "../../modules/cache"
@@ -177,7 +199,7 @@ module "backup" {
 # }
 
 #--------------------------------------------------------------
-# Module 7: Streaming (MSK Kafka) — sẽ thêm sau
+# Module 8: Streaming (MSK Kafka) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "streaming" {
 #   source = "../../modules/streaming"

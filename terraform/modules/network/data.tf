@@ -61,5 +61,5 @@ locals {
   shared_block_mgmt = cidrsubnet(local.others_blocks[1], 1, 1)
 
   data_cidrs = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_data, 5, index(keys(local.az_map), k)) }
-  mgmt_cidrs    = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_mgmt, 6, index(keys(local.az_map), k)) }
+  mgmt_cidrs = { for k, az in local.az_map : k => cidrsubnet(local.shared_block_mgmt, 6, index(keys(local.az_map), k)) }
 }
