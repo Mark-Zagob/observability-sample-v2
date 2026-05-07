@@ -12,8 +12,8 @@
 #   - S3 bucket managed by logging module (separate lifecycle)
 #--------------------------------------------------------------
 locals {
-  flow_logs    = var.enable_flow_logs ? { "vpc" = aws_vpc.this.id } : {}
-  flow_logs_s3 = var.enable_flow_logs && var.flow_logs_s3_bucket_arn != "" ? { "vpc" = aws_vpc.this.id } : {}
+  flow_logs    = var.enable_flow_logs ? toset(["vpc"]) : toset([])
+  flow_logs_s3 = var.enable_flow_logs && var.flow_logs_s3_bucket_arn != "" ? toset(["vpc"]) : toset([])
 }
 
 #--------------------------------------------------------------
@@ -22,7 +22,7 @@ locals {
 resource "aws_flow_log" "cloudwatch" {
   for_each = local.flow_logs
 
-  vpc_id          = each.value
+  vpc_id          = aws_vpc.this.id
   traffic_type    = var.flow_logs_cloudwatch_traffic_type
   iam_role_arn    = aws_iam_role.flow_logs[each.key].arn
   log_destination = aws_cloudwatch_log_group.flow_logs[each.key].arn
@@ -38,7 +38,7 @@ resource "aws_flow_log" "cloudwatch" {
 resource "aws_flow_log" "s3" {
   for_each = local.flow_logs_s3
 
-  vpc_id                   = each.value
+  vpc_id                   = aws_vpc.this.id
   traffic_type             = "ALL"
   log_destination          = var.flow_logs_s3_bucket_arn
   log_destination_type     = "s3"
