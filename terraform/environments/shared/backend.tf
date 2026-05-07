@@ -30,7 +30,7 @@ terraform {
     #----------------------------------------------------------
     # State Locking (prevent concurrent apply)
     #----------------------------------------------------------
-    dynamodb_table = "terraform-state-locks" # ← From bootstrap output
+    use_lockfile = true # Native S3 locking (Terraform 1.10+, replaces DynamoDB)
 
     #----------------------------------------------------------
     # Encryption at-rest (KMS CMK)
