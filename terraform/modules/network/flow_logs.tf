@@ -13,7 +13,7 @@
 #--------------------------------------------------------------
 locals {
   flow_logs    = var.enable_flow_logs ? toset(["vpc"]) : toset([])
-  flow_logs_s3 = var.enable_flow_logs && var.flow_logs_s3_bucket_arn != "" ? toset(["vpc"]) : toset([])
+  flow_logs_s3 = var.enable_flow_logs && var.enable_flow_logs_s3 ? toset(["vpc"]) : toset([])
 }
 
 #--------------------------------------------------------------

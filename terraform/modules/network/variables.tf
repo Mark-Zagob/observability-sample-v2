@@ -82,8 +82,14 @@ variable "flow_logs_cloudwatch_traffic_type" {
   }
 }
 
+variable "enable_flow_logs_s3" {
+  description = "Enable S3 destination for VPC Flow Logs. Must be true when flow_logs_s3_bucket_arn is provided."
+  type        = bool
+  default     = false
+}
+
 variable "flow_logs_s3_bucket_arn" {
-  description = "S3 bucket ARN for flow log archive. Empty string disables S3 destination."
+  description = "S3 bucket ARN for flow log archive. Required when enable_flow_logs_s3 = true."
   type        = string
   default     = ""
 }
