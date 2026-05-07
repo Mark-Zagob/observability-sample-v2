@@ -16,7 +16,7 @@
 
 | Layer | Modules | Trạng thái |
 |-------|---------|-----------|
-| **Foundation** | network, vpc-endpoints, security | ✅ Done |
+| **Foundation** | network, vpc-endpoints, security, logging | ✅ Done |
 | **Data** | database (RDS) | ✅ Done |
 | **Data** | cache (ElastiCache), streaming (MSK) | 🔲 TODO |
 | **Platform** | ecr, efs, loadbalancer | 🔲 TODO |
@@ -76,6 +76,7 @@ terraform/
 │   ├── security/             ✅
 │   ├── database/             ✅
 │   ├── backup/               ✅
+│   ├── logging-flow-logs/    ✅  # S3 + Athena for flow log archive
 │   └── ... (xem IMPLEMENTATION_PLAN.md)
 ├── environments/
 │   ├── shared/               ✅  # Shared infra (S3 backend)

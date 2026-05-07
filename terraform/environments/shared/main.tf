@@ -9,7 +9,7 @@
 # Separate lifecycle: destroying VPC does NOT destroy log archive.
 #--------------------------------------------------------------
 module "logging" {
-  source = "../../modules/logging"
+  source = "../../modules/logging-flow-logs"
 
   project_name = var.project_name
   environment  = var.environment

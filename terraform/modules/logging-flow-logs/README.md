@@ -1,4 +1,4 @@
-# Logging Module
+# Logging — Flow Logs Module
 
 Production-grade centralized log storage with S3 lifecycle tiering, KMS encryption, and Athena query-ready Glue catalog for VPC Flow Logs forensic analysis.
 
@@ -77,7 +77,7 @@ LIMIT 100;
 ## File Structure
 
 ```
-logging/
+logging-flow-logs/
 ├── versions.tf        # Terraform >= 1.5.0, AWS ~> 5.0
 ├── variables.tf       # 6 input variables with validation
 ├── kms.tf             # CMK for S3 encryption + data sources

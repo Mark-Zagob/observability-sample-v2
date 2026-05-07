@@ -303,3 +303,5 @@ How do you prioritize improvements? What do you fix first, second, third? Justif
 > - **Blast radius awareness** — Do you think about what can go wrong?
 > - **Trade-off analysis** — Can you compare approaches objectively?
 > - **Real-world experience** — Can you relate answers to actual situations?
+
+> **Hands-on practice:** [chaos-exercises.md](chaos-exercises.md) contains 11 break/test/recover exercises mapped to senior questions (Q34, Q36, Q38, Q39, Q48, Q49). Complete the exercises to build real-world experience before answering.
