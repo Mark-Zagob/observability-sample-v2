@@ -41,42 +41,52 @@ modules/network/
 
 ---
 
-## Ex 1.1: Console Drift — Route Table
+## Ex 1.1: Console Drift — Route Table Tag
 
 **File:** `routing.tf` | **Time:** 15 min | **Interview Q:** Q38
 
-**Hypothesis:** Adding a route manually via Console will be detected by `terraform plan`.
+**Hypothesis:** Modifying a route table tag via Console will be detected by `terraform plan`.
+
+> **Note:** This module uses separate `aws_route` resources (not inline `route {}` blocks
+> inside `aws_route_table`). This means Terraform only tracks routes it created — manually
+> added routes are invisible to `terraform plan`. Tag changes, however, are always detected
+> because `aws_route_table` itself is in state.
 
 **Steady State:**
 ```bash
-# Find the private route table
+# Find private route tables (tag Name contains "rt-private")
 aws ec2 describe-route-tables \
-  --filters "Name=tag:Tier,Values=private" \
-  --query "RouteTables[0].{ID:RouteTableId,Routes:Routes[*].{Dest:DestinationCidrBlock,Target:NatGatewayId}}" \
-  --output json
+  --filters "Name=tag:Name,Values=*rt-private*" \
+  --query "RouteTables[*].{ID:RouteTableId,Name:Tags[?Key=='Name'].Value|[0]}" \
+  --output table
 ```
 
-**Inject:** In AWS Console → VPC → Route Tables → find private route table → Add route: `192.168.0.0/16` → target: local
+**Inject:** In AWS Console → VPC → Route Tables → find any `*-rt-private-*` route table → Tags tab → edit the `Name` tag → change value to `hacked-private-rt`
 
 **Observe:**
 ```bash
 cd environments/shared
-terraform plan 2>&1 | grep -C 3 "route"
-# Question: Does Terraform detect the extra route?
-# Question: Does it propose to DELETE the manual route or UPDATE the table?
+terraform plan 2>&1 | grep -C 3 "route_table"
+# Question: Does Terraform detect the tag change?
+# Question: What symbol does it show — `~` (update) or `-/+` (replace)?
+# Question: Does the plan show ONLY the tag change, or other attributes too?
 ```
 
-**Recover:** `terraform apply` — Terraform removes the rogue route.
+**Recover:**
+```bash
+terraform apply  # Terraform restores the original tag Name
+```
 
 **Learn:**
-- [ ] Was the drift detected as `~` (update) or something else?
-- [ ] What if someone added a route that Terraform also manages — conflict?
-- [ ] How to automate drift detection? (`terraform plan -detailed-exitcode` in cron/CI)
+- [ ] Was the drift detected as `~` (update in-place)? (Yes — tags are always in-place)
+- [ ] Why doesn't Terraform detect manually added routes? (Because `aws_route` is a separate resource — only routes in state are tracked)
+- [ ] What if you used inline `route {}` blocks instead? (Then ALL route changes would be detected — but inline is not recommended for complex routing)
+- [ ] How to automate drift detection? (`terraform plan -detailed-exitcode` returns exit code 2 when drift exists)
 
 **Team-size perspective:**
 - [ ] **Team 3–5:** Who detects this drift? (Engineer notices during next `plan`)
 - [ ] **Team 10–20:** Scheduled drift detection in CI (e.g., nightly `plan` → Slack alert)
-- [ ] **Team 50+:** AWS Config rule `vpc-flow-logs-enabled` + auto-remediation via SSM
+- [ ] **Team 50+:** AWS Config rule + auto-remediation via SSM
 
 ---
 
