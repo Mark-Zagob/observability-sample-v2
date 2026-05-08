@@ -1,0 +1,235 @@
+# ============================================================
+# Terraform Drift Detection
+# ============================================================
+# Detects configuration drift between Terraform state and
+# actual AWS resources. Runs nightly and on manual trigger.
+#
+# Exit codes from `terraform plan -detailed-exitcode`:
+#   0 = No changes (no drift)
+#   1 = Error
+#   2 = Changes detected (drift found)
+#
+# Usage:
+#   - Nightly: auto-runs at 2:00 AM UTC
+#   - Manual:  Actions tab → Run workflow → select environment
+# ============================================================
+
+name: Terraform — Drift Detection
+
+on:
+  # --------------------------------------------------------
+  # Nightly schedule (Team 10-20 production pattern)
+  # --------------------------------------------------------
+  # schedule:
+  #   - cron: '0 2 * * *'  # 2:00 AM UTC daily
+
+  # --------------------------------------------------------
+  # Manual trigger for chaos exercises / on-demand checks
+  # --------------------------------------------------------
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: true
+        type: choice
+        options:
+          - shared
+          - dev
+        default: shared
+      auto_apply:
+        description: 'Auto-apply to fix drift (use with caution!)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.14.8"
+  AWS_REGION: "ap-southeast-2"
+
+jobs:
+  drift-detection:
+    name: Drift Check (${{ inputs.environment || 'shared' }})
+    runs-on: ubuntu-latest
+    # Prevent concurrent drift checks on same environment
+    concurrency:
+      group: terraform-drift-${{ inputs.environment || 'shared' }}
+      cancel-in-progress: false
+
+    env:
+      ENVIRONMENT: ${{ inputs.environment || 'shared' }}
+
+    steps:
+      # ======================================================
+      # Setup
+      # ======================================================
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ======================================================
+      # Drift Detection
+      # ======================================================
+      - name: Terraform Init
+        working-directory: observability-sample-v2/terraform/environments/${{ env.ENVIRONMENT }}
+        run: terraform init -input=false
+
+      - name: Detect Drift
+        id: drift
+        working-directory: observability-sample-v2/terraform/environments/${{ env.ENVIRONMENT }}
+        run: |
+          echo "## 🔍 Drift Detection — ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Run plan and capture exit code
+          set +e
+          terraform plan -detailed-exitcode -input=false \
+            -out=drift.tfplan 2>&1 | tee plan-output.txt
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "status=clean" >> $GITHUB_OUTPUT
+            echo "### ✅ No drift detected" >> $GITHUB_STEP_SUMMARY
+          elif [ $EXIT_CODE -eq 2 ]; then
+            echo "status=drift" >> $GITHUB_OUTPUT
+
+            # Extract drift summary
+            DRIFT_ADD=$(grep -c "will be created" plan-output.txt || echo "0")
+            DRIFT_CHANGE=$(grep -c "will be updated" plan-output.txt || echo "0")
+            DRIFT_DESTROY=$(grep -c "will be destroyed" plan-output.txt || echo "0")
+            DRIFT_REPLACE=$(grep -c "must be replaced" plan-output.txt || echo "0")
+
+            echo "### ⚠️ Drift Detected!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Create (+) | $DRIFT_ADD |" >> $GITHUB_STEP_SUMMARY
+            echo "| Update (~) | $DRIFT_CHANGE |" >> $GITHUB_STEP_SUMMARY
+            echo "| Destroy (-) | $DRIFT_DESTROY |" >> $GITHUB_STEP_SUMMARY
+            echo "| Replace (-/+) | $DRIFT_REPLACE |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Show only the plan summary (last 30 lines)
+            tail -30 plan-output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "status=error" >> $GITHUB_OUTPUT
+            echo "### ❌ Terraform plan failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -20 plan-output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload plan output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ env.ENVIRONMENT }}-${{ github.run_number }}
+          path: observability-sample-v2/terraform/environments/${{ env.ENVIRONMENT }}/plan-output.txt
+          retention-days: 30
+
+      # ======================================================
+      # Alert (only when drift detected)
+      # ======================================================
+      - name: Slack Alert
+        if: steps.drift.outputs.status == 'drift'
+        continue-on-error: true  # Don't fail workflow if Slack is down
+        run: |
+          # Skip if webhook not configured
+          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "⏭️ Slack webhook not configured, skipping alert"
+            exit 0
+          fi
+
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "text": "⚠️ Terraform Drift Detected in *${{ env.ENVIRONMENT }}*",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": { "type": "plain_text", "text": "⚠️ Terraform Drift Detected" }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Environment:*\n${{ env.ENVIRONMENT }}" },
+                    { "type": "mrkdwn", "text": "*Trigger:*\n${{ github.event_name }}" },
+                    { "type": "mrkdwn", "text": "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>" }
+                  ]
+                }
+              ]
+            }'
+
+      - name: Telegram Alert
+        if: steps.drift.outputs.status == 'drift'
+        continue-on-error: true
+        run: |
+          # Skip if bot token not configured
+          if [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]; then
+            echo "⏭️ Telegram not configured, skipping alert"
+            exit 0
+          fi
+
+          MESSAGE="⚠️ *Terraform Drift Detected*
+
+          *Environment:* \`${{ env.ENVIRONMENT }}\`
+          *Trigger:* ${{ github.event_name }}
+          *Time:* $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+                    curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                      -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                      -d parse_mode="Markdown" \
+                      -d text="$MESSAGE"
+
+      # ======================================================
+      # Auto-apply (only on manual trigger with approval)
+      # ======================================================
+      - name: Auto-apply drift fix
+        if: |
+          steps.drift.outputs.status == 'drift' &&
+          inputs.auto_apply == true &&
+          github.event_name == 'workflow_dispatch'
+        working-directory: observability-sample-v2/terraform/environments/${{ env.ENVIRONMENT }}
+        run: |
+          echo "### 🔧 Auto-applying drift fix..." >> $GITHUB_STEP_SUMMARY
+          terraform apply -auto-approve drift.tfplan 2>&1 | tee apply-output.txt
+
+          if [ $? -eq 0 ]; then
+            echo "### ✅ Drift resolved successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Auto-apply failed — manual intervention required" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ======================================================
+      # Final status
+      # ======================================================
+      - name: Fail on drift (scheduled runs only)
+        if: |
+          steps.drift.outputs.status == 'drift' &&
+          github.event_name == 'schedule'
+        run: |
+          echo "::error::Drift detected in ${{ env.ENVIRONMENT }}. Review the plan output and apply changes."
+          exit 1
