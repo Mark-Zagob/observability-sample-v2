@@ -193,16 +193,16 @@ jobs:
 
           MESSAGE="⚠️ *Terraform Drift Detected*
 
-*Environment:* \`${{ env.ENVIRONMENT }}\`
-*Trigger:* ${{ github.event_name }}
-*Time:* $(date -u '+%Y-%m-%d %H:%M UTC')
+          *Environment:* \`${{ env.ENVIRONMENT }}\`
+          *Trigger:* ${{ github.event_name }}
+          *Time:* $(date -u '+%Y-%m-%d %H:%M UTC')
 
-[View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d parse_mode="Markdown" \
-            -d text="$MESSAGE"
+                    curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                      -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                      -d parse_mode="Markdown" \
+                      -d text="$MESSAGE"
 
       # ======================================================
       # Auto-apply (only on manual trigger with approval)
