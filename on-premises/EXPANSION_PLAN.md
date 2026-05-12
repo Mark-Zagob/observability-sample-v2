@@ -331,6 +331,159 @@ Option B: CDC (Change Data Capture)
 
 ## Kiến Trúc Tổng Thể Sau Mở Rộng
 
+### System Architecture (10 Services)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                              Applications VM                                             │
+│                                                                                          │
+│  ┌─────────────────────────────────────── API Layer ──────────────────────────────────┐   │
+│  │                                                                                    │   │
+│  │  ┌──────────┐   rate    ┌──────────────┐    JWT     ┌─────────────────┐            │   │
+│  │  │  Web UI  │──limit──►│ API Gateway  │──verify──►│  Auth Service   │            │   │
+│  │  │  (nginx) │          │  Flask :5000  │◄──token───│  Flask :5006    │            │   │
+│  │  │  :8580   │          │  + Circuit   │           │  [auth_db]      │            │   │
+│  │  └──────────┘          │    Breaker    │           └─────────────────┘            │   │
+│  │                        └──────┬───────┘                                           │   │
+│  │                               │ HTTP                                              │   │
+│  └───────────────────────────────┼───────────────────────────────────────────────────┘   │
+│                                  ▼                                                       │
+│  ┌─────────────────────────────── Core Services ─────────────────────────────────────┐   │
+│  │                                                                                    │   │
+│  │  ┌─────────────────┐  HTTP+CB  ┌──────────────┐        ┌──────────────────┐       │   │
+│  │  │  Order Service  │─────────►│Payment Service│        │  Search Service  │       │   │
+│  │  │  Flask :5001    │          │  Flask :5002   │        │  Flask :5009     │       │   │
+│  │  │                 │          └──────────────┘        │  [OpenSearch]    │       │   │
+│  │  │  [app_db]       │                                   └──────────────────┘       │   │
+│  │  │  [Redis cache]  │                                          ▲                   │   │
+│  │  └────────┬────────┘                                          │ event sync        │   │
+│  │           │ Kafka produce                                     │                   │   │
+│  └───────────┼───────────────────────────────────────────────────┼───────────────────┘   │
+│              ▼                                                   │                       │
+│  ┌─────────────────────────────── Event Bus ─────────────────────┼───────────────────┐   │
+│  │                                                               │                   │   │
+│  │  ┌─────────────────────────────────────┐                      │                   │   │
+│  │  │           Kafka (KRaft :9092)        │                      │                   │   │
+│  │  │                                     │                      │                   │   │
+│  │  │  Topics:                            │                      │                   │   │
+│  │  │   order.created ──────────────────────────────────────────►│                   │   │
+│  │  │   order.payment_completed           │                                          │   │
+│  │  │   order.payment_failed              │                                          │   │
+│  │  │   order.shipped          (new)      │                                          │   │
+│  │  │   order.shipping_failed  (new)      │                                          │   │
+│  │  │   order.refunded         (new)      │                                          │   │
+│  │  │   order.shipping.dlq     (new)      │                                          │   │
+│  │  └──────────┬──────────────────────────┘                                          │   │
+│  │             │ consume                                                             │   │
+│  │     ┌───────┼───────────┬──────────────┐                                          │   │
+│  │     ▼       ▼           ▼              │                                          │   │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐                           │   │
+│  │  │  Notification │ │  Inventory   │ │ Shipping Worker  │ (NEW)                    │   │
+│  │  │  Worker :5004 │ │  Worker :5005│ │  :5008           │                          │   │
+│  │  │  [app_db]     │ │  [app_db]    │ │  Saga Orchestrator│                         │   │
+│  │  └──────────────┘ └──────────────┘ │  + DLQ handler    │                          │   │
+│  │                                     │  + Circuit Breaker│                          │   │
+│  │                                     └────────┬─────────┘                          │   │
+│  │                                              │ HTTP+CB                            │   │
+│  │                                              ▼                                    │   │
+│  │                                     ┌──────────────────┐                          │   │
+│  │                                     │ Shipping Service │ (NEW)                    │   │
+│  │                                     │  Flask :5007     │                          │   │
+│  │                                     │  [shipping_db]   │                          │   │
+│  │                                     └──────────────────┘                          │   │
+│  └───────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│  ┌─────────────────────────────── Data Layer ────────────────────────────────────────┐   │
+│  │                                                                                    │   │
+│  │  ┌──────────────────────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────────┐   │   │
+│  │  │      PostgreSQL :5432    │  │ Redis    │  │  OpenSearch  │  │  Kafka       │   │   │
+│  │  │  ┌────────┬──────────┐  │  │  :6379   │  │   :9200      │  │  :9092       │   │   │
+│  │  │  │ app_db │ auth_db  │  │  │  Cache   │  │  Search      │  │  KRaft mode  │   │   │
+│  │  │  │        │          │  │  │  TTL 60s │  │  Index       │  │  8 topics    │   │   │
+│  │  │  │        │shipping_ │  │  └──────────┘  └──────────────┘  │  + 1 DLQ     │   │   │
+│  │  │  │        │db        │  │                                   └──────────────┘   │   │
+│  │  │  └────────┴──────────┘  │                                                      │   │
+│  │  └──────────────────────────┘                                                     │   │
+│  │                                                                                    │   │
+│  │  ┌──────────────┐  ┌──────────────┐                                               │   │
+│  │  │ Kafka UI     │  │Kafka Exporter│                                               │   │
+│  │  │  :8585       │  │  :9308       │                                               │   │
+│  │  └──────────────┘  └──────────────┘                                               │   │
+│  └────────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│  Resilience: Circuit Breaker (pybreaker) │ Rate Limit (Redis) │ Health Checks (/health)  │
+│  Error Format: RFC 7807 + trace_id       │ Auth: JWT + RBAC   │ DLQ: order.shipping.dlq  │
+└────────────────────────────────┬─────────────────────────────────────────────────────────┘
+                                 │ OTLP (gRPC :4317)
+┌────────────────────────────────▼─────────────────────────────────────────────────────────┐
+│                          Observability VM                                                 │
+│                                                                                          │
+│  ┌────────────────┐  ┌────────────┐  ┌───────────────┐  ┌──────────────────────────┐    │
+│  │ OTel Collector │─►│ Prometheus │─►│  Grafana      │  │  Dashboards:             │    │
+│  │  :4317/:4318   │  │   :9090    │  │   :3000       │  │  • Application Health    │    │
+│  │                │  └────────────┘  │               │  │  • Kafka Overview        │    │
+│  │                │─►┌────────────┐  │               │  │  • Auth Overview    (NEW)│    │
+│  │                │  │   Tempo    │  │               │  │  • Saga Monitor     (NEW)│    │
+│  │                │  │   :3200    │  │               │  │  • Search Health    (NEW)│    │
+│  │                │  └────────────┘  │               │  │  • Cross-Service    (NEW)│    │
+│  │                │─►┌────────────┐  │               │  │  • SLI/SLO Burn Rate    │    │
+│  │                │  │   Loki     │  └───────────────┘  └──────────────────────────┘    │
+│  └────────────────┘  │   :3100    │  ┌───────────────┐                                  │
+│                      └────────────┘  │ Alertmanager  │                                  │
+│                                      │  → Telegram   │                                  │
+│                                      │  Alerts:      │                                  │
+│                                      │  • SLO burn   │                                  │
+│                                      │  • Saga fail  │                                  │
+│                                      │  • CB open    │                                  │
+│                                      │  • Auth brute │                                  │
+│                                      └───────────────┘                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Ports Summary (Sau mở rộng)
+
+| Port | Service | Type | Database |
+|------|---------|------|----------|
+| 5000 | API Gateway | HTTP + Rate Limit | - |
+| 5001 | Order Service | HTTP | app_db + Redis |
+| 5002 | Payment Service | HTTP | app_db |
+| 5003 | Traffic Generator | HTTP | - |
+| 5004 | Notification Worker | Kafka Consumer | app_db |
+| 5005 | Inventory Worker | Kafka Consumer | app_db |
+| **5006** | **Auth Service** (NEW) | HTTP | **auth_db** |
+| **5007** | **Shipping Service** (NEW) | HTTP | **shipping_db** |
+| **5008** | **Shipping Worker** (NEW) | Kafka Consumer + HTTP | **shipping_db** |
+| **5009** | **Search Service** (NEW) | HTTP + Kafka Consumer | **OpenSearch** |
+| 5432 | PostgreSQL | TCP | app_db, auth_db, shipping_db |
+| 6379 | Redis | TCP | - |
+| **9200** | **OpenSearch** (NEW) | HTTP | - |
+| 8580 | Web UI | HTTP | - |
+| 8585 | Kafka UI | HTTP | - |
+| 9092 | Kafka | TCP | - |
+| 9308 | Kafka Exporter | HTTP | - |
+
+### Data Flow (Sau mở rộng)
+
+```
+Synchronous (HTTP + JWT + Circuit Breaker):
+  Web UI → API Gateway ──JWT──► Auth Service (verify)
+                       ──HTTP──► Order Service ──HTTP+CB──► Payment Service
+                       ──HTTP──► Search Service ──query──► OpenSearch
+                                 Shipping Worker ──HTTP+CB──► Shipping Service
+
+Asynchronous (Kafka Event-Driven):
+  Order Service ──publish──► Kafka
+                                ├── order.created ──────► Notif Worker
+                                │                  ──────► Inventory Worker
+                                │                  ──────► Shipping Worker ──► Search Service
+                                ├── order.payment_completed ► Notif + Shipping Worker
+                                ├── order.payment_failed    ► Notif + Inventory
+                                ├── order.shipped           ► Notif
+                                ├── order.shipping_failed   ► Notif
+                                ├── order.refunded          ► Notif + Inventory
+                                └── order.shipping.dlq      ► Manual review
+```
+
 ### Communication Matrix
 
 ```
