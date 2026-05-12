@@ -304,4 +304,4 @@ How do you prioritize improvements? What do you fix first, second, third? Justif
 > - **Trade-off analysis** — Can you compare approaches objectively?
 > - **Real-world experience** — Can you relate answers to actual situations?
 
-> **Hands-on practice:** [chaos-exercises.md](chaos-exercises.md) contains 11 break/test/recover exercises mapped to senior questions (Q34, Q36, Q38, Q39, Q48, Q49). Complete the exercises to build real-world experience before answering.
+> **Hands-on practice:** [chaos-exercises-network.md](chaos-exercises-network.md) contains 12 break/test/recover exercises mapped to senior questions (Q12, Q34, Q35, Q36, Q38, Q39, Q48, Q49). Complete the exercises to build real-world experience before answering.

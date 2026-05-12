@@ -1,7 +1,7 @@
 # 🔥 Chaos Exercises — Network Module Deep Dive
 
 > Break it. Fix it. Understand it.
-> All exercises target `modules/network/` resources only.
+> All exercises target `modules/network/` and related module wiring.
 > Future modules (security, database, backup) will have their own exercise files.
 
 ## Prerequisites
@@ -489,6 +489,107 @@ moved {
 
 ---
 
+## Ex 3.5: Module Rename — State Conflict Recovery (Real Incident)
+
+**Time:** 20 min | **Interview Q:** Q12, Q35, Q39
+
+> ⚠️ This exercise is based on a **real incident** that occurred in this project
+> when `module "logging"` was renamed to `module "logging-flow-logs"` without
+> proper state migration.
+
+**Background:**
+
+Renaming a module in `main.tf` without a `moved` block or `state mv` causes Terraform to:
+1. Schedule **destruction** of all resources under the old module name
+2. Schedule **creation** of all resources under the new module name
+3. If apply runs → S3 bucket destroyed + recreated → **all flow log archives permanently lost**
+
+**Scenario:**
+
+```hcl
+# Before (in main.tf):
+module "logging" {
+  source = "../../modules/logging-flow-logs"
+  ...
+}
+
+# After (renamed without migration):
+module "logging-flow-logs" {
+  source = "../../modules/logging-flow-logs"
+  ...
+}
+```
+
+**What happened:**
+
+1. `terraform apply -target=module.network` → error:
+   ```
+   Error: creating S3 Bucket: BucketAlreadyOwnedByYou (409)
+   ```
+   State had resources at BOTH `module.logging` and `module.logging-flow-logs`.
+
+2. Adding a `moved` block failed:
+   ```
+   Warning: Unresolved resource instance address changes
+   module.logging could not move to module.logging-flow-logs
+   ```
+   Because `module.logging-flow-logs` already had partial data sources in state.
+
+**Recovery (what we actually did):**
+```bash
+# 1. Check state — confirm both module names exist
+terraform state list | grep -E "module\.(logging|logging-flow-logs)"
+# module.logging.aws_s3_bucket.flow_logs          ← old (has the real bucket)
+# module.logging-flow-logs.data.aws_caller_identity.current  ← new (only data sources)
+
+# 2. Remove old module entry from state (bucket stays in AWS)
+terraform state rm 'module.logging.aws_s3_bucket.flow_logs'
+
+# 3. Import existing bucket into new module name
+terraform import 'module.logging-flow-logs.aws_s3_bucket.flow_logs' \
+  'obs-flow-logs-730335245469'
+
+# 4. Verify
+terraform plan  # Should show no destroy/create for S3 bucket
+```
+
+**Prevention — correct approaches:**
+
+```hcl
+# Approach A: moved block (BEFORE any apply)
+moved {
+  from = module.logging
+  to   = module.logging-flow-logs
+}
+# terraform plan → "module.logging has moved to module.logging-flow-logs"
+```
+
+```bash
+# Approach B: state mv (imperative, before changing code)
+terraform state mv 'module.logging' 'module.logging-flow-logs'
+# Then rename in main.tf
+```
+
+**Learn:**
+- [ ] Why did `moved` block fail in our case? (Destination already had objects from a partial apply)
+- [ ] Which is safer: `moved` block or `state mv`? (`moved` — declarative, reviewable in PR, works across all environments)
+- [ ] What if the S3 bucket had been destroyed? (All flow log archives permanently lost — no recovery)
+- [ ] How to prevent blind `terraform apply` from destroying stateful resources?
+
+**Team-size perspective:**
+- [ ] **Team 3–5:** Always run `terraform plan` and **read the output** before apply. If you see `destroy` on S3/RDS → STOP.
+- [ ] **Team 10–20:** CI/CD pipeline should have a **guard rule**: block apply if plan contains `destroy` on stateful resources (S3 buckets, RDS instances, KMS keys). Example OPA rule:
+  ```rego
+  deny[msg] {
+    input.resource_changes[_].type == "aws_s3_bucket"
+    input.resource_changes[_].change.actions[_] == "delete"
+    msg := "Destroying S3 bucket requires manual approval"
+  }
+  ```
+- [ ] **Team 50+:** Separate state files per module layer. Renaming a module in the "logging" state cannot cascade to "network" state. Combined with SCP denying `s3:DeleteBucket` except break-glass roles.
+
+---
+
 # Phase 4: KMS & Encryption (Advanced)
 
 > 🔴 **Risk: HIGH** — KMS key deletion can make encrypted data permanently unreadable.
@@ -550,7 +651,7 @@ aws kms enable-key --key-id $KMS_KEY_ID
 | 2 | Ex 2.1, 2.2 | NAT/IGW deletion — blast radius + team-size response | 35 min |
 | 3 | Ex 2.3, 2.4 | Dual-destination proof + cascade analysis | 25 min |
 | 4 | Ex 3.1, 3.2 | State locking + state rm/import | 35 min |
-| 5 | Ex 3.3, 3.4 | State corruption recovery + rename migration | 40 min |
+| 5 | Ex 3.3, 3.4, 3.5 | State corruption + rename migration + real incident | 55 min |
 | 6 | Ex 4.1 | KMS lifecycle — highest risk exercise | 15 min |
 
 ---
