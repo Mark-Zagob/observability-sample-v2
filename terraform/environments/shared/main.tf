@@ -4,6 +4,14 @@
 #--------------------------------------------------------------
 
 #--------------------------------------------------------------
+# Module renames — tell Terraform about refactored module names
+# Safe to remove after one successful apply.
+#--------------------------------------------------------------
+moved {
+  from = module.logging
+  to   = module.logging-flow-logs
+}
+#--------------------------------------------------------------
 # Module 1: Logging (S3 + Athena for centralized log storage)
 # Must be deployed before network — network needs bucket ARN.
 # Separate lifecycle: destroying VPC does NOT destroy log archive.
