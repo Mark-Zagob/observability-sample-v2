@@ -8,7 +8,7 @@
 # Must be deployed before network — network needs bucket ARN.
 # Separate lifecycle: destroying VPC does NOT destroy log archive.
 #--------------------------------------------------------------
-module "logging" {
+module "logging-flow-logs" {
   source = "../../modules/logging-flow-logs"
 
   project_name = var.project_name
