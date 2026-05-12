@@ -46,6 +46,65 @@ Web UI → API Gateway → Order Service → Payment Service
 
 ---
 
+## Database Strategy
+
+### Approach: Hybrid (1 Instance, Multiple Databases)
+
+Không dùng shared database (tất cả dùng chung 1 DB), cũng không dùng database-per-instance (mỗi service 1 PostgreSQL riêng). Thay vào đó: **1 PostgreSQL instance, nhiều databases tách biệt theo domain**.
+
+```
+PostgreSQL instance (:5432)
+  ├── app_db          ← Order, Payment, Inventory, Notification (shared — cùng domain)
+  ├── auth_db         ← Auth Service (riêng — sensitive credentials)
+  └── shipping_db     ← Shipping Service + Worker (riêng — khác lifecycle)
+
+Redis (:6379)         ← Cache (shared, tất cả services)
+OpenSearch (:9200)    ← Search Service (riêng)
+```
+
+### Tại sao Hybrid?
+
+| Quyết định | Lý do |
+|-----------|-------|
+| **app_db shared** | Order, Payment, Inventory cần JOIN bảng `orders` + `products`. Tách ra = phải sync qua event, phức tạp không cần thiết |
+| **auth_db riêng** | User credentials (password hash) PHẢI tách biệt — security best practice. Không service nào nên truy cập trực tiếp bảng users |
+| **shipping_db riêng** | Khác domain, khác lifecycle. Shipping có thể deploy/migrate schema độc lập mà không ảnh hưởng orders |
+| **OpenSearch riêng** | Khác engine hoàn toàn — optimized cho full-text search, không phải relational data |
+
+### DevOps/SRE Learning Value
+
+| Skill | Với Hybrid approach |
+|-------|--------------------|
+| **Backup/Restore** | Backup từng database riêng: `pg_dump app_db`, `pg_dump auth_db` |
+| **Migration** | Migration scripts per-database, deploy độc lập |
+| **Connection pooling** | Mỗi service connect đúng database của mình |
+| **Access control** | PostgreSQL roles: `app_user` chỉ access `app_db`, `auth_user` chỉ access `auth_db` |
+| **Monitoring** | Per-database metrics: connections, query latency, disk usage |
+| **AWS mapping** | 1 RDS instance + multiple databases = cost-effective. Hoặc tách auth_db ra RDS riêng khi scale |
+
+### Connection Strings
+
+```bash
+# Order, Payment, Inventory, Notification Workers
+DATABASE_URL=postgresql://app_user:***@postgres:5432/app_db
+
+# Auth Service
+AUTH_DATABASE_URL=postgresql://auth_user:***@postgres:5432/auth_db
+
+# Shipping Service + Worker
+SHIPPING_DATABASE_URL=postgresql://shipping_user:***@postgres:5432/shipping_db
+```
+
+### So sánh với các approaches khác
+
+| Approach | Services 6 | Services 10 | Services 30+ |
+|----------|-----------|-------------|---------------|
+| Shared DB (1 DB, all tables) | ✅ Đủ | ⚠️ Bắt đầu coupling | ❌ Nightmare |
+| **Hybrid (1 instance, N DBs)** | ✅ | **✅ Sweet spot** | ⚠️ Cần tách instance |
+| DB-per-instance | ❌ Overkill | ⚠️ Tốn resource | ✅ Cần thiết |
+
+---
+
 ## Đề Xuất Mở Rộng (+4 Services)
 
 ### Tổng quan kiến trúc mới
@@ -54,12 +113,13 @@ Web UI → API Gateway → Order Service → Payment Service
                                     ┌──────────────┐
                                     │ Auth Service  │ (NEW)
                                     │   JWT/RBAC    │
+                                    │  [auth_db]    │
                                     └──────┬───────┘
                                            │ verify token
                                            ▼
 Web UI → API Gateway → Order Service → Payment Service
                 │             ↕                ↕
-                │        PostgreSQL          Redis
+                │        [app_db]            Redis
                 │             ↕
                 │          Kafka
                 │        ↙   ↓    ↘
@@ -67,13 +127,13 @@ Web UI → API Gateway → Order Service → Payment Service
                 │  Worker  Worker     ↕
                 │                 Shipping Service (NEW)
                 │                     ↕
-                │                PostgreSQL (shipping DB)
+                │                [shipping_db]
                 │
                 └──→ Search Service (NEW)
                          ↕
                      OpenSearch
                          ↑ sync
-                     PostgreSQL (CDC)
+                     [app_db] (CDC/event)
 ```
 
 ---
@@ -84,7 +144,7 @@ Web UI → API Gateway → Order Service → Payment Service
 |-----------|--------|
 | **Port** | 5006 |
 | **Tech** | Python (Flask) + PyJWT |
-| **Database** | PostgreSQL (users table) |
+| **Database** | PostgreSQL — `auth_db` (isolated) |
 | **Mục đích** | Authentication + Authorization |
 
 **Tại sao cần:**
@@ -142,7 +202,7 @@ CREATE TABLE refresh_tokens (
 |-----------|--------|
 | **Port** | 5007 |
 | **Tech** | Python (Flask) |
-| **Database** | PostgreSQL (shipping tables) |
+| **Database** | PostgreSQL — `shipping_db` (isolated) |
 | **Mục đích** | Quản lý shipping sau khi payment thành công |
 
 **Tại sao cần:**
@@ -479,5 +539,7 @@ Verify:
 | Failure scenarios | ~5 | ~15 |
 | Communication patterns | 2 (HTTP, Kafka) | 3 (+JWT propagation) |
 | Database systems | 2 (PostgreSQL, Redis) | 3 (+OpenSearch) |
+| Databases | 1 (shared) | 3 (app_db, auth_db, shipping_db) + OpenSearch |
+| DB strategy | Shared DB | Hybrid (1 instance, multiple DBs) |
 
 > **Kết luận:** Mở rộng 4 services với architectural diversity sẽ tăng learning surface gấp ~2-3 lần so với hiện tại, đặc biệt về Saga pattern, failure isolation, và data synchronization — đây là các kiến thức core cho DevOps/SRE level mid-to-senior.
