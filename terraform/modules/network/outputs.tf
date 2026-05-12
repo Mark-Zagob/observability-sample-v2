@@ -16,43 +16,43 @@ output "vpc_cidr_block" {
 # Subnets — IDs (lists for downstream compatibility)
 output "public_subnet_ids" {
   description = "List of public subnet IDs"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.public[k].id]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.public[k].id], [])
 }
 
 output "private_subnet_ids" {
   description = "List of private subnet IDs"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.private[k].id]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.private[k].id], [])
 }
 
 output "data_subnet_ids" {
   description = "List of data subnet IDs"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.data[k].id]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.data[k].id], [])
 }
 
 output "mgmt_subnet_ids" {
   description = "List of management subnet IDs"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].id]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].id], [])
 }
 
 # Subnets — CIDRs
 output "public_subnet_cidrs" {
   description = "List of public subnet CIDR blocks"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.public[k].cidr_block]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.public[k].cidr_block], [])
 }
 
 output "private_subnet_cidrs" {
   description = "List of private subnet CIDR blocks"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.private[k].cidr_block]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.private[k].cidr_block], [])
 }
 
 output "data_subnet_cidrs" {
   description = "List of data subnet CIDR blocks"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.data[k].cidr_block]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.data[k].cidr_block], [])
 }
 
 output "mgmt_subnet_cidrs" {
   description = "List of management subnet CIDR blocks"
-  value       = [for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].cidr_block]
+  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].cidr_block], [])
 }
 
 # Subnets — Maps (for_each-friendly access)
@@ -80,12 +80,12 @@ output "az_map" {
 # NAT Gateway
 output "nat_gateway_ids" {
   description = "List of NAT Gateway IDs"
-  value       = [for k in sort(keys(local.nat_az_map)) : aws_nat_gateway.this[k].id]
+  value       = try([for k in sort(keys(local.nat_az_map)) : aws_nat_gateway.this[k].id], [])
 }
 
 output "nat_public_ips" {
   description = "List of NAT Gateway public IPs"
-  value       = [for k in sort(keys(local.nat_az_map)) : aws_eip.nat[k].public_ip]
+  value       = try([for k in sort(keys(local.nat_az_map)) : aws_eip.nat[k].public_ip], [])
 }
 
 # Internet Gateway

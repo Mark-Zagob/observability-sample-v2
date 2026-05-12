@@ -23,7 +23,7 @@ output "vault_name" {
 
 output "vault_dr_arn" {
   description = "ARN of the DR region backup vault (null if cross-region copy disabled)"
-  value       = var.enable_cross_region_copy ? aws_backup_vault.dr[0].arn : null
+  value       = try(aws_backup_vault.dr[0].arn, null)
 }
 
 #--------------------------------------------------------------
@@ -60,7 +60,7 @@ output "kms_key_arn" {
 
 output "kms_key_dr_arn" {
   description = "ARN of the KMS CMK for DR vault encryption (null if disabled)"
-  value       = var.enable_cross_region_copy ? aws_kms_key.backup_dr[0].arn : null
+  value       = try(aws_kms_key.backup_dr[0].arn, null)
 }
 
 #--------------------------------------------------------------
@@ -90,10 +90,10 @@ output "selection_tag" {
 
 output "report_plan_arn" {
   description = "ARN of the backup compliance report plan (null if disabled)"
-  value       = var.enable_backup_reports ? aws_backup_report_plan.compliance[0].arn : null
+  value       = try(aws_backup_report_plan.compliance[0].arn, null)
 }
 
 output "report_bucket_name" {
   description = "S3 bucket name for backup compliance reports (null if disabled)"
-  value       = var.enable_backup_reports ? aws_s3_bucket.backup_reports[0].id : null
+  value       = try(aws_s3_bucket.backup_reports[0].id, null)
 }

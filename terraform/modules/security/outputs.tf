@@ -38,7 +38,7 @@ output "observability_security_group_id" {
 
 output "bastion_security_group_id" {
   description = "Security Group ID for bastion host (empty string if disabled)"
-  value       = var.enable_bastion ? aws_security_group.bastion[0].id : ""
+  value       = try(aws_security_group.bastion[0].id, "")
 }
 
 #--------------------------------------------------------------
@@ -53,7 +53,7 @@ output "security_group_ids" {
     data          = aws_security_group.data.id
     efs           = aws_security_group.efs.id
     observability = aws_security_group.observability.id
-    bastion       = var.enable_bastion ? aws_security_group.bastion[0].id : ""
+    bastion       = try(aws_security_group.bastion[0].id, "")
   }
 }
 
@@ -87,17 +87,17 @@ output "ecs_task_role_name" {
 
 output "bastion_instance_profile_name" {
   description = "Name of Bastion IAM Instance Profile (empty string if disabled)"
-  value       = var.enable_bastion ? aws_iam_instance_profile.bastion[0].name : ""
+  value       = try(aws_iam_instance_profile.bastion[0].name, "")
 }
 
 output "bastion_instance_profile_arn" {
   description = "ARN of Bastion IAM Instance Profile (empty string if disabled)"
-  value       = var.enable_bastion ? aws_iam_instance_profile.bastion[0].arn : ""
+  value       = try(aws_iam_instance_profile.bastion[0].arn, "")
 }
 
 output "bastion_role_arn" {
   description = "ARN of Bastion IAM Role (empty string if disabled)"
-  value       = var.enable_bastion ? aws_iam_role.bastion[0].arn : ""
+  value       = try(aws_iam_role.bastion[0].arn, "")
 }
 
 #--------------------------------------------------------------
