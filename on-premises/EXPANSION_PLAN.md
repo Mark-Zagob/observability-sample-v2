@@ -41,8 +41,9 @@ Web UI → API Gateway → Order Service → Payment Service
 - ❌ Circuit Breaker (failure isolation)
 - ❌ CQRS/Data sync (read model khác write model)
 - ❌ Authentication/Authorization (JWT propagation)
-- ❌ File/media processing (async job)
-- ❌ Service-to-service gRPC
+- ❌ Health check endpoint chuẩn (liveness/readiness)
+- ❌ Rate limiting
+- ❌ Structured error response chuẩn (RFC 7807)
 
 ---
 
@@ -422,26 +423,160 @@ Tất cả patterns cũ +
 
 ---
 
+## Resilience Patterns (Bổ sung cho tất cả services)
+
+Ngoài 4 services mới, cần bổ sung các production-grade patterns cho **toàn bộ** services (cũ + mới):
+
+### Health Check Endpoints
+
+Mỗi service cần expose 2 endpoints chuẩn Kubernetes/ECS:
+
+```
+GET /health/live      → 200 nếu process đang chạy (liveness)
+GET /health/ready     → 200 nếu service sẵn sàng nhận traffic (readiness)
+```
+
+| Service | Liveness | Readiness |
+|---------|----------|----------|
+| Order Service | Process alive | PostgreSQL connected + Redis connected + Kafka producer ready |
+| Auth Service | Process alive | PostgreSQL connected (auth_db) |
+| Shipping Worker | Process alive | Kafka consumer subscribed + PostgreSQL connected (shipping_db) |
+| Search Service | Process alive | OpenSearch cluster health green/yellow |
+
+**Tại sao quan trọng:**
+- Docker Compose: `healthcheck` trong docker-compose.yml — container restart khi unhealthy
+- AWS ECS: ALB target group health check → unhealthy task bị thay thế tự động
+- Kubernetes: liveness/readiness probes → Pod restart hoặc tạm ngưng traffic
+
+### Circuit Breaker
+
+Áp dụng cho các HTTP calls giữa services:
+
+```
+API Gateway → Order Service:     circuit breaker (5 failures → open 30s)
+Order Service → Payment Service: circuit breaker (3 failures → open 60s)
+Shipping Worker → Shipping Svc:  circuit breaker (3 failures → open 60s)
+```
+
+**Implementation:** Dùng library `pybreaker` (Python) thay vì tự viết.
+
+**Trạng thái:**
+```
+Closed  → requests đi bình thường, đếm failures
+Open    → requests bị reject ngay, trả fallback response
+Half-Open → cho 1 request thử, nếu OK → Close, nếu fail → Open lại
+```
+
+### Rate Limiting
+
+Áp dụng ở API Gateway (điểm vào duy nhất):
+
+```
+Global:     100 requests/second
+Per-user:   20 requests/second (dựa trên JWT user_id)
+Per-IP:     50 requests/second (cho unauthenticated endpoints)
+```
+
+**Implementation:** Redis-based sliding window counter.
+
+### Structured Error Response (RFC 7807)
+
+Tất cả services trả error theo chuẩn:
+
+```json
+{
+  "type": "https://api.example.com/errors/insufficient-stock",
+  "title": "Insufficient Stock",
+  "status": 409,
+  "detail": "Product 'Laptop' only has 2 in stock, requested 5",
+  "instance": "/orders/ORD-20250512-001",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+}
+```
+
+**Tại sao:** Khi có 10 services, error format không thống nhất → debug rất khó. `trace_id` trong error response giúp correlate với distributed traces.
+
+---
+
+## Observability Mở Rộng
+
+### Per-Service Metrics (mỗi service mới phải có)
+
+| Metric type | Ví dụ | Instrument |
+|------------|-------|------------|
+| **Request rate** | `http_requests_total{service="auth",method="POST",path="/login"}` | Counter |
+| **Latency** | `http_request_duration_seconds{service="shipping"}` | Histogram |
+| **Error rate** | `http_requests_total{status="5xx",service="search"}` | Counter |
+| **Business metric** | `saga_compensations_total{reason="shipping_failed"}` | Counter |
+| **Queue lag** | `kafka_consumer_lag{group="shipping-worker"}` | Gauge |
+| **Circuit breaker state** | `circuit_breaker_state{target="payment",state="open"}` | Gauge |
+| **DB connections** | `db_pool_active_connections{database="auth_db"}` | Gauge |
+
+### SLI/SLO Definitions
+
+| Service | SLI | SLO Target |
+|---------|-----|------------|
+| API Gateway | Request success rate (non-5xx) | 99.5% over 7 days |
+| Order Service | Order creation latency p99 | < 500ms |
+| Auth Service | Login latency p99 | < 200ms |
+| Shipping Worker | Saga completion rate | 99% (1% allowed compensations) |
+| Search Service | Search latency p99 | < 300ms |
+| Search Service | Index freshness (lag) | < 10 seconds |
+
+### Grafana Dashboards Mới
+
+| Dashboard | Panels |
+|-----------|--------|
+| **Auth Overview** | Login rate, token refresh rate, failed logins (brute force?), active sessions |
+| **Saga Monitor** | Saga in-flight, completion rate, compensation rate, DLQ size |
+| **Search Health** | Index lag, query latency, OpenSearch cluster health |
+| **Cross-Service** | Service dependency map, error propagation, trace duration distribution |
+
+---
+
 ## Phân Phase Triển Khai
 
-### Phase 1: Auth Service (ưu tiên cao nhất)
+### Phase 0: Production Readiness (trước khi thêm services)
+
+```
+Effort: ~1-2 ngày
+Dependencies: Không có
+Impact: Tất cả 6 services hiện tại
+
+Bước:
+  1. Thêm /health/live + /health/ready cho 6 services hiện tại
+  2. Thêm healthcheck trong docker-compose.yml
+  3. Chuẩn hóa error response format (RFC 7807)
+  4. Chuẩn hóa logging format (đã có structured JSON, verify consistency)
+
+Verify:
+  - curl /health/ready → 200 khi service healthy
+  - Stop PostgreSQL → /health/ready → 503
+  - Error responses đúng format RFC 7807
+```
+
+### Phase 1: Auth Service
 
 ```
 Effort: ~2-3 ngày
-Dependencies: Không có — standalone service
+Dependencies: Phase 0 (health checks)
 Impact: Tất cả services cần update middleware
 
 Bước:
-  1. Tạo Auth Service (register, login, verify)
-  2. Update API Gateway — thêm JWT middleware
-  3. Update Order Service — extract user_id từ token
-  4. Update Web UI — thêm login page
-  5. Test: end-to-end flow với authentication
+  1. Tạo auth_db + init-auth.sql (users, refresh_tokens tables)
+  2. Tạo Auth Service (register, login, verify, refresh)
+  3. Update API Gateway — thêm JWT middleware + rate limiting
+  4. Update Order Service — extract user_id từ token
+  5. Update Web UI — thêm login/register page
+  6. Thêm Grafana dashboard: Auth Overview
+  7. Test: end-to-end flow với authentication
 
 Verify:
   - Unauthenticated request → 401
   - Authenticated request → flow bình thường
   - Expired token → 401, refresh → new token
+  - Rate limit exceeded → 429 Too Many Requests
+  - Auth Service down → circuit breaker → 503 Service Unavailable
 ```
 
 ### Phase 2: Shipping Service + Shipping Worker
@@ -452,18 +587,23 @@ Dependencies: Phase 1 (Auth) nếu muốn auth, hoặc độc lập
 Impact: Mở rộng order lifecycle, thêm Kafka topics
 
 Bước:
-  1. Tạo Shipping Service (CRUD shipments)
-  2. Tạo Shipping Worker (Saga orchestrator)
-  3. Thêm Kafka topics: order.shipped, order.shipping_failed, order.refunded
-  4. Update Notification Worker — handle shipping events
-  5. Update Inventory Worker — handle refund events
-  6. Update Web UI — hiển thị shipping status
-  7. Test: happy path + compensation path
+  1. Tạo shipping_db + init-shipping.sql (shipments table)
+  2. Tạo Shipping Service (CRUD shipments) + circuit breaker
+  3. Tạo Shipping Worker (Saga orchestrator) + DLQ handling
+  4. Thêm Kafka topics: order.shipped, order.shipping_failed, order.refunded
+  5. Thêm DLQ topic: order.shipping.dlq
+  6. Update Notification Worker — handle shipping events
+  7. Update Inventory Worker — handle refund events
+  8. Update Web UI — hiển thị shipping status + tracking
+  9. Thêm Grafana dashboard: Saga Monitor
+  10. Test: happy path + compensation path
 
 Verify:
   - Order → Payment OK → Shipping OK → status: shipped
   - Order → Payment OK → Shipping FAIL → refund → status: refunded
   - Kill Shipping Worker mid-saga → resume after restart
+  - Saga timeout → DLQ → manual review
+  - Circuit breaker open → Shipping Worker stops calling Shipping Service
 ```
 
 ### Phase 3: Search Service
@@ -474,36 +614,49 @@ Dependencies: Không có — standalone service
 Impact: Thêm OpenSearch container, data sync
 
 Bước:
-  1. Thêm OpenSearch container vào docker-compose
+  1. Thêm OpenSearch container vào docker-compose (+ healthcheck)
   2. Tạo Search Service (search API + indexing)
-  3. Tạo sync mechanism (event-driven hoặc CDC)
-  4. Update API Gateway — route /search/*
+  3. Tạo sync mechanism (event-driven: listen order.created → index)
+  4. Update API Gateway — route /search/* (circuit breaker)
   5. Update Web UI — thêm search bar
-  6. Test: create order → search tìm thấy (eventual consistency)
+  6. Thêm Grafana dashboard: Search Health (index lag, query latency)
+  7. Test: create order → search tìm thấy (eventual consistency)
 
 Verify:
   - Search trả kết quả đúng
-  - Tạo order mới → search thấy sau ≤ 5s
+  - Tạo order mới → search thấy sau ≤ 5s (measure actual lag)
   - OpenSearch down → graceful error, core flow không ảnh hưởng
+  - Reindex command → full sync hoàn tất
 ```
 
-### Phase 4: Integration + Chaos Testing
+### Phase 4: Integration + Chaos Testing + SLO
 
 ```
-Effort: ~2-3 ngày
-Dependencies: Phase 1-3 hoàn tất
+Effort: ~3-5 ngày
+Dependencies: Phase 0-3 hoàn tất
 
 Bước:
   1. End-to-end test toàn bộ 10 services
-  2. Update Grafana dashboards cho services mới
-  3. Thêm alerting rules cho Saga failures
-  4. Chạy chaos exercises (kill services, network partition)
-  5. Document findings
+  2. Thiết lập SLI/SLO dashboards trong Grafana
+  3. Thêm alerting rules:
+     - Saga failure rate > 5% → alert
+     - Auth error rate > 1% → alert (brute force?)
+     - Search index lag > 30s → alert
+     - Circuit breaker open → alert
+  4. Chạy chaos exercises:
+     a. Kill Auth → observe cascade → verify circuit breaker
+     b. Kill Shipping mid-saga → verify compensation
+     c. Corrupt OpenSearch index → verify graceful degradation
+     d. Kafka consumer lag → verify backpressure
+     e. PostgreSQL failover (stop + restart) → verify reconnection
+  5. Viết runbook recovery cho mỗi scenario
+  6. Document SLO burn rate qua 1 tuần vận hành
 
 Verify:
   - Tất cả traces span đúng 10 services
-  - Grafana dashboards hiển thị metrics services mới
-  - Chaos exercises có runbook recovery
+  - SLO dashboards hiển thị burn rate
+  - Mỗi chaos exercise có documented recovery < 5 phút
+  - Alert → Telegram notification trong < 1 phút
 ```
 
 ---
@@ -534,12 +687,15 @@ Verify:
 | Metric | Trước | Sau |
 |--------|-------|-----|
 | Services | 6 | 10 |
-| Kafka topics | 3 | 8 |
-| Design patterns | 7 | 17 |
+| Kafka topics | 3 | 8 + 1 DLQ |
+| Design patterns | 7 | 20 |
 | Failure scenarios | ~5 | ~15 |
+| Resilience patterns | 0 | 3 (circuit breaker, rate limit, health checks) |
 | Communication patterns | 2 (HTTP, Kafka) | 3 (+JWT propagation) |
 | Database systems | 2 (PostgreSQL, Redis) | 3 (+OpenSearch) |
 | Databases | 1 (shared) | 3 (app_db, auth_db, shipping_db) + OpenSearch |
 | DB strategy | Shared DB | Hybrid (1 instance, multiple DBs) |
+| Observability | Metrics + Logs + Traces | + SLI/SLO dashboards + per-service metrics |
+| Grafana dashboards | Existing | +3 (Auth, Saga, Search) |
 
-> **Kết luận:** Mở rộng 4 services với architectural diversity sẽ tăng learning surface gấp ~2-3 lần so với hiện tại, đặc biệt về Saga pattern, failure isolation, và data synchronization — đây là các kiến thức core cho DevOps/SRE level mid-to-senior.
+> **Kết luận:** Mở rộng 4 services + resilience patterns + SLI/SLO sẽ tăng learning surface gấp ~3x so với hiện tại. Đặc biệt Phase 0 (production readiness) và Phase 4 (SLO + chaos) là nơi học được nhiều kiến thức SRE nhất — không phải từ code mà từ **cách vận hành và đo lường reliability**.
