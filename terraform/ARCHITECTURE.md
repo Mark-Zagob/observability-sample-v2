@@ -50,8 +50,7 @@ graph TB
         end
 
         subgraph STATE["Terraform State"]
-            S3["S3 Backend<br/>Encrypted"]
-            DDB["DynamoDB<br/>State Locking"]
+            S3["S3 Backend<br/>Encrypted + Native Lockfile"]
         end
 
     end
@@ -328,5 +327,5 @@ graph LR
 | **Observability** | Prometheus, Grafana, Loki, Tempo | Private | (unchanged) |
 | **Management** | Bastion, SSM | Public | (unchanged) |
 | **CI/CD** | OIDC, GitHub Actions | External | (already production-grade) |
-| **State** | Terraform state | — | + S3 Backend, DynamoDB Lock |
+| **State** | Terraform state | — | + S3 Backend, Native Lockfile |
 | **Secrets** | SSM, Secrets Manager | — | + Auto Rotation, KMS |

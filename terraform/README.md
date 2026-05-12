@@ -16,7 +16,7 @@
 
 | Layer | Modules | Trạng thái |
 |-------|---------|-----------|
-| **Foundation** | network, vpc-endpoints, security, logging | ✅ Done |
+| **Foundation** | network, vpc-endpoints, security, logging-flow-logs | ✅ Done |
 | **Data** | database (RDS) | ✅ Done |
 | **Data** | cache (ElastiCache), streaming (MSK) | 🔲 TODO |
 | **Platform** | ecr, efs, loadbalancer | 🔲 TODO |
@@ -69,7 +69,7 @@ terraform/
 ├── IMPLEMENTATION_PLAN.md        ← Chi tiết modules + deployment order
 ├── ARCHITECTURE.md               ← Sơ đồ Mermaid kiến trúc AWS
 ├── devops-question-m1-iac-core.md ← DevOps interview (IaC Core)
-├── bootstrap/                    # S3 + DynamoDB state backend
+├── bootstrap/                    # S3 state backend (native lockfile)
 ├── modules/                      # Reusable Terraform modules
 │   ├── network/              ✅
 │   ├── vpc-endpoints/        ✅
@@ -104,7 +104,7 @@ Bộ câu hỏi phỏng vấn DevOps dựa trên Terraform/AWS infrastructure:
 
 | Environment | Backend | State Key |
 |-------------|---------|-----------|
-| `shared` | S3 + DynamoDB | `shared/terraform.tfstate` |
+| `shared` | S3 (native lockfile) | `shared/terraform.tfstate` |
 | `dev` | Terraform Cloud | workspace: `obs-dev` |
 
 > Chi tiết: xem `environments/shared/backend.tf`

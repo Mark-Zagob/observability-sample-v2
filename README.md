@@ -74,7 +74,7 @@ Internet → Route53 → WAF → ALB → Compute (ECS/EKS) → RDS + ElastiCache
                                                      → Observability Stack
 ```
 
-> 📖 Chi tiết AWS: xem [`terraform/aws_architecture.md`](terraform/aws_architecture.md)
+> 📖 Chi tiết AWS: xem [`terraform/ARCHITECTURE.md`](terraform/ARCHITECTURE.md)
 
 ---
 
@@ -106,18 +106,22 @@ observability-sample-v2/
 │       ├── phase2-logging/               # Loki, structured JSON logging
 │       └── phase3-tracing/               # Tempo, OTel Collector
 │
-├── terraform/                            # 🚧 AWS IaC — đang phát triển
-│   ├── aws_architecture.md              # Tài liệu kiến trúc AWS
-│   ├── terraform_plan.md                # Kế hoạch triển khai Terraform
-│   ├── bootstrap/                       # S3 backend + DynamoDB state locking
+├── terraform/                            # ☁️ AWS IaC
+│   ├── ARCHITECTURE.md                  # Kiến trúc AWS (Mermaid diagrams)
+│   ├── IMPLEMENTATION_PLAN.md           # Kế hoạch triển khai chi tiết
+│   ├── chaos-exercises-network.md       # Chaos engineering exercises
+│   ├── devops-question-m1-iac-core.md   # DevOps interview practice
+│   ├── bootstrap/                       # S3 state backend (native lockfile)
 │   ├── environments/
-│   │   ├── shared/                      # Shared infra (VPC, security groups)
+│   │   ├── shared/                      # Shared infra (VPC, security, RDS)
 │   │   └── dev/                         # Dev environment
 │   ├── modules/
 │   │   ├── network/                     # VPC, subnets, NAT, route tables
 │   │   ├── security/                    # Security groups, IAM
 │   │   ├── database/                    # RDS PostgreSQL
-│   │   └── vpc-endpoints/               # Private connectivity tới AWS services
+│   │   ├── vpc-endpoints/               # Private connectivity tới AWS services
+│   │   ├── logging-flow-logs/           # S3 + Athena for flow log archive
+│   │   └── backup/                      # AWS Backup vault, plans, reports
 │   └── policy/                          # OPA/Rego policy-as-code
 │       ├── general.rego                 # General Terraform policies
 │       ├── network.rego                 # Network security rules
@@ -130,6 +134,7 @@ observability-sample-v2/
     ├── ci.yml                           # Main CI pipeline
     ├── ci-api-gateway.yml               # API Gateway CI
     ├── terraform-policy.yml             # Terraform policy validation
+    ├── terraform-drift.yml              # Nightly drift detection + Slack/Telegram alerts
     ├── _reusable-build-push.yml         # Reusable: Docker build & push
     └── _reusable-lint-test.yml          # Reusable: lint + test
 ```
@@ -209,6 +214,8 @@ observability-sample-v2/
 | `security` | Security Groups, IAM roles, least-privilege policies | ✅ |
 | `database` | RDS PostgreSQL Multi-AZ, encrypted, auto backup | ✅ |
 | `vpc-endpoints` | Private connectivity tới S3, ECR, SSM, Secrets Manager | ✅ |
+| `logging-flow-logs` | S3 flow log archive + Athena query + KMS encryption | ✅ |
+| `backup` | AWS Backup vault, plans, cross-region copy, compliance reports | ✅ |
 
 ### Policy-as-Code (OPA/Rego)
 
@@ -231,6 +238,7 @@ Repository sử dụng **GitHub Actions** với reusable workflows:
 | `ci.yml` | Main CI — lint, test, build Docker images |
 | `ci-api-gateway.yml` | CI riêng cho API Gateway service |
 | `terraform-policy.yml` | Validate Terraform plans với OPA policies |
+| `terraform-drift.yml` | Nightly drift detection + Slack/Telegram alerts |
 | `_reusable-build-push.yml` | Reusable workflow: Docker build & push (ECR + GHCR) |
 | `_reusable-lint-test.yml` | Reusable workflow: linting + testing |
 
@@ -302,6 +310,8 @@ docker compose up -d
 | [`on-premises/architecture_summary.md`](on-premises/architecture_summary.md) | Tổng kết kiến thức DevOps đã học (tiếng Việt) |
 | [`terraform/ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | Kiến trúc AWS — VPC topology, compute phases, security flow |
 | [`terraform/IMPLEMENTATION_PLAN.md`](terraform/IMPLEMENTATION_PLAN.md) | Kế hoạch triển khai Terraform chi tiết |
+| [`terraform/chaos-exercises-network.md`](terraform/chaos-exercises-network.md) | Chaos engineering — 12 break/test/recover exercises |
+| [`terraform/devops-question-m1-iac-core.md`](terraform/devops-question-m1-iac-core.md) | DevOps interview practice — 54 câu hỏi IaC |
 | [`terraform/policy/README.md`](terraform/policy/README.md) | Hướng dẫn OPA policy-as-code |
 
 ### Công nghệ sử dụng
