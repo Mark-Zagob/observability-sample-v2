@@ -1,7 +1,7 @@
 #--------------------------------------------------------------
 # Shared Environment — Backend Configuration
 #--------------------------------------------------------------
-# Production-grade state management with S3 + DynamoDB.
+# Production-grade state management with S3 backend.
 #
 # Migration from local state:
 #   1. Run bootstrap: cd ../../bootstrap && terraform apply
@@ -11,10 +11,10 @@
 #--------------------------------------------------------------
 
 #--------------------------------------------------------------
-# OPTION 1: S3 + DynamoDB Backend (RECOMMENDED)
+# OPTION 1: S3 Backend (RECOMMENDED)
 #--------------------------------------------------------------
 # Production-grade for teams of any size.
-# Features: KMS encryption, DynamoDB locking, S3 versioning.
+# Features: KMS encryption, native S3 locking, S3 versioning.
 #
 # Uncomment after running bootstrap module:
 
@@ -114,11 +114,10 @@ terraform {
 # state file. Use ONE of the patterns below:
 #
 # Pattern A: Separate key per environment (S3)
+#   Each env has its own backend.tf with a unique key:
 #   backend "s3" {
 #     bucket = "obs-terraform-state-ACCOUNT_ID"   # SAME bucket
-#     key    = "dev/terraform.tfstate"             # DIFFERENT key
-#     key    = "staging/terraform.tfstate"
-#     key    = "prod/terraform.tfstate"
+#     key    = "dev/terraform.tfstate"             # UNIQUE per env
 #   }
 #
 # Pattern B: Separate workspace per environment (TFC)
