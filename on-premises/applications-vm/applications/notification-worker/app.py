@@ -348,7 +348,7 @@ atexit.register(lambda: logger.info("Notification Worker exiting",
 # ============================================================
 _consumer_thread = threading.Thread(target=consume_loop, daemon=True, name="kafka-consumer")
 _consumer_thread.start()
-logger.info("Kafka consumer thread started", extra={"thread": _consumer_thread.name})
+logger.info("Kafka consumer thread started", extra={"consumer_thread": _consumer_thread.name})
 
 
 # ============================================================

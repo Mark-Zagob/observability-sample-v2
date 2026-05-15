@@ -298,11 +298,9 @@ services:
         condition: service_started
     restart: unless-stopped
     # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/cache/nginx
-      - /run
+    # NOTE: read_only omitted for nginx — entrypoint scripts need
+    # write access to /etc/nginx/conf.d/ during startup.
+    # cap_drop + no-new-privileges still enforced.
     cap_drop:
       - ALL
     security_opt:

@@ -5,10 +5,8 @@ import time
 import json
 import logging
 
-import psycopg2
-import psycopg2.pool
-import psycopg2.extras
-import redis as redis_lib
+# psycopg2 and redis are imported lazily inside their respective classes
+# so services that don't need them won't crash on import.
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +78,7 @@ class DatabasePool:
 
     def _get_pool(self):
         if self._pool is None:
+            import psycopg2.pool
             def _connect():
                 return psycopg2.pool.ThreadedConnectionPool(
                     minconn=self._minconn, maxconn=self._maxconn, **self._params
@@ -94,6 +93,7 @@ class DatabasePool:
         if self._pool_active_counter:
             self._pool_active_counter.add(1)
         try:
+            import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(query, params)
                 if fetch:
@@ -141,6 +141,7 @@ class RedisCache:
 
     def _get_client(self):
         if self._client is None:
+            import redis as redis_lib
             def _connect():
                 client = redis_lib.from_url(self._redis_url, decode_responses=True)
                 client.ping()

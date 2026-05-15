@@ -78,6 +78,12 @@ stock_update_errors = meter.create_counter(
     unit="1",
 )
 
+stock_restock_counter = meter.create_counter(
+    name="inventory_restock_total",
+    description="Total automatic restocks triggered",
+    unit="1",
+)
+
 # ============================================================
 # Config
 # ============================================================
@@ -85,6 +91,10 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "order.events")
 KAFKA_GROUP = "inventory-workers"
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
+
+# Auto-restock config
+RESTOCK_THRESHOLD = int(os.getenv("RESTOCK_THRESHOLD", "10"))
+RESTOCK_AMOUNT = int(os.getenv("RESTOCK_AMOUNT", "100"))
 
 # ============================================================
 # Database (shared helper)
@@ -108,6 +118,67 @@ def mark_event_processed(event_id, event_type):
         (event_id, event_type, "inventory-worker"),
         fetch=False
     )
+
+
+# ============================================================
+# Auto-Restock Logic
+# ============================================================
+def restock_product(product_id, current_stock):
+    """Automatically restock a product when stock is low."""
+    with tracer.start_as_current_span("auto_restock") as span:
+        span.set_attribute("product.id", product_id)
+        span.set_attribute("stock.current", current_stock)
+        span.set_attribute("stock.restock_amount", RESTOCK_AMOUNT)
+
+        conn = db.get_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, name, stock FROM products WHERE id = %s FOR UPDATE",
+                    (product_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return
+
+                stock_before = row["stock"]
+                # Only restock if still below threshold (avoid race conditions)
+                if stock_before >= RESTOCK_THRESHOLD:
+                    conn.rollback()
+                    return
+
+                stock_after = stock_before + RESTOCK_AMOUNT
+                cur.execute(
+                    "UPDATE products SET stock = %s WHERE id = %s",
+                    (stock_after, product_id)
+                )
+
+                # Audit log with action='restock'
+                cur.execute(
+                    "INSERT INTO inventory_log "
+                    "(event_id, order_id, product_id, action, quantity, stock_before, stock_after) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (f"restock-{product_id}-{int(time.time())}", "auto-restock",
+                     product_id, "restock", RESTOCK_AMOUNT, stock_before, stock_after)
+                )
+                conn.commit()
+
+                stock_restock_counter.add(1, {"product_id": str(product_id)})
+                span.set_attribute("stock.after", stock_after)
+                logger.info("Auto-restock triggered",
+                            extra={"product_id": product_id,
+                                   "product_name": row["name"],
+                                   "stock_before": stock_before,
+                                   "stock_after": stock_after,
+                                   "restock_amount": RESTOCK_AMOUNT})
+
+        except Exception as e:
+            conn.rollback()
+            logger.error("Auto-restock failed",
+                         extra={"product_id": product_id, "error": str(e)})
+        finally:
+            db.put_conn(conn)
 
 
 # ============================================================
@@ -162,6 +233,11 @@ def reserve_stock(event):
                         extra={"order_id": order_id, "product_id": product_id,
                                "quantity": quantity, "stock_before": stock_before,
                                "stock_after": stock_after})
+
+            # Auto-restock when below threshold
+            if stock_after < RESTOCK_THRESHOLD:
+                restock_product(product_id, stock_after)
+
             return True
 
     except Exception as e:
@@ -455,7 +531,7 @@ atexit.register(lambda: logger.info("Inventory Worker exiting",
 # ============================================================
 _consumer_thread = threading.Thread(target=consume_loop, daemon=True, name="kafka-consumer")
 _consumer_thread.start()
-logger.info("Kafka consumer thread started", extra={"thread": _consumer_thread.name})
+logger.info("Kafka consumer thread started", extra={"consumer_thread": _consumer_thread.name})
 
 
 # ============================================================
