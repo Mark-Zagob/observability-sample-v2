@@ -44,11 +44,13 @@ services:
       - observability
 
   # ==========================================================
-  # MICROSERVICES
+  # MICROSERVICES (multi-stage build, security hardened)
   # ==========================================================
 
   api-gateway:
-    build: ./api-gateway
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
     container_name: api-gateway
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -58,11 +60,21 @@ services:
     depends_on:
       order-service:
         condition: service_started
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
   order-service:
-    build: ./order-service
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
     container_name: order-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -79,16 +91,34 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
   payment-service:
-    build: ./payment-service
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
     container_name: payment-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
     ports:
       - "5002:5002"
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
@@ -171,11 +201,13 @@ services:
       - observability
 
   # ==========================================================
-  # KAFKA EVENT WORKERS
+  # KAFKA EVENT WORKERS (security hardened)
   # ==========================================================
 
   notification-worker:
-    build: ./notification-worker
+    build:
+      context: .
+      dockerfile: notification-worker/Dockerfile
     container_name: notification-worker
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -189,11 +221,21 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
   inventory-worker:
-    build: ./inventory-worker
+    build:
+      context: .
+      dockerfile: inventory-worker/Dockerfile
     container_name: inventory-worker
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -207,11 +249,19 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
   # ==========================================================
-  # TRAFFIC GENERATOR
+  # TRAFFIC GENERATOR (security hardened)
   # ==========================================================
 
   traffic-gen:
@@ -223,11 +273,19 @@ services:
       api-gateway:
         condition: service_started
     restart: unless-stopped
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 
   # ==========================================================
-  # WEB UI
+  # WEB UI (nginx-unprivileged, security hardened)
   # ==========================================================
 
   web-ui:
@@ -239,6 +297,16 @@ services:
       api-gateway:
         condition: service_started
     restart: unless-stopped
+    # --- Security hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - observability
 

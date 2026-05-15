@@ -1,6 +1,6 @@
 """
 ============================================================
-Notification Worker — Kafka Consumer
+Notification Worker — Kafka Consumer + Shared Refactor
 ============================================================
 Consume events từ topic 'order.events' và gửi notifications.
 
@@ -13,114 +13,41 @@ Features:
   - Idempotency via processed_events table
   - OTel trace context propagation from Kafka headers
   - Custom metrics: notifications_sent_total, processing_duration
-  - Structured JSON logging
-  - HTTP health endpoint on :5004
+  - Health checks: /health/live, /health/ready
 ============================================================
 """
 
 import os
 import time
 import json
-import uuid
 import signal
-import logging
 import threading
 import atexit
 
-import psycopg2
-import psycopg2.pool
-import psycopg2.extras
-from confluent_kafka import Consumer, KafkaError, KafkaException
+from confluent_kafka import Consumer, KafkaError
 from flask import Flask, jsonify
 
 # ----------------------------------------------------------
-# Connection resilience
+# Shared modules
 # ----------------------------------------------------------
-MAX_RETRIES = 5
-RETRY_DELAY = 2  # seconds, doubles each retry
-
-
-def retry_connect(name, connect_fn, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
-    """Retry a connection function with exponential backoff."""
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            result = connect_fn()
-            logging.getLogger("notification-worker").info(
-                f"{name} connected", extra={"attempt": attempt})
-            return result
-        except Exception as e:
-            last_error = e
-            wait = delay * (2 ** (attempt - 1))
-            logging.getLogger("notification-worker").warning(
-                f"{name} connection failed, retrying",
-                extra={"attempt": attempt, "max_retries": max_retries,
-                       "wait_seconds": wait, "error": str(e)})
-            time.sleep(wait)
-    raise last_error
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
+from shared.db_utils import DatabasePool
+from shared.kafka_utils import extract_trace_context
+from shared.health import create_health_blueprint
 
 # ----------------------------------------------------------
-# OpenTelemetry imports
+# Auto-instrumentation imports
 # ----------------------------------------------------------
-from opentelemetry import trace, metrics, context as otel_context
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.resources import Resource
+from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
-from opentelemetry.propagate import extract
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from opentelemetry.propagate import set_global_textmap
-from opentelemetry.propagators.composite import CompositePropagator
 
 # ----------------------------------------------------------
-# Structured JSON logging
+# Initialize logging + OTel
 # ----------------------------------------------------------
-from pythonjsonlogger import json as json_logger
-
-handler = logging.StreamHandler()
-handler.setFormatter(json_logger.JsonFormatter(
-    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-    rename_fields={"asctime": "timestamp", "levelname": "level"},
-))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-logger = logging.getLogger("notification-worker")
-
-# ============================================================
-# OTEL Setup
-# ============================================================
-OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
-
-resource = Resource.create({
-    "service.name": "notification-worker",
-    "service.version": "1.0.0",
-})
-
-# --- Tracing ---
-trace_provider = TracerProvider(resource=resource)
-trace_provider.add_span_processor(
-    BatchSpanProcessor(OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True))
-)
-trace.set_tracer_provider(trace_provider)
-set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))
-tracer = trace.get_tracer(__name__)
-
-# --- Metrics ---
-metric_reader = PeriodicExportingMetricReader(
-    OTLPMetricExporter(endpoint=OTEL_ENDPOINT, insecure=True),
-    export_interval_millis=10000,
-)
-meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-metrics.set_meter_provider(meter_provider)
-meter = metrics.get_meter(__name__)
-
-# --- Auto-instrumentation ---
-LoggingInstrumentor().instrument(set_logging_format=True)
+logger = setup_logging("notification-worker")
+tracer, meter = init_otel("notification-worker", "1.0.0")
 Psycopg2Instrumentor().instrument()
 
 # ============================================================
@@ -153,64 +80,26 @@ KAFKA_GROUP = "notification-workers"
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 
 # ============================================================
-# Database
+# Database (shared helper)
 # ============================================================
-def parse_db_url(url):
-    url = url.replace("postgresql://", "")
-    userpass, hostdb = url.split("@")
-    user, password = userpass.split(":")
-    hostport, dbname = hostdb.split("/")
-    host, port = hostport.split(":")
-    return {"user": user, "password": password,
-            "host": host, "port": int(port), "dbname": dbname}
-
-db_params = parse_db_url(DATABASE_URL)
-db_pool = None
-
-
-def get_db_pool():
-    global db_pool
-    if db_pool is None:
-        def _connect():
-            return psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=5, **db_params)
-        db_pool = retry_connect("PostgreSQL", _connect)
-    return db_pool
-
-
-def db_execute(query, params=None, fetch=False):
-    pool = get_db_pool()
-    conn = pool.getconn()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, params)
-            if fetch:
-                result = cur.fetchall()
-            else:
-                conn.commit()
-                result = cur.rowcount
-        return result
-    except Exception as e:
-        conn.rollback()
-        logger.error("DB error", extra={"error": str(e), "query": query[:100]})
-        raise
-    finally:
-        pool.putconn(conn)
+db = DatabasePool(DATABASE_URL, minconn=2, maxconn=5)
 
 
 def is_event_processed(event_id):
     """Check if event was already processed (idempotency)"""
-    rows = db_execute(
+    rows = db.execute(
         "SELECT 1 FROM processed_events WHERE event_id = %s AND processed_by = %s",
-        (event_id, "notification-worker"), fetch=True
+        (event_id, "notification-worker")
     )
     return len(rows) > 0
 
 
 def mark_event_processed(event_id, event_type):
     """Mark event as processed"""
-    db_execute(
+    db.execute(
         "INSERT INTO processed_events (event_id, event_type, processed_by) VALUES (%s, %s, %s)",
-        (event_id, event_type, "notification-worker")
+        (event_id, event_type, "notification-worker"),
+        fetch=False
     )
 
 
@@ -266,10 +155,11 @@ def send_notification(event):
                        "channel": template_info["channel"], "message": message[:100]})
 
     # Persist to notifications table
-    db_execute(
+    db.execute(
         "INSERT INTO notifications (event_id, order_id, notification_type, channel, status) "
         "VALUES (%s, %s, %s, %s, %s)",
-        (event_id, order_id, template_info["type"], template_info["channel"], "sent")
+        (event_id, order_id, template_info["type"], template_info["channel"], "sent"),
+        fetch=False
     )
 
     return template_info["type"]
@@ -281,19 +171,6 @@ def send_notification(event):
 consumer_running = True
 consumer_stats = {"consumed": 0, "processed": 0, "skipped": 0, "errors": 0}
 _start_time = time.time()
-
-
-def extract_trace_context(headers):
-    """Extract OTel trace context from Kafka message headers"""
-    if not headers:
-        return None
-    carrier = {}
-    for key, value in headers:
-        if isinstance(value, bytes):
-            carrier[key] = value.decode("utf-8")
-        else:
-            carrier[key] = str(value)
-    return extract(carrier)
 
 
 def consume_loop():
@@ -401,10 +278,11 @@ def consume_loop():
 app = Flask(__name__)
 FlaskInstrumentor().instrument_app(app)
 
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy", "service": "notification-worker"})
+# --- Health checks ---
+health_bp = create_health_blueprint("notification-worker", checks={
+    "db": lambda: db.check_health(),
+})
+app.register_blueprint(health_bp)
 
 
 @app.route("/status")
@@ -428,14 +306,14 @@ def list_notifications():
     """List recent notifications"""
     limit = 30
     try:
-        rows = db_execute(
+        rows = db.execute(
             "SELECT n.event_id, n.order_id, n.notification_type, n.channel, n.status, "
             "n.created_at, pe.event_type "
             "FROM notifications n "
             "LEFT JOIN processed_events pe ON n.event_id = pe.event_id "
             "AND pe.processed_by = 'notification-worker' "
             "ORDER BY n.created_at DESC LIMIT %s",
-            (limit,), fetch=True
+            (limit,)
         )
         notifications = []
         for row in rows:
@@ -466,7 +344,7 @@ atexit.register(lambda: logger.info("Notification Worker exiting",
 
 
 # ============================================================
-# Start Kafka consumer thread (works with both gunicorn and __main__)
+# Start Kafka consumer thread
 # ============================================================
 _consumer_thread = threading.Thread(target=consume_loop, daemon=True, name="kafka-consumer")
 _consumer_thread.start()
@@ -474,7 +352,7 @@ logger.info("Kafka consumer thread started", extra={"thread": _consumer_thread.n
 
 
 # ============================================================
-# Main (dev mode only — production uses gunicorn)
+# Main (dev mode only)
 # ============================================================
 if __name__ == "__main__":
     logger.info("Notification Worker starting (dev mode)",

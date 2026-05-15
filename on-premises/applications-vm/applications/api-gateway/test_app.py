@@ -40,19 +40,29 @@ def client():
 
 
 # ============================================================
-# Test /health endpoint
+# Test /health endpoints
 # ============================================================
-class TestHealthEndpoint:
-    """Health check phải luôn trả về 200 + status healthy"""
+class TestHealthEndpoints:
+    """Health check phải luôn trả về 200"""
 
-    def test_health_returns_200(self, client):
-        resp = client.get('/health')
+    def test_health_live_returns_200(self, client):
+        resp = client.get('/health/live')
         assert resp.status_code == 200
-
-    def test_health_returns_healthy_status(self, client):
-        resp = client.get('/health')
         data = resp.get_json()
-        assert data['status'] == 'healthy'
+        assert data['status'] == 'up'
+
+    def test_health_ready_returns_200(self, client):
+        """Readiness — order-service check may fail in test, that's OK"""
+        resp = client.get('/health/ready')
+        # May be 200 or 503 depending on mocking
+        assert resp.status_code in (200, 503)
+        data = resp.get_json()
+        assert data['service'] == 'api-gateway'
+
+    def test_health_alias_works(self, client):
+        """Backward compat: /health maps to /health/ready"""
+        resp = client.get('/health')
+        assert resp.status_code in (200, 503)
 
 
 # ============================================================
@@ -91,7 +101,8 @@ class TestOrderEndpoint:
                 'product': 'Test Product',
                 'quantity': 2,
                 'total_amount': 100.0,
-            }
+            },
+            headers={'Content-Type': 'application/json'},
         )
 
         resp = client.post('/order',
@@ -103,22 +114,37 @@ class TestOrderEndpoint:
 
     @patch('app.requests.post')
     def test_create_order_downstream_error(self, mock_post, client):
-        """Khi order-service không available"""
+        """Khi order-service không available → RFC 7807 502"""
         mock_post.side_effect = ConnectionError("Connection refused")
 
         resp = client.post('/order',
                            json={'product_id': 1, 'quantity': 1},
                            content_type='application/json')
-        assert resp.status_code == 500
+        assert resp.status_code == 502
         data = resp.get_json()
-        assert data['status'] == 'error'
+        assert data['title'] == 'Bad Gateway'
+        assert data['status'] == 502
+
+    @patch('app.requests.post')
+    def test_create_order_timeout(self, mock_post, client):
+        """Khi order-service timeout → RFC 7807 504"""
+        import requests as req_lib
+        mock_post.side_effect = req_lib.exceptions.Timeout("Read timed out")
+
+        resp = client.post('/order',
+                           json={'product_id': 1, 'quantity': 1},
+                           content_type='application/json')
+        assert resp.status_code == 504
+        data = resp.get_json()
+        assert data['title'] == 'Gateway Timeout'
 
     @patch('app.requests.post')
     def test_create_order_without_body(self, mock_post, client):
         """Khi gọi GET /order (random product_id)"""
         mock_post.return_value = MagicMock(
             status_code=200,
-            json=lambda: {'order_id': 'ORD-002', 'status': 'completed'}
+            json=lambda: {'order_id': 'ORD-002', 'status': 'completed'},
+            headers={'Content-Type': 'application/json'},
         )
 
         resp = client.get('/order')

@@ -1,0 +1,34 @@
+# ===========================================
+# Root .dockerignore (build context = .)
+# ===========================================
+# Applies to ALL services since build context
+# is the parent `applications/` directory.
+# ===========================================
+
+# Build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+
+# Test files
+**/test_*.py
+**/tests/
+**/.pytest_cache/
+
+# Environment & secrets
+**/.env
+**/.env.*
+
+# Git & docs
+.git/
+**/*.md
+
+# Docker files (shouldn't be in build context)
+docker-compose*.yml
+**/Dockerfile
+**/.dockerignore
+
+# Database init (only mounted as volume, not needed in image)
+# init.sql is mounted via docker-compose volume, keep it excluded
+# from service images

@@ -1,26 +1,43 @@
-FROM python:3.12-slim
+# ============================================
+# Stage 1: Build — install dependencies
+# ============================================
+FROM python:3.12-slim-bookworm AS builder
 
-# === Metadata ===
+WORKDIR /build
+COPY payment-service/requirements.txt .
+RUN pip install --no-cache-dir --no-compile \
+    --prefix=/install -r requirements.txt
+
+# ============================================
+# Stage 2: Runtime — production image
+# ============================================
+FROM python:3.12-slim-bookworm
+
 LABEL maintainer="observability-lab"
 LABEL service="payment-service"
 
-# === Security: non-root user ===
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Security: non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -s /usr/sbin/nologin appuser
 
-# === Dependencies (layer cache) ===
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# === Application code ===
-COPY app.py .
+# Copy ONLY installed packages from builder
+COPY --from=builder /install /usr/local
 
-# === Health check ===
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=5s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')" || exit 1
+# Copy application code
+COPY shared/ ./shared/
+COPY payment-service/app.py .
 
-# === Run as non-root ===
+# Health check
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5002/health/live')" || exit 1
+
 USER appuser
 
 EXPOSE 5002
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5002", "--access-logfile", "-", "--timeout", "30", "app:app"]
+CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5002", \
+     "--access-logfile", "-", "--timeout", "30", \
+     "--worker-tmp-dir", "/dev/shm", "app:app"]

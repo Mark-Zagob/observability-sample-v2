@@ -1,6 +1,6 @@
 """
 ============================================================
-API Gateway — Phase 5 + DB/Cache Expansion
+API Gateway — Phase 5 + Shared Refactor
 ============================================================
 API Gateway nhận HTTP requests, proxy tới backend services.
 
@@ -8,78 +8,37 @@ Endpoints:
   - POST /order       → create order (via order-service)
   - GET  /products    → list products (via order-service)
   - GET  /orders      → list orders (via order-service)
-  - GET  /health      → health check
+  - GET  /health      → readiness check (alias for /health/ready)
+  - GET  /health/live → liveness check
+  - GET  /health/ready → readiness check
 ============================================================
 """
 
 import os
 import time
 import random
-import logging
 import requests
 from flask import Flask, jsonify, request as flask_request
 
 # ----------------------------------------------------------
-# OpenTelemetry imports
+# Shared modules
 # ----------------------------------------------------------
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.resources import Resource
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
+from shared.health import create_health_blueprint
+from shared.errors import problem_response
+
+# ----------------------------------------------------------
+# Auto-instrumentation imports
+# ----------------------------------------------------------
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.propagate import set_global_textmap
-from opentelemetry.propagators.composite import CompositePropagator
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 # ----------------------------------------------------------
-# Structured JSON logging
+# Initialize logging + OTel
 # ----------------------------------------------------------
-from pythonjsonlogger import json as json_logger
-
-handler = logging.StreamHandler()
-handler.setFormatter(json_logger.JsonFormatter(
-    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-    rename_fields={"asctime": "timestamp", "levelname": "level"},
-))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-logger = logging.getLogger("api-gateway")
-
-# ============================================================
-# OTEL Setup
-# ============================================================
-OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
-
-resource = Resource.create({
-    "service.name": "api-gateway",
-    "service.version": "3.0.0",
-})
-
-# --- Tracing ---
-trace_provider = TracerProvider(resource=resource)
-trace_provider.add_span_processor(
-    BatchSpanProcessor(OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True))
-)
-trace.set_tracer_provider(trace_provider)
-set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))
-tracer = trace.get_tracer(__name__)
-
-# --- Metrics ---
-metric_reader = PeriodicExportingMetricReader(
-    OTLPMetricExporter(endpoint=OTEL_ENDPOINT, insecure=True),
-    export_interval_millis=10000,
-)
-meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-metrics.set_meter_provider(meter_provider)
-meter = metrics.get_meter(__name__)
-
-# --- Logging Instrumentation ---
-LoggingInstrumentor().instrument(set_logging_format=True)
+logger = setup_logging("api-gateway")
+tracer, meter = init_otel("api-gateway", "3.0.0")
 
 # ============================================================
 # Custom Metrics
@@ -104,6 +63,14 @@ FlaskInstrumentor().instrument_app(app)
 RequestsInstrumentor().instrument()
 
 ORDER_SERVICE = os.getenv("ORDER_SERVICE_URL", "http://order-service:5001")
+
+# --- Health checks ---
+health_bp = create_health_blueprint("api-gateway", checks={
+    "order-service": lambda: requests.get(
+        f"{ORDER_SERVICE}/health/live", timeout=2
+    ).raise_for_status(),
+})
+app.register_blueprint(health_bp)
 
 
 @app.route("/")
@@ -148,7 +115,7 @@ def create_order():
             resp = requests.post(
                 f"{ORDER_SERVICE}/process",
                 json={"product_id": product_id, "quantity": quantity},
-                timeout=30,
+                timeout=5,
             )
             data = resp.json()
             order_id = data.get("order_id", "unknown")
@@ -161,6 +128,10 @@ def create_order():
 
             result = jsonify({"status": "success", "order": data})
             if resp.status_code != 200:
+                # Forward RFC 7807 from downstream if present
+                content_type = resp.headers.get("Content-Type", "")
+                if "problem+json" in content_type:
+                    return resp.content, resp.status_code, {"Content-Type": content_type}
                 result = jsonify({
                     "status": "error",
                     "message": data.get("message", data.get("error", "Order failed")),
@@ -168,15 +139,29 @@ def create_order():
                 }), resp.status_code
                 status = "error"
 
+        except requests.exceptions.Timeout:
+            status = "error"
+            span.set_attribute("error", True)
+            span.set_attribute("error.message", "Order service timeout")
+            logger.error("Order service timeout",
+                          extra={"product_id": product_id, "timeout": 5})
+            result = problem_response(
+                504, "Gateway Timeout",
+                "Order service did not respond within 5s",
+                instance="/order",
+            )
+
         except Exception as e:
             status = "error"
             span.set_attribute("error", True)
             span.set_attribute("error.message", str(e))
-
             logger.error("Order creation failed",
                           extra={"error": str(e), "product_id": product_id})
-
-            result = jsonify({"status": "error", "message": str(e)}), 500
+            result = problem_response(
+                502, "Bad Gateway",
+                f"Order service unavailable: {e}",
+                instance="/order",
+            )
 
     # Record metrics
     duration = time.time() - start_time
@@ -194,7 +179,7 @@ def list_products():
 
     with tracer.start_as_current_span("proxy_list_products") as span:
         try:
-            resp = requests.get(f"{ORDER_SERVICE}/products", timeout=10)
+            resp = requests.get(f"{ORDER_SERVICE}/products", timeout=5)
             result = resp.json()
             span.set_attribute("products.count",
                                len(result.get("products", [])))
@@ -226,7 +211,7 @@ def list_orders():
     with tracer.start_as_current_span("proxy_list_orders") as span:
         try:
             limit = flask_request.args.get("limit", 20)
-            resp = requests.get(f"{ORDER_SERVICE}/orders?limit={limit}", timeout=10)
+            resp = requests.get(f"{ORDER_SERVICE}/orders?limit={limit}", timeout=5)
             result = resp.json()
             span.set_attribute("orders.count", result.get("count", 0))
 
@@ -241,11 +226,6 @@ def list_orders():
     request_duration.record(duration, {"endpoint": "/orders", "status": status})
 
     return jsonify(result)
-
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy"})
 
 
 if __name__ == "__main__":

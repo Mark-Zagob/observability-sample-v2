@@ -1,78 +1,41 @@
 """
 ============================================================
-Payment Service — Phase 5
+Payment Service — Phase 5 + Shared Refactor
 ============================================================
 Xử lý thanh toán. Simulate delays và random errors.
 Metrics: payments counter, amount histogram, gateway duration
+
+Endpoints:
+  - POST /charge      → process payment
+  - GET  /health      → readiness check (alias)
+  - GET  /health/live → liveness check
+  - GET  /health/ready → readiness check
 ============================================================
 """
 
 import os
 import time
 import random
-import logging
 from flask import Flask, jsonify, request
 
 # ----------------------------------------------------------
-# OpenTelemetry imports
+# Shared modules
 # ----------------------------------------------------------
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.resources import Resource
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
+from shared.health import create_health_blueprint
+from shared.errors import problem_response
+
+# ----------------------------------------------------------
+# Auto-instrumentation imports
+# ----------------------------------------------------------
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.propagate import set_global_textmap
-from opentelemetry.propagators.composite import CompositePropagator
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 # ----------------------------------------------------------
-# Structured JSON logging
+# Initialize logging + OTel
 # ----------------------------------------------------------
-from pythonjsonlogger import json as json_logger
-
-handler = logging.StreamHandler()
-handler.setFormatter(json_logger.JsonFormatter(
-    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-    rename_fields={"asctime": "timestamp", "levelname": "level"},
-))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-logger = logging.getLogger("payment-service")
-
-# ============================================================
-# OTEL Setup
-# ============================================================
-OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
-
-resource = Resource.create({
-    "service.name": "payment-service",
-    "service.version": "2.0.0",
-})
-
-# --- Tracing ---
-trace_provider = TracerProvider(resource=resource)
-trace_provider.add_span_processor(
-    BatchSpanProcessor(OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True))
-)
-trace.set_tracer_provider(trace_provider)
-set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))
-tracer = trace.get_tracer(__name__)
-
-# --- Metrics ---
-metric_reader = PeriodicExportingMetricReader(
-    OTLPMetricExporter(endpoint=OTEL_ENDPOINT, insecure=True),
-    export_interval_millis=10000,
-)
-meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-metrics.set_meter_provider(meter_provider)
-meter = metrics.get_meter(__name__)
-
-# --- Logging Instrumentation ---
-LoggingInstrumentor().instrument(set_logging_format=True)
+logger = setup_logging("payment-service")
+tracer, meter = init_otel("payment-service", "2.0.0")
 
 # ============================================================
 # Custom Metrics
@@ -103,6 +66,10 @@ FlaskInstrumentor().instrument_app(app)
 
 # Simulated payment providers
 PROVIDERS = ["stripe", "paypal", "square"]
+
+# --- Health checks (no external deps to check) ---
+health_bp = create_health_blueprint("payment-service")
+app.register_blueprint(health_bp)
 
 
 @app.route("/charge", methods=["POST"])
@@ -168,12 +135,12 @@ def charge():
                           extra={"order_id": order_id, "provider": provider,
                                  "amount": amount, "error": "gateway_timeout"})
 
-            return jsonify({
-                "status": "failed",
-                "error": "Payment gateway timeout",
-                "order_id": order_id,
-                "provider": provider,
-            }), 500
+            return problem_response(
+                500, "Payment Gateway Error",
+                f"Payment gateway ({provider}) timed out for order {order_id}",
+                instance="/charge",
+                extra={"order_id": order_id, "provider": provider, "amount": amount},
+            )
 
     # Success
     txn_id = f"txn-{random.randint(10000, 99999)}"
@@ -192,11 +159,6 @@ def charge():
         "provider": provider,
         "amount": amount,
     })
-
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy"})
 
 
 if __name__ == "__main__":
