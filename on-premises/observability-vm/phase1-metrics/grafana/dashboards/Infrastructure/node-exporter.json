@@ -3,7 +3,11 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    { "title": "Docker Containers", "url": "/d/docker-containers", "type": "link", "icon": "docker" },
+    { "title": "Unified Overview", "url": "/d/unified-overview", "type": "link", "icon": "apps" },
+    { "title": "Alerting", "url": "/d/alerting-overview", "type": "link", "icon": "bolt" }
+  ],
   "panels": [
     {
       "collapsed": false,
@@ -252,6 +256,127 @@
         { "expr": "rate(node_network_transmit_errs_total{device!=\"lo\",vm=~\"$vm\"}[5m])", "legendFormat": "{{ vm }} TX Errors {{ device }}" },
         { "expr": "rate(node_network_receive_drop_total{device!=\"lo\",vm=~\"$vm\"}[5m])", "legendFormat": "{{ vm }} Recv Drops {{ device }}" }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 105,
+      "title": "🔮 Capacity Planning (predict_linear)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 86400 },
+              { "color": "yellow", "value": 259200 },
+              { "color": "green", "value": 604800 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 44 },
+      "id": 13,
+      "title": "⏰ Disk Full In",
+      "description": "Estimated time until disk is full based on current usage trend (24h lookback). Red = <1 day, Orange = <3 days, Yellow = <7 days.",
+      "type": "stat",
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "expr": "predict_linear(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\",mountpoint=\"/\",vm=~\"$vm\"}[1d], 0) / -deriv(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\",mountpoint=\"/\",vm=~\"$vm\"}[1d]) > 0 or vector(9999999)",
+          "legendFormat": "{{ vm }} /"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 44 },
+      "id": 14,
+      "title": "Disk Space Forecast (predict_linear — 24h ahead)",
+      "description": "Blue dashed line = predicted available space in 24 hours based on current trend. If it crosses zero, a DiskWillFillIn4Hours alert will fire.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\",mountpoint=\"/\",vm=~\"$vm\"}",
+          "legendFormat": "{{ vm }} Available Now"
+        },
+        {
+          "expr": "predict_linear(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\",mountpoint=\"/\",vm=~\"$vm\"}[1d], 24*3600)",
+          "legendFormat": "{{ vm }} Predicted (24h)"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
+      "id": 15,
+      "title": "Memory Forecast (predict_linear — 2h ahead)",
+      "description": "Predicted available memory in 2 hours. If it crosses zero, MemoryWillExhaustIn2Hours alert will fire.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "node_memory_MemAvailable_bytes{vm=~\"$vm\"}",
+          "legendFormat": "{{ vm }} Available Now"
+        },
+        {
+          "expr": "predict_linear(node_memory_MemAvailable_bytes{vm=~\"$vm\"}[1h], 2*3600)",
+          "legendFormat": "{{ vm }} Predicted (2h)"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 85 }
+            ]
+          },
+          "custom.thresholdsStyle": { "mode": "line" }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
+      "id": 16,
+      "title": "CPU Trend (predict_linear — 1h ahead)",
+      "description": "Predicted CPU usage in 1 hour based on 30-minute trend.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 - (avg by(vm)(rate(node_cpu_seconds_total{mode=\"idle\",vm=~\"$vm\"}[5m])) * 100)",
+          "legendFormat": "{{ vm }} Current"
+        },
+        {
+          "expr": "predict_linear((100 - (avg by(vm)(rate(node_cpu_seconds_total{mode=\"idle\",vm=~\"$vm\"}[5m])) * 100))[30m:1m], 3600)",
+          "legendFormat": "{{ vm }} Predicted (1h)"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
@@ -278,5 +403,5 @@
   "timezone": "browser",
   "title": "Node Exporter - Host Monitoring",
   "uid": "node-exporter-host",
-  "version": 2
+  "version": 3
 }

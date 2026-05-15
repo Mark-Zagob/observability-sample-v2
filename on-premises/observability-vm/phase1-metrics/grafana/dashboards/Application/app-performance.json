@@ -1,9 +1,28 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": [
+      {
+        "datasource": { "type": "loki", "uid": "loki-datasource" },
+        "enable": true,
+        "expr": "{job=\"deploy-events\"} |= ``",
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Deployments",
+        "titleFormat": "Deploy: {{service}}",
+        "textFormat": "{{message}}",
+        "tagKeys": "service",
+        "type": "tags"
+      }
+    ]
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    { "title": "SLO Overview", "url": "/d/slo-overview", "type": "link", "icon": "dashboard", "tooltip": "SLO targets, burn rates, error budgets" },
+    { "title": "Kafka Events", "url": "/d/kafka-event-driven", "type": "link", "icon": "arrow-random", "tooltip": "Event-driven pipeline" },
+    { "title": "Unified Overview", "url": "/d/unified-overview", "type": "link", "icon": "apps", "tooltip": "Metrics + Logs + Traces" },
+    { "title": "Alerting", "url": "/d/alerting-overview", "type": "link", "icon": "bolt", "tooltip": "Active alerts" }
+  ],
   "panels": [
     {
       "collapsed": false,
@@ -323,6 +342,28 @@
       ]
     },
     {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "unit": "ops",
+          "min": 0,
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "id": 18,
+      "title": "Notification Errors",
+      "description": "Notification processing errors per second",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(notification_errors_total[5m])) by (type)",
+          "legendFormat": "{{ type }}"
+        }
+      ]
+    },
+    {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
       "id": 105,
@@ -396,6 +437,28 @@
         {
           "expr": "sum(rate(inventory_errors_total[5m])) by (event_type)",
           "legendFormat": "{{ event_type }}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "unit": "ops",
+          "min": 0,
+          "custom": { "fillOpacity": 20, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "id": 19,
+      "title": "Auto-Restock Events",
+      "description": "Automatic stock replenishment events triggered by low-stock threshold",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(inventory_restock_total[5m])) by (product_name)",
+          "legendFormat": "{{ product_name }}"
         }
       ]
     },

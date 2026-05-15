@@ -1,9 +1,28 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": [
+      {
+        "datasource": { "type": "loki", "uid": "loki-datasource" },
+        "enable": true,
+        "expr": "{job=\"deploy-events\"} |= ``",
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Deployments",
+        "titleFormat": "Deploy: {{service}}",
+        "textFormat": "{{message}}",
+        "tagKeys": "service",
+        "type": "tags"
+      }
+    ]
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    { "title": "App Performance", "url": "/d/app-performance-microservices", "type": "link", "icon": "dashboard", "tooltip": "Drill-down to per-service RED metrics" },
+    { "title": "Alerting", "url": "/d/alerting-overview", "type": "link", "icon": "bolt", "tooltip": "Active alerts and history" },
+    { "title": "Unified Overview", "url": "/d/unified-overview", "type": "link", "icon": "apps", "tooltip": "Metrics + Logs + Traces" },
+    { "title": "Kafka Events", "url": "/d/kafka-event-driven", "type": "link", "icon": "arrow-random", "tooltip": "Event-driven pipeline health" }
+  ],
   "panels": [
     {
       "collapsed": false,
@@ -181,7 +200,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
       "id": 102,
-      "title": "🔥 Burn Rate & Error Budget",
+      "title": "🔥 Multi-Window Burn Rate (MWMBR)",
       "type": "row"
     },
     {
@@ -195,7 +214,7 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Critical (14x)" },
+            "matcher": { "id": "byName", "options": "Critical (14.4x)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
@@ -203,7 +222,7 @@
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Warning (6x)" },
+            "matcher": { "id": "byName", "options": "Warning (3x)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
@@ -214,21 +233,29 @@
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "id": 6,
-      "title": "API Gateway Burn Rate",
-      "description": "Burn rate = tốc độ tiêu thụ error budget. >14x = CRITICAL, >6x = WARNING",
+      "title": "API Gateway Burn Rate (Multi-Window)",
+      "description": "Fast burn: 5m+1h windows (>14.4x = page). Slow burn: 30m+6h windows (>3x = ticket).",
       "type": "timeseries",
       "targets": [
         {
           "expr": "((1 - sli:api_gateway_availability:rate5m) / (1 - 0.995)) or vector(0)",
-          "legendFormat": "Burn Rate (5m)"
+          "legendFormat": "Fast (5m)"
         },
         {
-          "expr": "14",
-          "legendFormat": "Critical (14x)"
+          "expr": "((1 - sli:api_gateway_availability:rate1h) / (1 - 0.995)) or vector(0)",
+          "legendFormat": "Fast (1h)"
         },
         {
-          "expr": "6",
-          "legendFormat": "Warning (6x)"
+          "expr": "((1 - sli:api_gateway_availability:rate6h) / (1 - 0.995)) or vector(0)",
+          "legendFormat": "Slow (6h)"
+        },
+        {
+          "expr": "14.4",
+          "legendFormat": "Critical (14.4x)"
+        },
+        {
+          "expr": "3",
+          "legendFormat": "Warning (3x)"
         }
       ]
     },
@@ -243,7 +270,7 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Critical (14x)" },
+            "matcher": { "id": "byName", "options": "Critical (14.4x)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
@@ -251,7 +278,7 @@
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Warning (6x)" },
+            "matcher": { "id": "byName", "options": "Warning (3x)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
@@ -262,21 +289,29 @@
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "id": 7,
-      "title": "Payment Burn Rate",
-      "description": "Burn rate = tốc độ tiêu thụ error budget. >14x = CRITICAL, >6x = WARNING",
+      "title": "Payment Burn Rate (Multi-Window)",
+      "description": "Fast burn: 5m+1h windows (>14.4x = page). Slow burn: 30m+6h windows (>3x = ticket).",
       "type": "timeseries",
       "targets": [
         {
           "expr": "((1 - sli:payment_success_rate:rate5m) / (1 - 0.99)) or vector(0)",
-          "legendFormat": "Burn Rate (5m)"
+          "legendFormat": "Fast (5m)"
         },
         {
-          "expr": "14",
-          "legendFormat": "Critical (14x)"
+          "expr": "((1 - sli:payment_success_rate:rate1h) / (1 - 0.99)) or vector(0)",
+          "legendFormat": "Fast (1h)"
         },
         {
-          "expr": "6",
-          "legendFormat": "Warning (6x)"
+          "expr": "((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)) or vector(0)",
+          "legendFormat": "Slow (6h)"
+        },
+        {
+          "expr": "14.4",
+          "legendFormat": "Critical (14.4x)"
+        },
+        {
+          "expr": "3",
+          "legendFormat": "Warning (3x)"
         }
       ]
     },
@@ -284,7 +319,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
       "id": 103,
-      "title": "📝 Error Budget Remaining (30-day window)",
+      "title": "📝 Error Budget Remaining",
       "type": "row"
     },
     {
@@ -307,7 +342,7 @@
       "gridPos": { "h": 5, "w": 12, "x": 0, "y": 25 },
       "id": 8,
       "title": "API Gateway Error Budget Remaining",
-      "description": "Ước tính: 100% nếu không có lỗi, giảm dần theo error rate. Reset mỗi 30 ngày.",
+      "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
       "type": "gauge",
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -316,7 +351,7 @@
       },
       "targets": [
         {
-          "expr": "clamp_min(1 - ((1 - (sli:api_gateway_availability:rate30m)) / (1 - 0.995)), 0) or vector(1)",
+          "expr": "clamp_min(1 - ((1 - sli:api_gateway_availability:rate6h) / (1 - 0.995)), 0) or vector(1)",
           "legendFormat": "Budget Remaining"
         }
       ]
@@ -341,7 +376,7 @@
       "gridPos": { "h": 5, "w": 12, "x": 12, "y": 25 },
       "id": 9,
       "title": "Payment Error Budget Remaining",
-      "description": "Ước tính: 100% nếu không có lỗi, giảm dần theo error rate.",
+      "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
       "type": "gauge",
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -350,7 +385,7 @@
       },
       "targets": [
         {
-          "expr": "clamp_min(1 - ((1 - (sli:payment_success_rate:rate30m)) / (1 - 0.99)), 0) or vector(1)",
+          "expr": "clamp_min(1 - ((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)), 0) or vector(1)",
           "legendFormat": "Budget Remaining"
         }
       ]
@@ -364,5 +399,5 @@
   "timezone": "browser",
   "title": "SLO Overview — Availability, Latency & Error Budget",
   "uid": "slo-overview",
-  "version": 1
+  "version": 2
 }

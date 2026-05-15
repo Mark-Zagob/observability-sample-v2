@@ -114,19 +114,20 @@ groups:
   # ==========================================================
   # SLI Recording Rules (Phase 6)
   # ==========================================================
-  # Recording rules pre-calculate SLIs to:
-  #   1. Tránh query nặng khi load dashboard
-  #   2. Cho phép alert trên kết quả đã tính sẵn
-  #   3. Giữ data consistency giữa dashboard và alert
-  #
+  # Multi-Window SLI Recording Rules
   # Naming convention: sli:<signal>:<aggregation>
+  #
+  # Windows:
+  #   - rate5m   → fast-burn short window
+  #   - rate30m  → slow-burn short window
+  #   - rate1h   → fast-burn long window
+  #   - rate6h   → slow-burn long window
   # ==========================================================
   - name: sli_recording_rules
     interval: 30s
     rules:
 
-      # --- Availability SLI ---
-      # Tỉ lệ request thành công trong 5 phút gần nhất
+      # --- Availability SLI (all windows) ---
       - record: sli:api_gateway_availability:rate5m
         expr: |
           (
@@ -135,30 +136,44 @@ groups:
             sum(rate(api_gateway_requests_total[5m]))
           ) or vector(1)
 
-      # --- Latency SLI ---
-      # P95 latency của API Gateway trong 5 phút
-      - record: sli:api_gateway_latency_p95:rate5m
-        expr: |
-          histogram_quantile(0.95,
-            sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le)
-          )
-
-      # --- Payment Success SLI ---
-      - record: sli:payment_success_rate:rate5m
-        expr: |
-          (
-            sum(rate(payments_total{status="completed"}[5m]))
-            /
-            sum(rate(payments_total[5m]))
-          ) or vector(1)
-
-      # --- 30 phút rolling window (dùng cho burn rate) ---
       - record: sli:api_gateway_availability:rate30m
         expr: |
           (
             sum(rate(api_gateway_requests_total{status="success"}[30m]))
             /
             sum(rate(api_gateway_requests_total[30m]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_availability:rate1h
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success"}[1h]))
+            /
+            sum(rate(api_gateway_requests_total[1h]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_availability:rate6h
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success"}[6h]))
+            /
+            sum(rate(api_gateway_requests_total[6h]))
+          ) or vector(1)
+
+      # --- Latency SLI ---
+      - record: sli:api_gateway_latency_p95:rate5m
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le)
+          )
+
+      # --- Payment Success SLI (all windows) ---
+      - record: sli:payment_success_rate:rate5m
+        expr: |
+          (
+            sum(rate(payments_total{status="completed"}[5m]))
+            /
+            sum(rate(payments_total[5m]))
           ) or vector(1)
 
       - record: sli:payment_success_rate:rate30m
@@ -169,70 +184,103 @@ groups:
             sum(rate(payments_total[30m]))
           ) or vector(1)
 
+      - record: sli:payment_success_rate:rate1h
+        expr: |
+          (
+            sum(rate(payments_total{status="completed"}[1h]))
+            /
+            sum(rate(payments_total[1h]))
+          ) or vector(1)
+
+      - record: sli:payment_success_rate:rate6h
+        expr: |
+          (
+            sum(rate(payments_total{status="completed"}[6h]))
+            /
+            sum(rate(payments_total[6h]))
+          ) or vector(1)
+
   # ==========================================================
-  # SLO Burn Rate Alerts (Phase 6)
+  # SLO Burn Rate Alerts — Multi-Window Multi-Burn-Rate (MWMBR)
   # ==========================================================
+  # Google SRE pattern:
+  #   Fast burn:  14.4x rate → 2% budget consumed in 1h
+  #               Windows: 5m (short) AND 1h (long)
+  #   Slow burn:  3x rate   → 10% budget consumed in 6h
+  #               Windows: 30m (short) AND 6h (long)
+  #
   # SLO targets:
   #   - API Gateway Availability: 99.5%  (error budget = 0.5%)
   #   - Payment Success Rate:     99.0%  (error budget = 1.0%)
   #   - API Gateway P95 Latency:  < 500ms
-  #
-  # Burn Rate = tốc độ tiêu thụ error budget
-  #   - burn_rate = 1  → dùng hết budget đúng hạn (30 ngày)
-  #   - burn_rate > 14 → hết budget trong ~2 giờ (CRITICAL)
-  #   - burn_rate > 6  → hết budget trong ~5 giờ (WARNING)
-  #
-  # Công thức: burn_rate = (1 - availability) / (1 - slo_target)
   # ==========================================================
   - name: slo_burn_rate_alerts
     interval: 30s
     rules:
 
-      # CRITICAL: API Gateway burn rate > 14x trong 5 phút liên tục
-      # → Error budget sẽ hết trong ~2 giờ
-      - alert: APIGatewayHighBurnRate
+      # ---- API Gateway: Fast Burn (page) ----
+      # 14.4x burn rate in both 5m and 1h windows
+      - alert: APIGatewayFastBurn
         expr: |
-          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 14
+          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 14.4
           and
-          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 14
+          (1 - sli:api_gateway_availability:rate1h) / (1 - 0.995) > 14.4
         for: 2m
         labels:
           severity: critical
           slo: api_gateway_availability
+          burn_window: fast
         annotations:
-          summary: "API Gateway SLO burn rate is critical (>14x)"
-          description: "Error budget is being consumed 14x faster than sustainable. At this rate, the entire 30-day error budget will be exhausted in ~2 hours. Current availability: {{ $value }}"
+          summary: "🔥 API Gateway fast burn — 2% error budget consumed in 1h"
+          description: "Error budget is being consumed 14.4x faster than sustainable. Both 5m and 1h windows confirm the issue."
 
-      # WARNING: API Gateway burn rate > 6x trong 5 phút
-      # → Error budget sẽ hết trong ~5 giờ
-      - alert: APIGatewayModerateBurnRate
+      # ---- API Gateway: Slow Burn (ticket) ----
+      # 3x burn rate in both 30m and 6h windows
+      - alert: APIGatewaySlowBurn
         expr: |
-          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 6
+          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 3
           and
-          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 6
-        for: 5m
+          (1 - sli:api_gateway_availability:rate6h) / (1 - 0.995) > 3
+        for: 15m
         labels:
           severity: warning
           slo: api_gateway_availability
+          burn_window: slow
         annotations:
-          summary: "API Gateway SLO burn rate is elevated (>6x)"
-          description: "Error budget is being consumed 6x faster than sustainable. At this rate, the 30-day budget will be exhausted in ~5 hours."
+          summary: "⚠️ API Gateway slow burn — 10% error budget consumed in 6h"
+          description: "Error budget is being consumed 3x faster than sustainable. Both 30m and 6h windows confirm a sustained degradation."
 
-      # CRITICAL: Payment Success burn rate > 14x
-      - alert: PaymentHighBurnRate
+      # ---- Payment: Fast Burn (page) ----
+      - alert: PaymentFastBurn
         expr: |
-          (1 - sli:payment_success_rate:rate5m) / (1 - 0.99) > 14
+          (1 - sli:payment_success_rate:rate5m) / (1 - 0.99) > 14.4
           and
-          (1 - sli:payment_success_rate:rate30m) / (1 - 0.99) > 14
+          (1 - sli:payment_success_rate:rate1h) / (1 - 0.99) > 14.4
         for: 2m
         labels:
           severity: critical
           slo: payment_success
+          burn_window: fast
         annotations:
-          summary: "Payment SLO burn rate is critical (>14x)"
-          description: "Payment error budget is being consumed 14x faster than sustainable."
+          summary: "🔥 Payment fast burn — 2% error budget consumed in 1h"
+          description: "Payment error budget is being consumed 14.4x faster than sustainable."
 
-      # WARNING: P95 Latency vượt 500ms
+      # ---- Payment: Slow Burn (ticket) ----
+      - alert: PaymentSlowBurn
+        expr: |
+          (1 - sli:payment_success_rate:rate30m) / (1 - 0.99) > 3
+          and
+          (1 - sli:payment_success_rate:rate6h) / (1 - 0.99) > 3
+        for: 15m
+        labels:
+          severity: warning
+          slo: payment_success
+          burn_window: slow
+        annotations:
+          summary: "⚠️ Payment slow burn — 10% error budget consumed in 6h"
+          description: "Payment error budget is being consumed 3x faster than sustainable."
+
+      # ---- Latency SLO ----
       - alert: APIGatewayLatencySLOBreach
         expr: sli:api_gateway_latency_p95:rate5m > 0.5
         for: 5m

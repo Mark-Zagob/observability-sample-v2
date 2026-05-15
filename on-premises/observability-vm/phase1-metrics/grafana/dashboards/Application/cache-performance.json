@@ -3,7 +3,11 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    { "title": "App Performance", "url": "/d/app-performance-microservices", "type": "link", "icon": "dashboard" },
+    { "title": "Database", "url": "/d/db-performance", "type": "link", "icon": "dashboard" },
+    { "title": "SLO Overview", "url": "/d/slo-overview", "type": "link", "icon": "dashboard" }
+  ],
   "panels": [
     {
       "title": "Cache Hit Ratio (%)",

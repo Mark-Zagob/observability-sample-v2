@@ -19,7 +19,13 @@
     "editable": true,
     "fiscalYearStartMonth": 0,
     "graphTooltip": 1,
-    "links": [],
+    "links": [
+        { "title": "Unified Overview", "url": "/d/unified-overview", "type": "link", "icon": "apps" },
+        { "title": "SLO Overview", "url": "/d/slo-overview", "type": "link", "icon": "dashboard" },
+        { "title": "App Performance", "url": "/d/app-performance-microservices", "type": "link", "icon": "dashboard" },
+        { "title": "Tracing", "url": "/d/tracing-overview", "type": "link", "icon": "search" },
+        { "title": "Infrastructure", "url": "/d/node-exporter-host", "type": "link", "icon": "server" }
+    ],
     "panels": [
         {
             "collapsed": false,
