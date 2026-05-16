@@ -120,6 +120,7 @@ on-premises/
 ├── OBSERVABILITY_LEARNING_GUIDE.md    ← Dashboard reading & incident simulation
 ├── architecture_summary.md            ← Tổng kết kiến thức
 ├── devops-question.md                 ← DevOps interview questions (Junior–Mid)
+├── devops-question-senior.md          ← DevOps interview questions (Senior)
 ├── applications-vm/
 │   ├── applications/                  # Source code microservices
 │   └── agents/                        # AI agent configs
@@ -139,7 +140,8 @@ Bộ câu hỏi phỏng vấn DevOps dựa trên lab này:
 
 | File | Level | Số câu | Focus |
 |------|-------|--------|-------|
-| [devops-question.md](devops-question.md) | Junior–Mid + Stretch | 37 | Docker, Networking, Kafka, Observability, CI/CD, Troubleshooting |
+| [devops-question.md](devops-question.md) | Junior–Mid + Stretch | 40 | Docker, Networking, Kafka, Observability, SLO, CI/CD, Troubleshooting |
+| [devops-question-senior.md](devops-question-senior.md) | Senior | 28 | Architecture design, SLO strategy, Chaos engineering, Platform engineering, Leadership |
 
 > Câu hỏi dựa trên codebase thực tế, yêu cầu giải thích "why" chứ không chỉ "what".
 

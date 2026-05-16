@@ -46,7 +46,7 @@
 
 **Q13.** 🟡 Our `docker-compose.yml` has database credentials hardcoded as environment variables (e.g., `POSTGRES_PASSWORD=postgres`). What are the security risks? Describe at least two better approaches to manage secrets in a Docker Compose environment.
 
-**Q14.** 🟡 PostgreSQL is running low on connections because all services are connecting to it directly. What are two different approaches to solve this from an **operational** perspective? Which would you recommend for our setup and why?
+**Q14.** 🔴 PostgreSQL is running low on connections because all services are connecting to it directly. What are two different approaches to solve this from an **operational** perspective? Which would you recommend for our setup and why?
 
 ---
 
@@ -78,31 +78,37 @@
 
 **Q25.** 🔴 What is the purpose of Prometheus **recording rules**? Why would we pre-compute `job:request_duration_seconds:p95` instead of calculating it on-the-fly in Grafana?
 
+**Q26.** 🟢 What is the difference between `docker compose logs order-service` and `docker logs order-service`? When would you use flags like `-f`, `--since`, and `--tail`? Why is it important to know these when troubleshooting a production issue?
+
+**Q27.** 🟡 Our services use structured JSON logging (e.g., `{"timestamp": "...", "level": "INFO", "message": "...", "trace_id": "..."}`) instead of plain text logs. What are the advantages of structured logging? How does including `trace_id` in every log line help during incident investigation?
+
+**Q28.** 🟡 Our SLO target is 99.5% availability for the API Gateway. Calculate how many minutes of downtime are allowed per month (30 days). What is an "error budget" and what should happen when it runs out? Why is this concept important for balancing reliability and feature velocity?
+
 ---
 
 ## Section 6: CI/CD & Deployment Workflow (4 questions)
 
-**Q26.** 🟢 A developer pushes code to the `main` branch. Describe what a basic CI/CD pipeline should do before deploying the new version to the Docker Compose environment. What are the minimum steps you would include?
+**Q29.** 🟢 A developer pushes code to the `main` branch. Describe what a basic CI/CD pipeline should do before deploying the new version to the Docker Compose environment. What are the minimum steps you would include?
 
-**Q27.** 🟡 You are deploying a new version of `order-service`. You run `docker compose pull order-service && docker compose up -d order-service`. What happens to in-flight requests during this process? How would you minimize downtime?
+**Q30.** 🟡 You are deploying a new version of `order-service`. You run `docker compose pull order-service && docker compose up -d order-service`. What happens to in-flight requests during this process? How would you minimize downtime?
 
-**Q28.** 🟡 After deploying a new version, you discover a critical bug. Describe your rollback plan step by step. How do you ensure the previous version is available? What would you check after rolling back?
+**Q31.** 🟡 After deploying a new version, you discover a critical bug. Describe your rollback plan step by step. How do you ensure the previous version is available? What would you check after rolling back?
 
-**Q29.** 🟡 Your team has 5 developers working on the same codebase. What Git branching strategy would you recommend? How do you decide what goes into a release? Explain how this connects to the deployment pipeline.
+**Q32.** 🟢 Your team has 5 developers working on the same codebase. What Git branching strategy would you recommend? How do you decide what goes into a release? Explain how this connects to the deployment pipeline.
 
 ---
 
 ## Section 7: Troubleshooting Scenarios (5 questions)
 
-**Q30.** 🟡 After deploying a new version, all orders return "unknown error" in the Web UI, but the Order Service logs show orders are being created successfully. Where would you look first? *(Hint: think about the layers between the user and the service)*
+**Q33.** 🟡 After deploying a new version, all orders return "unknown error" in the Web UI, but the Order Service logs show orders are being created successfully. Where would you look first? *(Hint: think about the layers between the user and the service)*
 
-**Q31.** 🟡 You run `docker compose up -d` on a fresh VM. PostgreSQL and Redis are healthy, but the Order Service fails to start with `connection refused` to Kafka. The Kafka container is running. What's likely happening?
+**Q34.** 🟡 You run `docker compose up -d` on a fresh VM. PostgreSQL and Redis are healthy, but the Order Service fails to start with `connection refused` to Kafka. The Kafka container is running. What's likely happening?
 
-**Q32.** 🔴 Load testing shows that response times increase dramatically after 5 minutes. CPU and memory look fine. PostgreSQL shows many connections in `idle in transaction` state. What's your hypothesis and how would you verify it?
+**Q35.** 🔴 Load testing shows that response times increase dramatically after 5 minutes. CPU and memory look fine. PostgreSQL shows many connections in `idle in transaction` state. What's your hypothesis and how would you verify it?
 
-**Q33.** 🟡 The Events tab in the Web UI shows notifications but no inventory logs. The Inventory Worker `/status` endpoint shows it's running with 0 errors. Where would you investigate?
+**Q36.** 🟡 The Events tab in the Web UI shows notifications but no inventory logs. The Inventory Worker `/status` endpoint shows it's running with 0 errors. Where would you investigate?
 
-**Q34.** 🟡 You need to upgrade PostgreSQL from version 16 to 17. Describe your plan step by step, considering that we have data we cannot lose. Focus on the **operational process**, not SQL.
+**Q37.** 🟡 You need to upgrade PostgreSQL from version 16 to 17. Describe your plan step by step, considering that we have data we cannot lose. Focus on the **operational process**, not SQL.
 
 ---
 
@@ -120,10 +126,10 @@
 
 | Level | Count | Percentage |
 |-------|-------|------------|
-| 🟢 Junior | 9 | 25% |
-| 🟡 Mid | 18 | 50% |
+| 🟢 Junior | 11 | 27% |
+| 🟡 Mid | 19 | 48% |
 | 🔴 Stretch (Senior) | 10 | 25% |
-| **Total** | **37** | 100% |
+| **Total** | **40** | 100% |
 
 | Section | Questions | Focus |
 |---------|-----------|-------|
@@ -131,9 +137,9 @@
 | Networking | Q7–Q10 | DNS, reverse proxy, security |
 | Infrastructure Ops | Q11–Q14 | Resource limits, backup, secrets, connections |
 | Kafka | Q15–Q19 | Event-driven architecture |
-| Observability | Q20–Q25 | Metrics, logs, traces, alerting |
-| CI/CD | Q26–Q29 | Pipeline, deployment, rollback, branching |
-| Troubleshooting | Q30–Q34 | Cross-cutting diagnosis scenarios |
+| Observability | Q20–Q28 | Metrics, logs, traces, alerting, SLO, structured logging |
+| CI/CD | Q29–Q32 | Pipeline, deployment, rollback, branching |
+| Troubleshooting | Q33–Q37 | Cross-cutting diagnosis scenarios |
 | Bonus | B1–B3 | Architecture decision-making |
 
 > **Evaluation criteria:**
