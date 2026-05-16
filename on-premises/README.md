@@ -29,6 +29,7 @@ Xem chi tiết tại:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Sơ đồ Mermaid
 - [ARCHITECTURE_DETAIL.md](ARCHITECTURE_DETAIL.md) — Giải thích chi tiết từng component
 - [architecture_summary.md](architecture_summary.md) — Tổng kết kiến trúc và kiến thức DevOps
+- [OBSERVABILITY_LEARNING_GUIDE.md](OBSERVABILITY_LEARNING_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -67,8 +68,6 @@ Dự án được chia thành 6 phases, mỗi phase tập trung vào một khía
 | **Phase 4** | Alerting — Alertmanager, Recording Rules, Predictive Alerts | Trung cấp | ✅ |
 | **Phase 5** | Application Instrumentation — Custom Metrics, Structured Logging | Nâng cao | ✅ |
 | **Phase 6** | Correlation & SLO — Log→Trace, SLI/SLO, Error Budget | Nâng cao | ✅ |
-
-Chi tiết: xem [task.md](task.md)
 
 ---
 
@@ -115,21 +114,21 @@ docker compose up -d
 
 ```
 on-premises/
-├── README.md                     ← File này
-├── ARCHITECTURE.md               ← Sơ đồ Mermaid
-├── ARCHITECTURE_DETAIL.md        ← Giải thích chi tiết
-├── architecture_summary.md       ← Tổng kết kiến thức
-├── task.md                       ← Learning roadmap checklist
-├── devops-question.md            ← DevOps interview questions (Junior–Mid)
+├── README.md                          ← File này
+├── ARCHITECTURE.md                    ← Sơ đồ Mermaid
+├── ARCHITECTURE_DETAIL.md             ← Giải thích chi tiết
+├── OBSERVABILITY_LEARNING_GUIDE.md    ← Dashboard reading & incident simulation
+├── architecture_summary.md            ← Tổng kết kiến thức
+├── devops-question.md                 ← DevOps interview questions (Junior–Mid)
 ├── applications-vm/
-│   ├── applications/             # Source code microservices
-│   └── agents/                   # AI agent configs
+│   ├── applications/                  # Source code microservices
+│   └── agents/                        # AI agent configs
 └── observability-vm/
-    ├── phase1-metrics/           # Prometheus + Node Exporter + cAdvisor
-    ├── phase2-logging/           # Loki + Promtail
-    ├── phase3-tracing/           # Tempo + OTel Collector
-    ├── scripts/                  # Utility scripts
-    └── storage/                  # Persistent data
+    ├── phase1-metrics/                # Prometheus + Node Exporter + cAdvisor
+    ├── phase2-logging/                # Loki + Promtail
+    ├── phase3-tracing/                # Tempo + OTel Collector
+    ├── scripts/                       # Utility scripts
+    └── storage/                       # Persistent data
 ```
 
 ---

@@ -33,10 +33,10 @@ OS -->|HTTP| PS
 
 OS -->|SQL| PG
 OS -->|cache| RD
-OS -->|produce events| KF
+OS -->|"produce: order.created, stock.depleted"| KF
 
-KF -->|consume| NW
-KF -->|consume| IW
+KF -->|"consume: order.events"| NW
+KF -->|"consume: order.events"| IW
 
 NW -->|SQL| PG
 IW -->|SQL| PG

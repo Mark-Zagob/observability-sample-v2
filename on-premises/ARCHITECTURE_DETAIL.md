@@ -135,6 +135,7 @@ Order Service ──publish──► Kafka (topic: order.events)
 | `order.created` | New order saved | Notification Worker, Inventory Worker |
 | `order.payment_completed` | Payment success | Notification Worker |
 | `order.payment_failed` | Payment rejected | Notification Worker, Inventory Worker |
+| `stock.depleted` | Stock insufficient (< threshold) | Inventory Worker (triggers auto-restock) |
 
 ### Telemetry Pipeline
 ```
