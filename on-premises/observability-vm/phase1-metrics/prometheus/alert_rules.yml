@@ -281,8 +281,15 @@ groups:
           description: "Payment error budget is being consumed 3x faster than sustainable."
 
       # ---- Latency SLO ----
+      # Only fire when there's meaningful traffic (> 0.1 req/s ≈ 6 req/min)
+      # to avoid false alerts from sparse health-check or cold-start requests.
       - alert: APIGatewayLatencySLOBreach
-        expr: sli:api_gateway_latency_p95:rate5m > 0.5
+        expr: |
+          (
+            sli:api_gateway_latency_p95:rate5m > 0.5
+          and
+            sum(rate(api_gateway_request_duration_seconds_count[5m])) > 0.1
+          )
         for: 5m
         labels:
           severity: warning

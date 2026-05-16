@@ -11,7 +11,10 @@ COPY style.css  /usr/share/nginx/html/style.css
 COPY app.js     /usr/share/nginx/html/app.js
 
 # === Health check ===
+# Use 127.0.0.1 (not localhost) because nginx-unprivileged
+# doesn't enable IPv6 listening, and BusyBox wget resolves
+# localhost to ::1 first → "Connection refused".
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
-  CMD wget -q --spider http://localhost:8080/ || exit 1
+  CMD wget -q --spider http://127.0.0.1:8080/ || exit 1
 
 EXPOSE 8080
