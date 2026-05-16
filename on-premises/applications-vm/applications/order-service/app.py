@@ -96,6 +96,12 @@ kafka_produced_counter = meter.create_counter(
     unit="1",
 )
 
+inventory_checks_counter = meter.create_counter(
+    name="inventory_checks_total",
+    description="Total inventory stock checks by result",
+    unit="1",
+)
+
 # ============================================================
 # Database + Cache (using shared helpers)
 # ============================================================
@@ -315,6 +321,9 @@ def process_order():
         span.set_attribute("inventory.requested", quantity)
         span.set_attribute("inventory.in_stock", in_stock)
 
+        check_result = "in_stock" if in_stock else "out_of_stock"
+        inventory_checks_counter.add(1, {"result": check_result})
+
         logger.info("Inventory checked",
                      extra={"order_id": order_id, "product_id": product_id,
                             "stock": current_stock, "in_stock": in_stock})
@@ -322,6 +331,15 @@ def process_order():
         if not in_stock:
             order_status = "out_of_stock"
             orders_counter.add(1, {"status": order_status})
+
+            # Publish stock.depleted event so inventory-worker can auto-restock
+            publish_event("stock.depleted", order_id, {
+                "product_id": product_id,
+                "product_name": product["name"],
+                "current_stock": current_stock,
+                "quantity_requested": quantity,
+            })
+
             return problem_response(
                 409, "Out of Stock",
                 f"Insufficient stock for {product['name']} (have {current_stock}, need {quantity})",

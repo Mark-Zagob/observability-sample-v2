@@ -159,7 +159,7 @@ def restock_product(product_id, current_stock):
                     "INSERT INTO inventory_log "
                     "(event_id, order_id, product_id, action, quantity, stock_before, stock_after) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (f"restock-{product_id}-{int(time.time())}", "auto-restock",
+                    (f"restock-{product_id}-{int(time.time())}", "restock",
                      product_id, "restock", RESTOCK_AMOUNT, stock_before, stock_after)
                 )
                 conn.commit()
@@ -359,7 +359,7 @@ def consume_loop():
                 consumer_stats["consumed"] += 1
 
                 # Only handle stock-relevant events
-                if event_type not in ("order.created", "order.payment_failed"):
+                if event_type not in ("order.created", "order.payment_failed", "stock.depleted"):
                     consumer_stats["ignored"] += 1
                     continue
 
@@ -412,6 +412,20 @@ def consume_loop():
                                         "event_type": event_type,
                                     })
                                     consumer_stats["released"] += 1
+
+                        elif event_type == "stock.depleted":
+                            with tracer.start_as_current_span("handle_stock_depleted") as inv_span:
+                                data = event.get("data", {})
+                                product_id = data.get("product_id")
+                                current_stock = data.get("current_stock", 0)
+                                inv_span.set_attribute("inventory.action", "restock")
+                                inv_span.set_attribute("product.id", str(product_id))
+                                if product_id and current_stock < RESTOCK_THRESHOLD:
+                                    restock_product(product_id, current_stock)
+                                    inventory_updates_counter.add(1, {
+                                        "action": "restock",
+                                        "event_type": event_type,
+                                    })
 
                         # Mark as processed
                         mark_event_processed(event_id, event_type)

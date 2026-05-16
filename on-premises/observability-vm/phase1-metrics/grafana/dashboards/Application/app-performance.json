@@ -329,14 +329,14 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2 }
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
       "id": 14,
       "title": "Kafka Events Consumed — Notification",
       "description": "Kafka events consumed per second by event type (notification-worker)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(kafka_events_consumed_total{job=\"notification-worker\"}[5m])) by (event_type)",
+          "expr": "sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) by (event_type)",
           "legendFormat": "{{ event_type }}"
         }
       ]
@@ -346,26 +346,28 @@
       "fieldConfig": {
         "defaults": {
           "color": { "fixedColor": "red", "mode": "fixed" },
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
-          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "noValue": "0 (no errors)"
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
       "id": 18,
-      "title": "Notification Errors",
-      "description": "Notification processing errors per second",
-      "type": "timeseries",
+      "title": "Notification Processing Errors",
+      "description": "Notification worker errors. Shows consumer_stats errors via OTel — 'no data' when zero errors is correct behavior.",
+      "type": "stat",
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
         {
-          "expr": "sum(rate(notification_errors_total[5m])) by (type)",
-          "legendFormat": "{{ type }}"
+          "expr": "sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) - sum(rate(notifications_sent_total[5m]))",
+          "legendFormat": "Errors/s (consumed - sent)"
         }
       ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
       "id": 105,
       "title": "📦 Inventory Worker",
       "type": "row"
@@ -380,7 +382,7 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } }
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 37 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
       "id": 15,
       "title": "Inventory Updates (by Action)",
       "description": "Stock updates per second: reserve vs release",
@@ -402,7 +404,7 @@
           "custom": { "fillOpacity": 10, "lineWidth": 2 }
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 37 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
       "id": 16,
       "title": "Inventory Processing Duration (P50 / P95)",
       "description": "Time to process stock reserve/release",
@@ -428,7 +430,7 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2 }
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 37 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
       "id": 17,
       "title": "Inventory Errors",
       "description": "Inventory update errors per second",
@@ -447,24 +449,25 @@
           "color": { "fixedColor": "blue", "mode": "fixed" },
           "unit": "ops",
           "min": 0,
-          "custom": { "fillOpacity": 20, "lineWidth": 2 }
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "noValue": "No restocks triggered (stock above threshold)"
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
       "id": 19,
       "title": "Auto-Restock Events",
-      "description": "Automatic stock replenishment events triggered by low-stock threshold",
+      "description": "Automatic stock replenishment when stock drops below threshold (default: 10 units). 'No data' means all products have sufficient stock.",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(inventory_restock_total[5m])) by (product_name)",
-          "legendFormat": "{{ product_name }}"
+          "expr": "sum(rate(inventory_restock_total[5m])) by (product_id)",
+          "legendFormat": "product {{ product_id }}"
         }
       ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 },
       "id": 103,
       "title": "📊 End-to-End Overview",
       "type": "row"
@@ -479,7 +482,7 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2 }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
       "id": 10,
       "title": "Service Latency Comparison (P95)",
       "description": "P95 latency of each service to identify bottlenecks",
@@ -517,7 +520,7 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2 }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
       "id": 11,
       "title": "Throughput Comparison",
       "description": "Requests per second across all services",

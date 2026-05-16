@@ -152,7 +152,7 @@ def send_notification(event):
 
     logger.info("Notification sent",
                 extra={"order_id": order_id, "type": template_info["type"],
-                       "channel": template_info["channel"], "message": message[:100]})
+                       "channel": template_info["channel"], "notification_message": message[:100]})
 
     # Persist to notifications table
     db.execute(
