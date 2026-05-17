@@ -139,6 +139,8 @@ Hướng dẫn đọc dashboard theo chuẩn production-grade bằng phương ph
 
 ### 🧪 Experiment 1: Service Down (TargetDown alert)
 
+> **📋 Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) · [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_)
+
 **Giả thuyết:** Khi order-service bị stop, Alerting Overview sẽ hiển thị TargetDown alert critical trong 1 phút, Unified Overview sẽ thấy RPS drop về 0.
 
 **Inject:**
@@ -171,6 +173,8 @@ docker start order-service
 ---
 
 ### 🧪 Experiment 2: Database Saturation (High Latency)
+
+> **📋 Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) · [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) · [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
 
 **Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, error rate sẽ tăng theo sau.
 
@@ -205,6 +209,8 @@ docker exec postgres psql -U app -d orders -c "
 
 ### 🧪 Experiment 3: Kafka Consumer Lag (Notification Worker Slow)
 
+> **📋 Runbook:** [RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) · [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) · [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
+
 **Giả thuyết:** Khi notification-worker bị freeze, Kafka consumer lag sẽ tăng, Alerting sẽ báo KafkaConsumerLagHigh.
 
 **Inject:**
@@ -235,6 +241,8 @@ docker unpause notification-worker
 
 ### 🧪 Experiment 4: Cascading Failure (Payment Service Down)
 
+> **📋 Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) · [RB-10 PaymentFastBurn](INCIDENT_RUNBOOK.md#-rb-10-paymentfastburn) · [RB-08 APIGatewayFastBurn](INCIDENT_RUNBOOK.md#-rb-08-apigatewayfastburn)
+
 **Giả thuyết:** Khi payment-service down, order-service sẽ báo payment_error, notification-worker vẫn nhận events nhưng với status khác.
 
 **Inject:**
@@ -263,6 +271,8 @@ docker start payment-service
 ---
 
 ### 📖 Experiment 5: SLO Burn Rate Deep Dive (Learning Exercise)
+
+> **📋 Runbook:** [RB-08→13 (tất cả SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
 
 > **Loại:** Learning exercise — không inject failure mới. Sử dụng data từ Experiment 2 và 4.
 
@@ -428,6 +438,8 @@ Error Budget policy:
 
 ### 🧪 Experiment 6: Stock Depletion Deadlock (Logic Bug)
 
+> **📋 Runbook:** [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) (alert có thể firing do order errors tăng)
+
 > Đây chính là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
 
 **Giả thuyết:** Khi stock = 0, nếu không có event flow để trigger restock, hệ thống rơi vào deadlock.
@@ -457,6 +469,8 @@ docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 100;"
 
 ### 🧪 Experiment 7: Memory Pressure (Container Resource Limit)
 
+> **📋 Runbook:** [RB-03 HighMemoryUsage](INCIDENT_RUNBOOK.md#-rb-03-highmemoryusage) · [RB-06 MemoryWillExhaust](INCIDENT_RUNBOOK.md#-rb-06-memorywillexhaustin2hours) · [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95)
+
 **Giả thuyết:** Khi container bị giới hạn memory, latency tăng → eventually OOMKilled.
 
 **Inject:**
@@ -482,6 +496,8 @@ docker restart order-service
 ---
 
 ### 🧪 Experiment 8: DNS Cache Stale (Nginx Proxy Issue)
+
+> **📋 Runbook:** Không có alert tương ứng — đây là networking issue mà monitoring không detect được. Cần manual investigation.
 
 > Đây cũng là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
 

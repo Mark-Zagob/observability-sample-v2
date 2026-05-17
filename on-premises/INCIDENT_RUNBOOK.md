@@ -6,6 +6,21 @@ Tài liệu quy trình xử lý cho **mỗi alert** trong hệ thống. Khi aler
 
 > **Prerequisite:** Đã hoàn thành Incident Simulation (OBSERVABILITY_LEARNING_GUIDE.md) — biết đọc dashboard.
 
+### Thực hành Runbook với Experiments
+
+Dùng bảng sau để luyện tập: chạy experiment → khi alert firing → mở runbook tương ứng → follow quy trình.
+
+| Experiment | Inject gì | Alerts sẽ firing | Runbook |
+|-----------|----------|------------------|---------|
+| [Exp 1: Service Down](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-1-service-down-targetdown-alert) | `docker stop order-service` | TargetDown, ServiceNoTraces | RB-01, RB-23 |
+| [Exp 2: DB Saturation](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-2-database-saturation-high-latency) | DB table lock | HighLatencyP95, HighErrorRate, LatencyFastBurn | RB-22, RB-21, RB-12 |
+| [Exp 3: Kafka Lag](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-3-kafka-consumer-lag-notification-worker-slow) | `docker pause notification-worker` | KafkaConsumerLagHigh/Critical, ConsumerGroupDown | RB-16, RB-17, RB-18 |
+| [Exp 4: Cascading Failure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-4-cascading-failure-payment-service-down) | `docker stop payment-service` | TargetDown, PaymentFastBurn, APIGatewayFastBurn | RB-01, RB-10, RB-08 |
+| [Exp 5: Burn Rate](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-5-slo-burn-rate-deep-dive-learning-exercise) | Dùng data từ Exp 2/4 | (learning — không inject mới) | RB-08→13 |
+| [Exp 6: Stock Deadlock](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-6-stock-depletion-deadlock-logic-bug) | Set stock = 0 | HighErrorRate | RB-21 |
+| [Exp 7: Memory Pressure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-7-memory-pressure-container-resource-limit) | Memory limit 64m | HighMemoryUsage, HighLatencyP95 | RB-03, RB-06, RB-22 |
+| [Exp 8: DNS Cache](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-8-dns-cache-stale-nginx-proxy-issue) | Rebuild container | Không có alert tương ứng | Manual investigation |
+
 ---
 
 ## Severity → Action Mapping
