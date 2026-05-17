@@ -160,12 +160,48 @@ groups:
             sum(rate(api_gateway_requests_total[6h]))
           ) or vector(1)
 
-      # --- Latency SLI ---
+      # --- Latency SLI (P95 value for gauge display) ---
       - record: sli:api_gateway_latency_p95:rate5m
         expr: |
           histogram_quantile(0.95,
             sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le)
           )
+
+      # --- Latency SLO Compliance (% requests < 500ms) ---
+      # Unlike availability (success/total), latency compliance =
+      # requests_under_threshold / total_requests.
+      # The 0.5 bucket = requests completing in ≤ 500ms.
+      - record: sli:api_gateway_latency_compliance:rate5m
+        expr: |
+          (
+            sum(rate(api_gateway_request_duration_seconds_bucket{le="0.5"}[5m]))
+            /
+            sum(rate(api_gateway_request_duration_seconds_count[5m]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_latency_compliance:rate30m
+        expr: |
+          (
+            sum(rate(api_gateway_request_duration_seconds_bucket{le="0.5"}[30m]))
+            /
+            sum(rate(api_gateway_request_duration_seconds_count[30m]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_latency_compliance:rate1h
+        expr: |
+          (
+            sum(rate(api_gateway_request_duration_seconds_bucket{le="0.5"}[1h]))
+            /
+            sum(rate(api_gateway_request_duration_seconds_count[1h]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_latency_compliance:rate6h
+        expr: |
+          (
+            sum(rate(api_gateway_request_duration_seconds_bucket{le="0.5"}[6h]))
+            /
+            sum(rate(api_gateway_request_duration_seconds_count[6h]))
+          ) or vector(1)
 
       # --- Payment Success SLI (all windows) ---
       - record: sli:payment_success_rate:rate5m
@@ -280,20 +316,43 @@ groups:
           summary: "⚠️ Payment slow burn — 10% error budget consumed in 6h"
           description: "Payment error budget is being consumed 3x faster than sustainable."
 
-      # ---- Latency SLO ----
-      # Only fire when there's meaningful traffic (> 0.1 req/s ≈ 6 req/min)
-      # to avoid false alerts from sparse health-check or cold-start requests.
-      - alert: APIGatewayLatencySLOBreach
+      # ---- Latency: Fast Burn (page) ----
+      # SLO: 95% requests < 500ms (error budget = 5%)
+      # Traffic threshold: > 0.1 req/s to avoid false alerts
+      - alert: APIGatewayLatencyFastBurn
         expr: |
           (
-            sli:api_gateway_latency_p95:rate5m > 0.5
+            (1 - sli:api_gateway_latency_compliance:rate5m) / (1 - 0.95) > 14.4
+            and
+            (1 - sli:api_gateway_latency_compliance:rate1h) / (1 - 0.95) > 14.4
           and
             sum(rate(api_gateway_request_duration_seconds_count[5m])) > 0.1
           )
-        for: 5m
+        for: 2m
+        labels:
+          severity: critical
+          slo: api_gateway_latency
+          burn_window: fast
+        annotations:
+          summary: "🔥 API Gateway latency fast burn — 2% latency budget consumed in 1h"
+          description: "Latency error budget is being consumed 14.4x faster than sustainable. Most requests are exceeding 500ms."
+
+      # ---- Latency: Slow Burn (ticket) ----
+      - alert: APIGatewayLatencySlowBurn
+        expr: |
+          (
+            (1 - sli:api_gateway_latency_compliance:rate30m) / (1 - 0.95) > 3
+            and
+            (1 - sli:api_gateway_latency_compliance:rate6h) / (1 - 0.95) > 3
+          and
+            sum(rate(api_gateway_request_duration_seconds_count[5m])) > 0.1
+          )
+        for: 15m
         labels:
           severity: warning
           slo: api_gateway_latency
+          burn_window: slow
         annotations:
-          summary: "API Gateway P95 latency exceeds 500ms SLO"
-          description: "P95 latency is {{ $value }}s, exceeding the 500ms target."
+          summary: "⚠️ API Gateway latency slow burn — latency degradation over 6h"
+          description: "Latency error budget is being consumed 3x faster than sustainable. Sustained performance degradation detected."
+

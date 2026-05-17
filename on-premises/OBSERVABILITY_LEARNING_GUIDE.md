@@ -262,33 +262,167 @@ docker start payment-service
 
 ---
 
-### 🧪 Experiment 5: SLO Burn Rate (Sustained Error Rate)
+### 📖 Experiment 5: SLO Burn Rate Deep Dive (Learning Exercise)
 
-**Giả thuyết:** Sustained errors sẽ trigger burn rate alerts khi error budget bị tiêu hao nhanh.
+> **Loại:** Learning exercise — không inject failure mới. Sử dụng data từ Experiment 2 và 4.
 
-**Inject:**
-```bash
-# Stop payment-service → 100% orders sẽ có payment_error
-docker stop payment-service
+**Mục tiêu:** Hiểu sâu burn rate math, đọc burn rate dashboard, và biết cách phản ứng theo team size.
 
-# Chạy load test (Flash Sale) — tạo nhiều failed orders
+#### 5.1 — Theory: Error Budget & Burn Rate
+
+**Bước 1: Tính Error Budget**
+
+Hệ thống có 3 SLO. Tính error budget cho mỗi SLO:
+
+| SLO | Target | Error Budget (30 ngày) |
+|-----|--------|----------------------|
+| API Gateway Availability | 99.5% | 0.5% × 30d × 24h × 60m = **216 phút** |
+| Payment Success Rate | 99.0% | 1.0% × 30d × 24h × 60m = **432 phút** |
+| API Gateway Latency | 95% requests < 500ms | 5% × 30d × 24h × 60m = **2160 phút** |
+
+> **Nhận xét:** Latency SLO có budget lớn hơn nhiều (5% vs 0.5%). Đây là thiết kế có chủ ý — latency degradation thường ít nghiêm trọng hơn complete failure.
+
+**Bước 2: Hiểu Burn Rate**
+
+```
+Burn Rate = error_rate_thực_tế / error_rate_cho_phép
+
+  1x  = đốt đều, hết budget đúng cuối tháng (bình thường)
+  3x  = đốt gấp 3, hết budget sau 10 ngày
+  14.4x = đốt cực nhanh, hết budget sau ~2 ngày
 ```
 
-**Dashboard reading path:**
+**Bước 3: Tại sao 14.4x và 3x?**
+
+Con số này được tính ngược từ yêu cầu phát hiện:
+
+| Severity | Mục tiêu phát hiện | Budget tiêu trước khi phát hiện | Burn Rate |
+|----------|-------------------|-------------------------------|-----------|
+| **Critical (page)** | Trong 1 giờ | 2% budget | 14.4x |
+| **Warning (ticket)** | Trong 6 giờ | 5% budget | 3x |
+
+**Bước 4: Tại sao Multi-Window?**
+
+Yêu cầu **cả 2 windows** vượt ngưỡng mới alert:
+- **Window ngắn** (5m/30m): xác nhận "đang xảy ra ngay bây giờ"
+- **Window dài** (1h/6h): xác nhận "không phải spike thoáng qua"
+
+| Alert | Window ngắn | Window dài | Cả 2 vượt? | Kết quả |
+|-------|------------|-----------|-----------|---------|
+| Spike 1 phút rồi hết | 5m > 14.4x ✅ | 1h < 14.4x ❌ | Không | Không alert ✅ |
+| Service sập 15 phút | 5m > 14.4x ✅ | 1h > 14.4x ✅ | Có | PAGE! 🔴 |
+| Chậm nhẹ 6 giờ | 30m > 3x ✅ | 6h > 3x ✅ | Có | Ticket 🟡 |
+
+#### 5.2 — Thực hành: Đọc Burn Rate Dashboard
+
+**Prerequisite:** Chạy Experiment 2 (Cascading Failure) hoặc Experiment 4 (DB Saturation) trước.
+
+**Sau khi inject xong, mở SLO Overview dashboard và trả lời:**
+
+1. Gauge "API Gateway Availability" hiển thị bao nhiêu? So với SLO target 99.5%?
+2. Burn Rate chart: line "Fast (5m)" có vượt đường đỏ 14.4x không?
+3. Burn Rate chart: line "Fast (1h)" có vượt 14.4x không? (nếu chưa → multi-window đang bảo vệ bạn khỏi false alert)
+4. Error Budget gauge giảm bao nhiêu? Tính thủ công: `error_rate × thời_gian_lỗi / 216 phút`
+5. **Latency Compliance** panel: giá trị bao nhiêu? So với SLO target 95%?
+6. **Latency Burn Rate**: có khác biệt gì so với Availability Burn Rate không?
+
+> **Bài học quan trọng:** Trong Experiment 2 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể **bình thường** — vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần **cả 2 loại SLO**.
+
+#### 5.3 — Tính toán thực tế
+
+**Bài tập:** Sau khi chạy Experiment 2 được 15 phút với error rate ~10%:
+
 ```
-SLO Overview → API Gateway Availability gauge giảm
-  → Error Budget Remaining giảm dần
-    → Burn Rate chart tăng
-      → Alerting → APIGatewayFastBurn hoặc APIGatewaySlowBurn firing
-        → App Performance → xác định error source
+Error Budget = 216 phút
+Error rate = 10%
+Thời gian = 15 phút
+
+Lưu ý: Error Budget tính theo request-based, không phải time-based!
+Error minutes tiêu thụ = 15 phút × 10% = 1.5 phút
+Budget consumed = 1.5 / 216 × 100 = 0.694%
+
+Kiểm chứng bằng burn rate:
+Burn rate = 10% / 0.5% = 20x
+Budget consumed = 20 × (15 / 43200) = 0.694% ✅
 ```
 
-**Bài học:** SLO burn rate alerts phát hiện vấn đề sớm hơn threshold alerts. Fast burn (14x) = sự cố nghiêm trọng. Slow burn (2x) = degradation âm thầm.
+**Sai lầm phổ biến:** Tính 15/216 = 6.94% — chỉ đúng khi 100% requests lỗi (hoàn toàn sập). Với 10% error rate, phải nhân với 10%.
 
-**Rollback:**
-```bash
-docker start payment-service
+#### 5.4 — Operation Playbook theo Team Size
+
+**Khi Burn Rate Alert firing, ai làm gì?**
+
+**Solo / Startup (1-3 người):**
 ```
+Fast Burn (14.4x) firing:
+  1. Nhận alert qua Telegram/Slack
+  2. Mở SLO Overview → xác nhận burn rate thực sự cao
+  3. Mở App Performance → xác định service nào lỗi
+  4. Fix hoặc rollback
+  5. Viết post-mortem ngắn (3 dòng: gì xảy ra, tại sao, fix gì)
+
+Slow Burn (3x) firing:
+  1. Tạo task/issue
+  2. Xử lý trong giờ làm việc (không cần phản ứng ngay)
+```
+
+**Team vừa (5-10 người):**
+```
+Fast Burn (14.4x) firing:
+  1. On-call engineer nhận page
+  2. Mở SLO Overview → xác nhận severity
+  3. Thông báo team lead nếu burn rate > 14.4x kéo dài > 15 phút
+  4. Mở App Performance → drill down root cause
+  5. Fix hoặc rollback
+  6. Handoff nếu hết shift
+  7. Post-mortem meeting trong 48 giờ
+
+Slow Burn (3x) firing:
+  1. On-call tạo ticket với priority P2
+  2. Assign cho team phù hợp (backend/infra/platform)
+  3. Review trong standup sáng hôm sau
+  4. Fix trong sprint hiện tại
+
+Error Budget review (hàng tuần):
+  - Budget < 50% → freeze feature releases, focus reliability
+  - Budget < 25% → engineering manager escalation
+```
+
+**Team lớn (10+ người, có SRE team riêng):**
+```
+Fast Burn (14.4x) firing:
+  1. On-call SRE nhận page → ack trong 5 phút
+  2. Mở Incident channel (Slack #incident-YYYY-MM-DD)
+  3. Assign Incident Commander (IC)
+  4. IC coordinates: SRE fix, Comms update status page
+  5. Fix/rollback → monitor 30 phút → resolve
+  6. Blameless post-mortem trong 72 giờ
+
+Slow Burn (3x) firing:
+  1. Auto-create Jira ticket với context (burn rate, SLO, window)
+  2. Triage trong SRE weekly review
+  3. Assign action items với deadline
+
+Error Budget policy:
+  - Budget > 50%  → product team tự quyết release
+  - Budget 25-50% → cần SRE approval cho risky changes
+  - Budget < 25%  → release freeze, mandatory reliability sprint
+  - Budget = 0%   → VP Engineering notified, full freeze
+```
+
+#### 5.5 — Checklist tự đánh giá
+
+```markdown
+## Sau Experiment 5, tôi có thể:
+- [ ] Tính error budget từ SLO target
+- [ ] Giải thích tại sao 14.4x và 3x (không cần nhớ số, hiểu logic)
+- [ ] Phân biệt Availability burn rate vs Latency burn rate
+- [ ] Đọc burn rate chart: biết khi nào cần page vs ticket
+- [ ] Tính budget consumed từ error rate + thời gian
+- [ ] Giải thích multi-window cho đồng nghiệp (tại sao cần 2 windows)
+```
+
+**Rollback:** Không cần — exercise này dùng data từ experiments khác.
 
 ---
 
@@ -405,6 +539,6 @@ Sử dụng template sau cho mỗi bài thực hành:
 | 3 | Kafka Consumer Lag | ⭐⭐ | Leading vs lagging indicators |
 | 4 | Stock Deadlock | ⭐⭐⭐ | Design-level failure, cross-dashboard correlation |
 | 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method |
-| 6 | SLO Burn Rate | ⭐⭐⭐ | Error budgets, burn rate math |
+| 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
 | 7 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking |
 | 8 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |

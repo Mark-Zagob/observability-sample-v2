@@ -65,7 +65,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "rate(container_cpu_usage_seconds_total{name!=\"\",vm=~\"$vm\"}[5m]) * 100",
+                    "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\",vm=~\"$vm\"}[5m])) * 100",
                     "legendFormat": "{{ name }}"
                 }
             ]
@@ -92,7 +92,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "container_memory_usage_bytes{name!=\"\",vm=~\"$vm\"}",
+                    "expr": "sum by (name) (container_memory_usage_bytes{name!=\"\",vm=~\"$vm\"})",
                     "legendFormat": "{{ name }}"
                 }
             ]
@@ -112,7 +112,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "container_memory_cache{name!=\"\",vm=~\"$vm\"}",
+                    "expr": "sum by (name) (container_memory_cache{name!=\"\",vm=~\"$vm\"})",
                     "legendFormat": "{{ name }}"
                 }
             ]
@@ -139,7 +139,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "rate(container_network_receive_bytes_total{name!=\"\",vm=~\"$vm\"}[5m])",
+                    "expr": "sum by (name) (rate(container_network_receive_bytes_total{name!=\"\",vm=~\"$vm\"}[5m]))",
                     "legendFormat": "{{ name }}"
                 }
             ]
@@ -159,7 +159,7 @@
             "type": "timeseries",
             "targets": [
                 {
-                    "expr": "rate(container_network_transmit_bytes_total{name!=\"\",vm=~\"$vm\"}[5m])",
+                    "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name!=\"\",vm=~\"$vm\"}[5m]))",
                     "legendFormat": "{{ name }}"
                 }
             ]

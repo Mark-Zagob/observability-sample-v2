@@ -104,22 +104,22 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "unit": "s",
-          "min": 0, "max": 1,
+          "unit": "percentunit",
+          "min": 0.9, "max": 1,
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.3 },
-              { "color": "red", "value": 0.5 }
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.93 },
+              { "color": "green", "value": 0.95 }
             ]
           }
         }
       },
       "gridPos": { "h": 5, "w": 8, "x": 16, "y": 1 },
       "id": 3,
-      "title": "API Gateway P95 Latency",
-      "description": "SLO Target: < 500ms",
+      "title": "API Gateway Latency Compliance",
+      "description": "SLO Target: 95% requests < 500ms",
       "type": "gauge",
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -128,8 +128,8 @@
       },
       "targets": [
         {
-          "expr": "sli:api_gateway_latency_p95:rate5m",
-          "legendFormat": "P95 Latency"
+          "expr": "sli:api_gateway_latency_compliance:rate5m",
+          "legendFormat": "Compliance"
         }
       ]
     },
@@ -175,24 +175,29 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "unit": "s",
-          "min": 0,
+          "unit": "percentunit",
+          "min": 0.8, "max": 1,
           "custom": { "fillOpacity": 10, "lineWidth": 2 }
         }
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
       "id": 5,
-      "title": "Latency SLI Trend",
+      "title": "Latency Compliance SLI Trend",
+      "description": "% of requests completing under 500ms. Compare with P95 raw value in the gauge above.",
       "type": "timeseries",
       "options": {},
       "targets": [
         {
-          "expr": "sli:api_gateway_latency_p95:rate5m",
-          "legendFormat": "P95 Latency"
+          "expr": "sli:api_gateway_latency_compliance:rate5m",
+          "legendFormat": "Latency Compliance (5m)"
         },
         {
-          "expr": "0.5",
-          "legendFormat": "SLO Target (500ms)"
+          "expr": "sli:api_gateway_latency_compliance:rate1h",
+          "legendFormat": "Latency Compliance (1h)"
+        },
+        {
+          "expr": "0.95",
+          "legendFormat": "SLO Target (95%)"
         }
       ]
     },
@@ -231,32 +236,17 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
       "id": 6,
-      "title": "API Gateway Burn Rate (Multi-Window)",
+      "title": "API Gateway Burn Rate",
       "description": "Fast burn: 5m+1h windows (>14.4x = page). Slow burn: 30m+6h windows (>3x = ticket).",
       "type": "timeseries",
       "targets": [
-        {
-          "expr": "((1 - sli:api_gateway_availability:rate5m) / (1 - 0.995)) or vector(0)",
-          "legendFormat": "Fast (5m)"
-        },
-        {
-          "expr": "((1 - sli:api_gateway_availability:rate1h) / (1 - 0.995)) or vector(0)",
-          "legendFormat": "Fast (1h)"
-        },
-        {
-          "expr": "((1 - sli:api_gateway_availability:rate6h) / (1 - 0.995)) or vector(0)",
-          "legendFormat": "Slow (6h)"
-        },
-        {
-          "expr": "14.4",
-          "legendFormat": "Critical (14.4x)"
-        },
-        {
-          "expr": "3",
-          "legendFormat": "Warning (3x)"
-        }
+        { "expr": "((1 - sli:api_gateway_availability:rate5m) / (1 - 0.995)) or vector(0)", "legendFormat": "Fast (5m)" },
+        { "expr": "((1 - sli:api_gateway_availability:rate1h) / (1 - 0.995)) or vector(0)", "legendFormat": "Fast (1h)" },
+        { "expr": "((1 - sli:api_gateway_availability:rate6h) / (1 - 0.995)) or vector(0)", "legendFormat": "Slow (6h)" },
+        { "expr": "14.4", "legendFormat": "Critical (14.4x)" },
+        { "expr": "3", "legendFormat": "Warning (3x)" }
       ]
     },
     {
@@ -287,32 +277,58 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
       "id": 7,
-      "title": "Payment Burn Rate (Multi-Window)",
+      "title": "Payment Burn Rate",
       "description": "Fast burn: 5m+1h windows (>14.4x = page). Slow burn: 30m+6h windows (>3x = ticket).",
       "type": "timeseries",
       "targets": [
-        {
-          "expr": "((1 - sli:payment_success_rate:rate5m) / (1 - 0.99)) or vector(0)",
-          "legendFormat": "Fast (5m)"
+        { "expr": "((1 - sli:payment_success_rate:rate5m) / (1 - 0.99)) or vector(0)", "legendFormat": "Fast (5m)" },
+        { "expr": "((1 - sli:payment_success_rate:rate1h) / (1 - 0.99)) or vector(0)", "legendFormat": "Fast (1h)" },
+        { "expr": "((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)) or vector(0)", "legendFormat": "Slow (6h)" },
+        { "expr": "14.4", "legendFormat": "Critical (14.4x)" },
+        { "expr": "3", "legendFormat": "Warning (3x)" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "min": 0,
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
         },
-        {
-          "expr": "((1 - sli:payment_success_rate:rate1h) / (1 - 0.99)) or vector(0)",
-          "legendFormat": "Fast (1h)"
-        },
-        {
-          "expr": "((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)) or vector(0)",
-          "legendFormat": "Slow (6h)"
-        },
-        {
-          "expr": "14.4",
-          "legendFormat": "Critical (14.4x)"
-        },
-        {
-          "expr": "3",
-          "legendFormat": "Warning (3x)"
-        }
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Critical (14.4x)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Warning (3x)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "id": 10,
+      "title": "Latency Burn Rate",
+      "description": "SLO: 95% requests < 500ms. Fast burn: 5m+1h (>14.4x = page). Slow burn: 30m+6h (>3x = ticket).",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "((1 - sli:api_gateway_latency_compliance:rate5m) / (1 - 0.95)) or vector(0)", "legendFormat": "Fast (5m)" },
+        { "expr": "((1 - sli:api_gateway_latency_compliance:rate1h) / (1 - 0.95)) or vector(0)", "legendFormat": "Fast (1h)" },
+        { "expr": "((1 - sli:api_gateway_latency_compliance:rate6h) / (1 - 0.95)) or vector(0)", "legendFormat": "Slow (6h)" },
+        { "expr": "14.4", "legendFormat": "Critical (14.4x)" },
+        { "expr": "3", "legendFormat": "Warning (3x)" }
       ]
     },
     {
@@ -339,9 +355,9 @@
           }
         }
       },
-      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 25 },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 25 },
       "id": 8,
-      "title": "API Gateway Error Budget Remaining",
+      "title": "API Gateway Error Budget",
       "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
       "type": "gauge",
       "options": {
@@ -373,9 +389,9 @@
           }
         }
       },
-      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 25 },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 25 },
       "id": 9,
-      "title": "Payment Error Budget Remaining",
+      "title": "Payment Error Budget",
       "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
       "type": "gauge",
       "options": {
@@ -386,6 +402,40 @@
       "targets": [
         {
           "expr": "clamp_min(1 - ((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)), 0) or vector(1)",
+          "legendFormat": "Budget Remaining"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.25 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 25 },
+      "id": 11,
+      "title": "Latency Error Budget",
+      "description": "Based on 6h rolling window. SLO: 95% requests < 500ms. Budget = 5% allowed slow requests.",
+      "type": "gauge",
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "clamp_min(1 - ((1 - sli:api_gateway_latency_compliance:rate6h) / (1 - 0.95)), 0) or vector(1)",
           "legendFormat": "Budget Remaining"
         }
       ]
