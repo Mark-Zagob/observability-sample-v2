@@ -325,7 +325,7 @@ Yêu cầu **cả 2 windows** vượt ngưỡng mới alert:
 
 #### 5.2 — Thực hành: Đọc Burn Rate Dashboard
 
-**Prerequisite:** Chạy Experiment 2 (Cascading Failure) hoặc Experiment 4 (DB Saturation) trước.
+**Prerequisite:** Chạy Experiment 2 (DB Saturation) hoặc Experiment 4 (Cascading Failure) trước.
 
 **Sau khi inject xong, mở SLO Overview dashboard và trả lời:**
 
@@ -336,7 +336,7 @@ Yêu cầu **cả 2 windows** vượt ngưỡng mới alert:
 5. **Latency Compliance** panel: giá trị bao nhiêu? So với SLO target 95%?
 6. **Latency Burn Rate**: có khác biệt gì so với Availability Burn Rate không?
 
-> **Bài học quan trọng:** Trong Experiment 2 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể **bình thường** — vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần **cả 2 loại SLO**.
+> **Bài học quan trọng:** Trong Experiment 4 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể **bình thường** — vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần **cả 2 loại SLO**.
 
 #### 5.3 — Tính toán thực tế
 
