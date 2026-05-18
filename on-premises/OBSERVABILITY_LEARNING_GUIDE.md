@@ -121,6 +121,82 @@ Hướng dẫn đọc dashboard theo chuẩn production-grade bằng phương ph
 | Cache Performance | Hit rate, latency, evictions |
 | Kafka Overview | Consumer lag, produce rate, partition health |
 
+### 1.5 Ví dụ thực tế: Đọc Incident Flow end-to-end
+
+> Ví dụ dưới đây mô phỏng 1 incident thực tế, đi qua đủ 5 bước Incident Flow. Đọc trước khi chạy experiments để hình dung cách áp dụng.
+
+**Tình huống:** Thứ 2 sáng, nhận alert `APIGatewayLatencyFastBurn` (critical). Khách phàn nàn đặt hàng mất 3-5 giây, bình thường ~500ms.
+
+#### ① Alerting Overview
+
+| Quan sát | Giá trị |
+|----------|---------|
+| Alert firing | `APIGatewayLatencyFastBurn` — critical |
+| Các alert khác | Chỉ có Watchdog (bình thường) |
+
+→ **Quyết định:** Chỉ có latency alert, không có availability → service **không down**, chỉ **chậm**.
+
+#### ② Unified Overview
+
+| Metric | Giá trị | Bình thường |
+|--------|---------|-------------|
+| RPS | 45 req/s | 40 req/s ✅ |
+| Error Rate | 0.3% | < 1% ✅ |
+| **P95 Latency** | **3.2s** | **500ms** 🔴 |
+
+→ **Quyết định:** Không phải traffic surge (RPS bình thường), không phải lỗi logic (error rate thấp). Đâu đó bị nghẽn.
+
+#### ③ App Performance (RED)
+
+| Service | P95 Latency | Bình thường |
+|---------|-------------|-------------|
+| api-gateway | 3.2s | 500ms 🔴 |
+| order-service | 3.1s | 400ms 🔴 |
+| payment-service | 200ms | 180ms ✅ |
+
+→ **Phát hiện:** Payment bình thường — bottleneck nằm trong order-service, không phải downstream.
+
+#### ④ Tracing — Trace Investigation
+
+Mở panel **Slow Requests (> 500ms)** → click 1 trace có duration 3.2s → đọc waterfall:
+
+```
+api-gateway POST /order ─────────────────── 3.2s
+  └─ order-service POST /process ────────── 3.1s
+       ├─ get_product_info ──── 2.13ms   ✅ nhanh
+       ├─ check_inventory ───── 1.12ms   ✅ nhanh
+       ├─ insert_order ──────── 2.8s     🔴 87% tổng thời gian!
+       ├─ update_stock ──────── 18ms     ✅ nhanh
+       └─ request_payment ───── 200ms    ✅ nhanh
+```
+
+→ **Phát hiện:** `insert_order` (DB write) chiếm 2.8s / 3.2s = **87.5%** tổng thời gian.
+
+> **Kỹ thuật đọc trace:** Tìm thanh ngang dài nhất trong waterfall → đó là bottleneck. Tính tỷ lệ % so với tổng duration để xác nhận.
+
+#### ⑤ DB Performance
+
+| Metric | Giá trị | Bình thường |
+|--------|---------|-------------|
+| Connection pool active | 10/10 | 3-4/10 🔴 Pool đầy |
+| Avg query duration | 2.5s | 5ms 🔴 Gấp 500 lần |
+| Slow queries | 38 | 0 🔴 |
+
+→ **Root cause:** DB bị saturated. Kiểm tra Loki logs → PostgreSQL autovacuum đang chạy trên bảng `orders`, lock table → mọi INSERT phải chờ.
+
+#### Tổng kết flow
+
+```
+Alert (Latency burn rate)
+  → Unified (P95 tăng 6x, error OK, RPS OK)
+    → App Performance (order-service chậm, payment OK)
+      → Trace waterfall (insert_order = 87% thời gian)
+        → DB Performance (pool đầy, query chậm 500x)
+          → Logs (autovacuum đang lock table)
+```
+
+> **Bài học:** Không dashboard nào đơn lẻ cho đủ thông tin. Mỗi bước **thu hẹp phạm vi** cho đến khi tìm root cause. Đặc biệt, bước ④ Tracing giúp **pinpoint chính xác operation nào** trong code gây chậm — thay vì đoán.
+
 ---
 
 ## Part 2: Bài thực hành — Giả lập Incident
