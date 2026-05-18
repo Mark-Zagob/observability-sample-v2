@@ -21,6 +21,7 @@ services:
       - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - ./prometheus/tracing_alert_rules.yml:/etc/prometheus/tracing_alert_rules.yml:ro
       - ./prometheus/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
+      - ./prometheus/kafka_alert_rules.yml:/etc/prometheus/kafka_alert_rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -147,6 +148,24 @@ services:
     container_name: webhook-receiver
     ports:
       - "9095:9095"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ==========================================================
+  # BLACKBOX EXPORTER - Active Health Check Probing
+  # ==========================================================
+  # Probe HTTP endpoints trên App VM để detect service down
+  # mà không phụ thuộc vào traffic. Production-grade approach:
+  # Prometheus → Blackbox → GET /health/live → service
+  # ==========================================================
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox-exporter
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    ports:
+      - "9115:9115"
     networks:
       - observability
     restart: unless-stopped

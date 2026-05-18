@@ -146,3 +146,36 @@ scrape_configs:
           environment: "lab"
           type: "kafka"
           vm: "app"
+
+  # ----------------------------------------------------------
+  # 11. Blackbox Exporter — Active Health Probing
+  # ----------------------------------------------------------
+  # Probe /health/live endpoints trên App VM.
+  # Sử dụng relabel chuẩn: __address__ → __param_target,
+  # rồi thay __address__ bằng blackbox-exporter.
+  # ----------------------------------------------------------
+  - job_name: "blackbox"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://192.168.100.57:5000/health/live   # api-gateway
+          - http://192.168.100.57:5001/health/live   # order-service
+          - http://192.168.100.57:5002/health/live   # payment-service
+          - http://192.168.100.57:5004/health/live   # notification-worker
+          - http://192.168.100.57:5005/health/live   # inventory-worker
+        labels:
+          environment: "lab"
+    relabel_configs:
+      # Giữ target URL gốc làm label "instance"
+      - source_labels: [__address__]
+        target_label: __param_target
+      # Extract service name từ port
+      - source_labels: [__param_target]
+        regex: "http://[^:]+:(\\d+)/.*"
+        replacement: "$1"
+        target_label: port
+      # Chuyển __address__ sang blackbox-exporter
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

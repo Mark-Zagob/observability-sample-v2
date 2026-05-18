@@ -12,7 +12,7 @@ Dùng bảng sau để luyện tập: chạy experiment → khi alert firing →
 
 | Experiment | Inject gì | Alerts sẽ firing | Runbook |
 |-----------|----------|------------------|---------|
-| [Exp 1: Service Down](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-1-service-down-targetdown-alert) | `docker stop order-service` | TargetDown, ServiceNoTraces | RB-01, RB-23 |
+| [Exp 1: Service Down](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-1-service-down-health-check-failed) | `docker stop order-service` | ServiceHealthCheckFailed, ServiceNoTraces | RB-24, RB-23 |
 | [Exp 2: DB Saturation](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-2-database-saturation-high-latency) | DB table lock | HighLatencyP95, HighErrorRate, LatencyFastBurn | RB-22, RB-21, RB-12 |
 | [Exp 3: Kafka Lag](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-3-kafka-consumer-lag-notification-worker-slow) | `docker pause notification-worker` | KafkaConsumerLagHigh/Critical, ConsumerGroupDown | RB-16, RB-17, RB-18 |
 | [Exp 4: Cascading Failure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-4-cascading-failure-payment-service-down) | `docker stop payment-service` | TargetDown, PaymentFastBurn, APIGatewayFastBurn | RB-01, RB-10, RB-08 |
@@ -60,6 +60,7 @@ Dùng bảng sau để luyện tập: chạy experiment → khi alert firing →
 | 21 | HighErrorRate | warning | Application | tracing_alert_rules.yml |
 | 22 | HighLatencyP95 | warning | Application | tracing_alert_rules.yml |
 | 23 | ServiceNoTraces_* | critical | Application | tracing_alert_rules.yml |
+| 24 | ServiceHealthCheckFailed | critical | Infrastructure | alert_rules.yml |
 
 ---
 
@@ -583,6 +584,50 @@ Bước 3: Nếu container running nhưng không có traces
   → Network issue → container có reach được otel-collector không?
   docker exec <service> wget -q -O- http://otel-collector:4318/v1/traces
 ```
+
+---
+
+### 🔴 RB-24: ServiceHealthCheckFailed
+
+**Severity:** critical | **Response:** < 15 phút
+
+**Nghĩa là gì:** Blackbox Exporter probe `/health/live` thất bại. Service không phản hồi hoặc không trả HTTP 200. Đây là **active probing** — detect service down mà không phụ thuộc vào traffic.
+
+**Triage:**
+
+```
+Bước 1: Xác định service nào bị
+  → Alert annotation: instance = URL bị fail (ví dụ: http://192.168.100.57:5001/health/live)
+  → Map port → service:
+     5000 = api-gateway
+     5001 = order-service
+     5002 = payment-service
+     5004 = notification-worker
+     5005 = inventory-worker
+
+Bước 2: Kiểm tra container
+  ssh 192.168.100.57
+  docker ps -a | grep <service-name>
+  docker logs <service-name> --tail 30
+
+Bước 3: Phân loại
+  Container Exited       → docker start <service-name>
+  Container Running      → Port có listen không? curl localhost:<port>/health/live
+  Container OOMKilled    → Kiểm tra HighMemoryUsage alert, tăng memory limit
+  Network unreachable    → Kiểm tra firewall / docker network
+
+Bước 4: Verify recovery
+  → Chờ 1-2 phút, kiểm tra Prometheus targets → blackbox job healthy
+  → Alerting Overview → alert chuyển RESOLVED
+  → Unified Overview → RPS hồi phục (nếu có traffic)
+```
+
+**Dashboard path:** Alerting Overview → Docker Containers (restart count) → Unified Overview
+
+**Phân biệt với:**
+- `TargetDown` — Prometheus scrape target down (OTel Collector, node-exporter...)
+- `ServiceHealthCheckFailed` — Application service health endpoint down
+- `ServiceNoTraces` — Service chạy nhưng không produce traces (cần traffic-gen)
 
 ---
 

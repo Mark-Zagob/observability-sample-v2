@@ -213,11 +213,13 @@ Alert (Latency burn rate)
 
 ---
 
-### 🧪 Experiment 1: Service Down (TargetDown alert)
+### 🧪 Experiment 1: Service Down (Health Check Failed)
 
 > **📋 Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) · [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_)
 
-**Giả thuyết:** Khi order-service bị stop, Alerting Overview sẽ hiển thị TargetDown alert critical trong 1 phút, Unified Overview sẽ thấy RPS drop về 0.
+**Giả thuyết:** Khi order-service bị stop, Blackbox Exporter sẽ detect health check failure → `ServiceHealthCheckFailed` alert critical trong 1 phút, không phụ thuộc vào traffic.
+
+> **Production context:** Trong production, service down detection dùng **active probing** (Blackbox Exporter probe /health/live mỗi 15s) thay vì dựa vào span metrics — vì span metrics cần traffic để hoạt động.
 
 **Inject:**
 ```bash
@@ -227,24 +229,30 @@ docker stop order-service
 
 **Dashboard reading path:**
 ```
-Alerting Overview → thấy TargetDown firing (severity: critical)
-  → Unified Overview → Order Service RPS = 0, các service khác vẫn có traffic
-    → App Performance → Order Service section: tất cả panel = no data
-      → Kafka Overview → produce rate giảm (order-service không publish events)
+Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
+  → Instance: http://192.168.100.57:5001/health/live
+    → Unified Overview → Order Service RPS giảm/mất (nếu có traffic)
+      → App Performance → Order Service section: no data
+        → Kafka Overview → produce rate giảm (không publish events mới)
 ```
 
 **Quan sát kỳ vọng:**
-- ① Alerting: `TargetDown` firing sau ~1 phút (cấu hình `for: 1m`)
-- ② Unified: Order Service RPS gauge đỏ, Payment/Notification vẫn xanh
-- ③ App Performance: Order section trống, nhưng Notification vẫn xử lý events cũ
+- ① Alerting: `ServiceHealthCheckFailed` firing sau ~1 phút (cấu hình `for: 1m`)
+- ① Alerting: Nếu traffic-gen đang chạy → `ServiceNoTraces_OrderService` cũng firing sau ~5 phút
+- ② Unified: Order Service RPS drop (nếu có traffic), các service khác vẫn hoạt động
+- ③ App Performance: Order section trống, Notification vẫn xử lý events cũ
 - ⑤ Kafka: Produce rate = 0, consumer lag không tăng (không có event mới)
+
+> **Lưu ý:** `TargetDown` (up == 0) **không** firing trong experiment này vì Prometheus không scrape order-service trực tiếp — metrics đi qua OTel Collector (vẫn healthy). Đây là lý do cần Blackbox Exporter.
 
 **Rollback:**
 ```bash
 docker start order-service
 ```
 
-**Bài học:** Phân biệt "service down" vs "service slow" — down = no data, slow = data có nhưng duration cao.
+**Bài học:** Phân biệt 2 lớp monitoring:
+- **Lớp 1 — Service có sống không?** → Blackbox Exporter (active probing, không cần traffic)
+- **Lớp 2 — Service có hoạt động đúng không?** → Span metrics (error rate, latency, cần traffic)
 
 ---
 

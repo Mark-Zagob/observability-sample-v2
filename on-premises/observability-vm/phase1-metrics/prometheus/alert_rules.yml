@@ -23,6 +23,16 @@ groups:
           summary: "Target {{ $labels.instance }} is down"
           description: "{{ $labels.job }} / {{ $labels.instance }} has been down for more than 1 minute."
 
+      # Service health check failed (Blackbox Exporter probe)
+      - alert: ServiceHealthCheckFailed
+        expr: probe_success{job="blackbox"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Health check failed: {{ $labels.instance }}"
+          description: "Blackbox probe to {{ $labels.instance }} has been failing for more than 1 minute. Service may be down or unreachable."
+
       # CPU usage > 80%
       - alert: HighCpuUsage
         expr: |
