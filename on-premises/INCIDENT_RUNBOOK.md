@@ -20,6 +20,8 @@ Dùng bảng sau để luyện tập: chạy experiment → khi alert firing →
 | [Exp 6: Stock Deadlock](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-6-stock-depletion-deadlock-logic-bug) | Set stock = 0 | HighErrorRate | RB-21 |
 | [Exp 7: Memory Pressure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-7-memory-pressure-container-resource-limit) | Memory limit 64m | HighMemoryUsage, HighLatencyP95 | RB-03, RB-06, RB-22 |
 | [Exp 8: DNS Cache](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-8-dns-cache-stale-nginx-proxy-issue) | Rebuild container | Không có alert tương ứng | Manual investigation |
+| [Exp 9: Phantom Alert](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-9-phantom-alert--slo-burn-rate-khi-không-có-traffic) | Stop payment → run traffic → start payment → chờ | APIGatewayFastBurn (stale) | RB-08 (Step 0) |
+| [Exp 10: Timezone Trap](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-10-timezone-trap--đọc-sai-dashboard-do-timezone) | Đổi Grafana timezone | Không inject failure | Investigation practice |
 
 ---
 
@@ -262,10 +264,21 @@ Khi Watchdog RESOLVED:
 **Triage:**
 
 ```
+Bước 0: Kiểm tra phantom alert (NO TRAFFIC)
+  → Unified Overview → tất cả RPS = 0?
+  → Nếu KHÔNG có traffic:
+    → Alert có thể firing từ stale data (rate() chưa decay)
+    → Verify service healthy: curl health endpoints
+    → Nếu service healthy + no traffic → phantom alert
+    → Action: silence alert + ghi chú "phantom — no traffic"
+    → Traffic guard đã được thêm vào alert rule để tránh tái phát
+  → Nếu CÓ traffic → tiếp tục Bước 1
+
 Bước 1: Xác nhận burn rate
   → SLO Overview → API Gateway Burn Rate panel
   → Cả Fast(5m) VÀ Fast(1h) đều > 14.4x?
   → Nếu chỉ 5m > 14.4x mà 1h < 14.4x → spike thoáng qua, monitor thêm
+  → Kiểm tra timezone: Grafana đang hiển thị UTC hay local time?
 
 Bước 2: Xác định nguyên nhân
   → App Performance → API Gateway section

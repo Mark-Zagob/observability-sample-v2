@@ -65,7 +65,7 @@ Dự án này bao gồm **hai phần chính**:
 └──────────────────────────────────────────────────────┘
 ```
 
-> 📖 Chi tiết kiến trúc: xem [`on-premises/ARCHITECTURE_DETAIL.md`](on-premises/ARCHITECTURE_DETAIL.md)
+> 📖 Chi tiết kiến trúc: xem [`on-premises/ARCHITECTURE.md`](on-premises/ARCHITECTURE.md)
 
 ### AWS — Production-Grade (Terraform)
 
@@ -84,9 +84,7 @@ Internet → Route53 → WAF → ALB → Compute (ECS/EKS) → RDS + ElastiCache
 observability-sample-v2/
 │
 ├── on-premises/                          # ✅ Docker Compose — hoàn tất
-│   ├── ARCHITECTURE.md                   # Mermaid diagram tổng quan
-│   ├── ARCHITECTURE_DETAIL.md            # Tài liệu kiến trúc chi tiết
-│   ├── architecture_summary.md           # Tổng kết kiến thức DevOps (tiếng Việt)
+│   ├── ARCHITECTURE.md                   # Kiến trúc, data flows, DB schema, design patterns
 │   │
 │   ├── applications-vm/                  # VM chạy ứng dụng
 │   │   └── applications/
@@ -306,8 +304,7 @@ docker compose up -d
 
 | File | Nội dung |
 |------|---------|
-| [`on-premises/ARCHITECTURE_DETAIL.md`](on-premises/ARCHITECTURE_DETAIL.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns |
-| [`on-premises/architecture_summary.md`](on-premises/architecture_summary.md) | Tổng kết kiến thức DevOps đã học (tiếng Việt) |
+| [`on-premises/ARCHITECTURE.md`](on-premises/ARCHITECTURE.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns, DevOps knowledge |
 | [`terraform/ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | Kiến trúc AWS — VPC topology, compute phases, security flow |
 | [`terraform/IMPLEMENTATION_PLAN.md`](terraform/IMPLEMENTATION_PLAN.md) | Kế hoạch triển khai Terraform chi tiết |
 | [`terraform/chaos-exercises-network.md`](terraform/chaos-exercises-network.md) | Chaos engineering — 12 break/test/recover exercises |

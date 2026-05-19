@@ -14,7 +14,7 @@
 
 **Q1.** 🟢 In our `applications-vm/docker-compose.yml`, we use `depends_on` with `condition: service_healthy`. What is the difference between `service_started` and `service_healthy`? Why does `order-service` depend on PostgreSQL with `service_healthy` but API Gateway depends on `order-service` with only `service_started`?
 
-**Q2.** 🟡 If you run `docker compose up -d` and the `order-service` container keeps restarting in a loop, how would you diagnose the issue? Walk me through your troubleshooting steps.
+**Q2.** 🟡 If you run `docker compose up -d` and the `order-service` container keeps restarting in a loop, how would you diagnose the issue? Walk me through your troubleshooting steps. If the service doesn't recover within 10 minutes, who would you notify and what information would you include?
 
 **Q3.** 🟢 We have a `volumes` section defining `postgres_data` and `kafka_data`. What happens to the data inside PostgreSQL if you run `docker compose down`? What about `docker compose down -v`? Why does this distinction matter?
 
@@ -46,7 +46,7 @@
 
 **Q13.** 🟡 Our `docker-compose.yml` has database credentials hardcoded as environment variables (e.g., `POSTGRES_PASSWORD=postgres`). What are the security risks? Describe at least two better approaches to manage secrets in a Docker Compose environment.
 
-**Q14.** 🔴 PostgreSQL is running low on connections because all services are connecting to it directly. What are two different approaches to solve this from an **operational** perspective? Which would you recommend for our setup and why?
+**Q14.** 🔴 PostgreSQL is running low on connections because all services are connecting to it directly. What are two different approaches to solve this from an **operational** perspective? Which would you recommend and why? Now consider: your team has only 2 engineers and no DBA — does your recommendation change?
 
 ---
 
@@ -68,7 +68,7 @@
 
 **Q20.** 🟢 Explain the "three pillars of observability" and give a specific example from our lab for each pillar.
 
-**Q21.** 🟡 A customer reports that their order took 15 seconds to complete. You have Grafana open. Walk me through how you would investigate this — which tools would you use and in what order?
+**Q21.** 🟡 A customer reports that their order took 15 seconds to complete. You have Grafana open. Walk me through the investigation using the 5-step Incident Flow: (1) Alerting Overview, (2) Unified Overview, (3) App Performance / SLO / Infrastructure, (4) Tracing, (5) DB/Cache/Kafka. At each step, what specific metric would you check, and what tells you to move to the next step?
 
 **Q22.** 🟡 What is the difference between a Prometheus **Counter** and a **Histogram**? Give an example of when you'd use each from our application.
 
@@ -82,33 +82,43 @@
 
 **Q27.** 🟡 Our services use structured JSON logging (e.g., `{"timestamp": "...", "level": "INFO", "message": "...", "trace_id": "..."}`) instead of plain text logs. What are the advantages of structured logging? How does including `trace_id` in every log line help during incident investigation?
 
-**Q28.** 🟡 Our SLO target is 99.5% availability for the API Gateway. Calculate how many minutes of downtime are allowed per month (30 days). What is an "error budget" and what should happen when it runs out? Why is this concept important for balancing reliability and feature velocity?
+**Q28.** 🟡 Our SLO target is 99.5% availability for the API Gateway. (a) Calculate how many minutes of downtime are allowed per month (30 days). (b) What is an "error budget" and what should happen when it runs out? (c) What does "burn rate" mean at a high level — why is alerting on burn rate better than alerting on raw error rate? (d) Why is this concept important for balancing reliability and feature velocity?
+
+**Q29.** 🟢 Our lab uses a Blackbox Exporter that sends HTTP requests to each service's `/health/live` endpoint every 15 seconds. (a) How is this different from Prometheus scraping application metrics from the OTel Collector? (b) If there is zero user traffic at 3 AM, which monitoring method can still detect a service crash — and why? (c) What is the term for this type of monitoring? (active probing vs passive monitoring)
+
+**Q30.** 🟡 You're investigating an alert at 2 AM. Grafana shows the incident happened between 00:00–02:00. But when you check `docker logs --timestamps`, the relevant events show timestamps around 17:00–19:00 UTC — hours earlier than expected. (a) What could cause this discrepancy? (b) How do you determine which timeline is correct? (c) What should be the team standard for timezone in monitoring tools?
+
+**Q31.** 🟡 After a load test ends, you notice an SLO burn rate alert is still firing even though all services are healthy and no traffic is flowing. The error rate on the dashboard appears "frozen" at the last value. (a) Why doesn't the error rate drop to 0 when traffic stops? (b) What should the on-call engineer do — wait, silence the alert, or generate new traffic? (c) What condition could be added to the alert rule to prevent this "phantom alert"?
+
+**Q32.** 🟡 A Kafka consumer lag alert fires. You check the lag: 150 messages and growing. Meanwhile, the API Gateway error rate is still 0% and customers haven't reported any issues yet. (a) Why can consumer lag increase before any user-facing errors appear? (b) What kind of indicator is consumer lag — leading or lagging? (c) Give another example of a leading indicator from our monitoring setup.
 
 ---
 
 ## Section 6: CI/CD & Deployment Workflow (4 questions)
 
-**Q29.** 🟢 A developer pushes code to the `main` branch. Describe what a basic CI/CD pipeline should do before deploying the new version to the Docker Compose environment. What are the minimum steps you would include?
+**Q33.** 🟢 A developer pushes code to the `main` branch. Describe what a basic CI/CD pipeline should do before deploying the new version to the Docker Compose environment. What are the minimum steps you would include?
 
-**Q30.** 🟡 You are deploying a new version of `order-service`. You run `docker compose pull order-service && docker compose up -d order-service`. What happens to in-flight requests during this process? How would you minimize downtime?
+**Q34.** 🟡 You are deploying a new version of `order-service`. You run `docker compose pull order-service && docker compose up -d order-service`. What happens to in-flight requests during this process? How would you minimize downtime? Consider: does your approach change if your team deploys once a week vs. ten times a day?
 
-**Q31.** 🟡 After deploying a new version, you discover a critical bug. Describe your rollback plan step by step. How do you ensure the previous version is available? What would you check after rolling back?
+**Q35.** 🟡 After deploying a new version, you discover a critical bug. Describe your rollback plan step by step. How do you ensure the previous version is available? What would you check after rolling back?
 
-**Q32.** 🟢 Your team has 5 developers working on the same codebase. What Git branching strategy would you recommend? How do you decide what goes into a release? Explain how this connects to the deployment pipeline.
+**Q36.** 🟢 Your team has 5 developers working on the same codebase. What Git branching strategy would you recommend? How do you decide what goes into a release? Explain how this connects to the deployment pipeline.
 
 ---
 
-## Section 7: Troubleshooting Scenarios (5 questions)
+## Section 7: Troubleshooting Scenarios (6 questions)
 
-**Q33.** 🟡 After deploying a new version, all orders return "unknown error" in the Web UI, but the Order Service logs show orders are being created successfully. Where would you look first? *(Hint: think about the layers between the user and the service)*
+**Q37.** 🟡 After deploying a new version, all orders return "unknown error" in the Web UI, but the Order Service logs show orders are being created successfully. Where would you look first? *(Hint: think about the layers between the user and the service)*
 
-**Q34.** 🟡 You run `docker compose up -d` on a fresh VM. PostgreSQL and Redis are healthy, but the Order Service fails to start with `connection refused` to Kafka. The Kafka container is running. What's likely happening?
+**Q38.** 🟡 You run `docker compose up -d` on a fresh VM. PostgreSQL and Redis are healthy, but the Order Service fails to start with `connection refused` to Kafka. The Kafka container is running. What's likely happening?
 
-**Q35.** 🔴 Load testing shows that response times increase dramatically after 5 minutes. CPU and memory look fine. PostgreSQL shows many connections in `idle in transaction` state. What's your hypothesis and how would you verify it?
+**Q39.** 🔴 Load testing shows that response times increase dramatically after 5 minutes. CPU and memory look fine. PostgreSQL shows many connections in `idle in transaction` state. What's your hypothesis and how would you verify it?
 
-**Q36.** 🟡 The Events tab in the Web UI shows notifications but no inventory logs. The Inventory Worker `/status` endpoint shows it's running with 0 errors. Where would you investigate?
+**Q40.** 🟡 The Events tab in the Web UI shows notifications but no inventory logs. The Inventory Worker `/status` endpoint shows it's running with 0 errors. Where would you investigate? If you're the only person on-call, how do you prioritize this vs. other active alerts?
 
-**Q37.** 🟡 You need to upgrade PostgreSQL from version 16 to 17. Describe your plan step by step, considering that we have data we cannot lose. Focus on the **operational process**, not SQL.
+**Q41.** 🟡 You need to upgrade PostgreSQL from version 16 to 17. Describe your plan step by step, considering that we have data we cannot lose. Focus on the **operational process**, not SQL. How would your plan differ if you're a solo engineer vs. part of a team with a DBA?
+
+**Q42.** 🟡 The SLO Overview dashboard shows API Gateway availability at 98.2% — below the 99.5% target. But the App Performance dashboard shows all services have 0% error rate right now. No alerts other than the SLO burn rate are firing, and the Unified Overview shows 0 RPS across all services. (a) Is this a real incident or a false alarm? How do you determine this? (b) What does "stale metrics" mean in this context? (c) Which dashboard gives you the most useful signal when there is zero traffic?
 
 ---
 
@@ -126,10 +136,10 @@
 
 | Level | Count | Percentage |
 |-------|-------|------------|
-| 🟢 Junior | 11 | 27% |
-| 🟡 Mid | 19 | 48% |
-| 🔴 Stretch (Senior) | 10 | 25% |
-| **Total** | **40** | 100% |
+| 🟢 Junior | 12 | 27% |
+| 🟡 Mid | 23 | 51% |
+| 🔴 Stretch (Senior) | 10 | 22% |
+| **Total** | **45** | 100% |
 
 | Section | Questions | Focus |
 |---------|-----------|-------|
@@ -137,9 +147,9 @@
 | Networking | Q7–Q10 | DNS, reverse proxy, security |
 | Infrastructure Ops | Q11–Q14 | Resource limits, backup, secrets, connections |
 | Kafka | Q15–Q19 | Event-driven architecture |
-| Observability | Q20–Q28 | Metrics, logs, traces, alerting, SLO, structured logging |
-| CI/CD | Q29–Q32 | Pipeline, deployment, rollback, branching |
-| Troubleshooting | Q33–Q37 | Cross-cutting diagnosis scenarios |
+| Observability | Q20–Q32 | Metrics, logs, traces, alerting, SLO, active probing, timezone, phantom alerts |
+| CI/CD | Q33–Q36 | Pipeline, deployment, rollback, branching |
+| Troubleshooting | Q37–Q42 | Cross-cutting diagnosis, stale metrics scenarios |
 | Bonus | B1–B3 | Architecture decision-making |
 
 > **Evaluation criteria:**
@@ -147,3 +157,6 @@
 > - **Depth of understanding** — Do you understand *why*, not just *what*?
 > - **Troubleshooting mindset** — Do you approach problems systematically?
 > - **Communication** — Can you explain clearly to both technical and non-technical audiences?
+> - **Team awareness** — Do you consider team size and constraints in your answers?
+
+

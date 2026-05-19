@@ -26,10 +26,9 @@ Hệ thống gồm **2 VMs** giao tiếp qua Docker external network:
 ## 🏗️ Kiến Trúc
 
 Xem chi tiết tại:
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Sơ đồ Mermaid
-- [ARCHITECTURE_DETAIL.md](ARCHITECTURE_DETAIL.md) — Giải thích chi tiết từng component
-- [architecture_summary.md](architecture_summary.md) — Tổng kết kiến trúc và kiến thức DevOps
-- [OBSERVABILITY_LEARNING_GUIDE.md](OBSERVABILITY_LEARNING_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Kiến trúc chi tiết, data flows, DB schema, design patterns, DevOps knowledge
+- [OBSERVABILITY_LEARNING_GUIDE.md](OBSERVABILITY_LEARNING_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation (10 experiments)
+- [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) — Runbook xử lý incident cho 24 loại alert
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -50,6 +49,7 @@ Xem chi tiết tại:
 │  OTel Collector → Prometheus → Grafana           │
 │                → Tempo     ↗                     │
 │                → Loki     ↗                      │
+│  Blackbox Exporter → Prometheus                   │
 │  Prometheus → Alertmanager → Telegram            │
 └──────────────────────────────────────────────────┘
 ```
@@ -115,10 +115,8 @@ docker compose up -d
 ```
 on-premises/
 ├── README.md                          ← File này
-├── ARCHITECTURE.md                    ← Sơ đồ Mermaid
-├── ARCHITECTURE_DETAIL.md             ← Giải thích chi tiết
+├── ARCHITECTURE.md                    ← Kiến trúc, data flows, DB schema, design patterns
 ├── OBSERVABILITY_LEARNING_GUIDE.md    ← Dashboard reading & incident simulation
-├── architecture_summary.md            ← Tổng kết kiến thức
 ├── devops-question.md                 ← DevOps interview questions (Junior–Mid)
 ├── devops-question-senior.md          ← DevOps interview questions (Senior)
 ├── applications-vm/
@@ -140,8 +138,8 @@ Bộ câu hỏi phỏng vấn DevOps dựa trên lab này:
 
 | File | Level | Số câu | Focus |
 |------|-------|--------|-------|
-| [devops-question.md](devops-question.md) | Junior–Mid + Stretch | 40 | Docker, Networking, Kafka, Observability, SLO, CI/CD, Troubleshooting |
-| [devops-question-senior.md](devops-question-senior.md) | Senior | 28 | Architecture design, SLO strategy, Chaos engineering, Platform engineering, Leadership |
+| [devops-question.md](devops-question.md) | Junior–Mid + Stretch | 45 | Docker, Networking, Kafka, Observability, SLO, CI/CD, Troubleshooting |
+| [devops-question-senior.md](devops-question-senior.md) | Senior | 31 | Architecture design, SLO strategy, Chaos engineering, Platform engineering, Production edge cases, Leadership |
 
 > Câu hỏi dựa trên codebase thực tế, yêu cầu giải thích "why" chứ không chỉ "what".
 
