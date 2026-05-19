@@ -266,7 +266,8 @@ groups:
 
       # ---- API Gateway: Fast Burn (page) ----
       # 14.4x burn rate in both 5m and 1h windows
-      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
+      # Traffic guard: uses span metrics (not custom OTel counter) to avoid phantom alerts
+      # from stale api_gateway_requests_total rate when traffic stops
       - alert: APIGatewayFastBurn
         expr: |
           (
@@ -274,7 +275,7 @@ groups:
             and
             (1 - sli:api_gateway_availability:rate1h) / (1 - 0.995) > 14.4
           and
-            sum(rate(api_gateway_requests_total[5m])) > 0.1
+            sum(rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m])) > 0.1
           )
         for: 2m
         labels:
@@ -287,7 +288,7 @@ groups:
 
       # ---- API Gateway: Slow Burn (ticket) ----
       # 3x burn rate in both 30m and 6h windows
-      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
+      # Traffic guard: uses span metrics to avoid phantom alerts from stale OTel counters
       - alert: APIGatewaySlowBurn
         expr: |
           (
@@ -295,7 +296,7 @@ groups:
             and
             (1 - sli:api_gateway_availability:rate6h) / (1 - 0.995) > 3
           and
-            sum(rate(api_gateway_requests_total[5m])) > 0.1
+            sum(rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m])) > 0.1
           )
         for: 15m
         labels:
@@ -348,7 +349,7 @@ groups:
 
       # ---- Latency: Fast Burn (page) ----
       # SLO: 95% requests < 500ms (error budget = 5%)
-      # Traffic threshold: > 0.1 req/s to avoid false alerts
+      # Traffic guard: uses span metrics to avoid phantom alerts from stale OTel counters
       - alert: APIGatewayLatencyFastBurn
         expr: |
           (
@@ -356,7 +357,7 @@ groups:
             and
             (1 - sli:api_gateway_latency_compliance:rate1h) / (1 - 0.95) > 14.4
           and
-            sum(rate(api_gateway_request_duration_seconds_count[5m])) > 0.1
+            sum(rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m])) > 0.1
           )
         for: 2m
         labels:
@@ -368,6 +369,7 @@ groups:
           description: "Latency error budget is being consumed 14.4x faster than sustainable. Most requests are exceeding 500ms."
 
       # ---- Latency: Slow Burn (ticket) ----
+      # Traffic guard: uses span metrics to avoid phantom alerts from stale OTel counters
       - alert: APIGatewayLatencySlowBurn
         expr: |
           (
@@ -375,7 +377,7 @@ groups:
             and
             (1 - sli:api_gateway_latency_compliance:rate6h) / (1 - 0.95) > 3
           and
-            sum(rate(api_gateway_request_duration_seconds_count[5m])) > 0.1
+            sum(rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m])) > 0.1
           )
         for: 15m
         labels:
