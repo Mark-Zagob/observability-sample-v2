@@ -83,7 +83,7 @@
       "description": "HTTP requests per second to Order Service (all endpoints)",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(orders_created_total[5m]))", "legendFormat": "req/s" }
+        { "expr": "sum(rate(orders_created_total[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {
@@ -129,7 +129,7 @@
       "description": "Payment requests per second (total throughput)",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(payments_total[5m]))", "legendFormat": "req/s" }
+        { "expr": "sum(rate(payments_total[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {

@@ -266,11 +266,16 @@ groups:
 
       # ---- API Gateway: Fast Burn (page) ----
       # 14.4x burn rate in both 5m and 1h windows
+      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
       - alert: APIGatewayFastBurn
         expr: |
-          (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 14.4
+          (
+            (1 - sli:api_gateway_availability:rate5m) / (1 - 0.995) > 14.4
+            and
+            (1 - sli:api_gateway_availability:rate1h) / (1 - 0.995) > 14.4
           and
-          (1 - sli:api_gateway_availability:rate1h) / (1 - 0.995) > 14.4
+            sum(rate(api_gateway_requests_total[5m])) > 0.1
+          )
         for: 2m
         labels:
           severity: critical
@@ -282,11 +287,16 @@ groups:
 
       # ---- API Gateway: Slow Burn (ticket) ----
       # 3x burn rate in both 30m and 6h windows
+      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
       - alert: APIGatewaySlowBurn
         expr: |
-          (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 3
+          (
+            (1 - sli:api_gateway_availability:rate30m) / (1 - 0.995) > 3
+            and
+            (1 - sli:api_gateway_availability:rate6h) / (1 - 0.995) > 3
           and
-          (1 - sli:api_gateway_availability:rate6h) / (1 - 0.995) > 3
+            sum(rate(api_gateway_requests_total[5m])) > 0.1
+          )
         for: 15m
         labels:
           severity: warning
@@ -297,11 +307,16 @@ groups:
           description: "Error budget is being consumed 3x faster than sustainable. Both 30m and 6h windows confirm a sustained degradation."
 
       # ---- Payment: Fast Burn (page) ----
+      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
       - alert: PaymentFastBurn
         expr: |
-          (1 - sli:payment_success_rate:rate5m) / (1 - 0.99) > 14.4
+          (
+            (1 - sli:payment_success_rate:rate5m) / (1 - 0.99) > 14.4
+            and
+            (1 - sli:payment_success_rate:rate1h) / (1 - 0.99) > 14.4
           and
-          (1 - sli:payment_success_rate:rate1h) / (1 - 0.99) > 14.4
+            sum(rate(traces_spanmetrics_calls_total{service_name="payment-service"}[5m])) > 0.1
+          )
         for: 2m
         labels:
           severity: critical
@@ -312,11 +327,16 @@ groups:
           description: "Payment error budget is being consumed 14.4x faster than sustainable."
 
       # ---- Payment: Slow Burn (ticket) ----
+      # Traffic guard: requires > 0.1 req/s to avoid phantom alerts when traffic stops
       - alert: PaymentSlowBurn
         expr: |
-          (1 - sli:payment_success_rate:rate30m) / (1 - 0.99) > 3
+          (
+            (1 - sli:payment_success_rate:rate30m) / (1 - 0.99) > 3
+            and
+            (1 - sli:payment_success_rate:rate6h) / (1 - 0.99) > 3
           and
-          (1 - sli:payment_success_rate:rate6h) / (1 - 0.99) > 3
+            sum(rate(traces_spanmetrics_calls_total{service_name="payment-service"}[5m])) > 0.1
+          )
         for: 15m
         labels:
           severity: warning

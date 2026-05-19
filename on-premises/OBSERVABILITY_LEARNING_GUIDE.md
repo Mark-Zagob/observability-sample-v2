@@ -680,6 +680,140 @@ Web UI → Inventory Worker badge = DOWN (red)
 
 ---
 
+### 🧪 Experiment 9: Phantom Alert — SLO Burn Rate khi không có Traffic
+
+> **📋 Runbook:** [RB-08→13 (SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
+
+> Đây là incident thực tế đã xảy ra trong lab này — `APIGatewayFastBurn` firing lúc nửa đêm dù không có user traffic.
+
+**Giả thuyết:** Sau khi traffic-gen chạy xong (có errors), SLO burn rate alert sẽ tiếp tục firing dù không còn traffic mới — vì `rate()` không thể "dilute" error rate khi `total = 0`.
+
+**Inject:**
+```bash
+# Bước 1: Chạy traffic-gen với scenario có lỗi (ví dụ: stop payment trước)
+docker stop payment-service
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+
+# Bước 2: Chờ traffic-gen chạy xong (60s)
+# Bước 3: Start lại payment-service (fix incident)
+docker start payment-service
+
+# Bước 4: KHÔNG chạy traffic mới — chờ và quan sát alert
+```
+
+**Dashboard reading path:**
+```
+Alerting Overview → APIGatewayFastBurn firing (critical)
+  → SLO Overview → Availability gauge < 99.5% (từ data cũ)
+    → Unified Overview → tất cả RPS = 0 (không traffic)
+      → App Performance → error rate "đóng băng" ở giá trị cuối
+        → Tracing → không có trace mới
+```
+
+**Quan sát kỳ vọng:**
+- Alert firing **dù incident đã được fix** (payment-service đã start lại)
+- Dashboard hiển thị error rate từ lần chạy cuối — không tự reset về 0
+- Không có trace mới để investigate — 3 pillars thiếu 2 (traces + logs trống)
+- Alert chỉ resolve khi có **traffic mới thành công** để "dilute" error rate
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Stale metrics:** Tại sao `rate(errors[1h]) / rate(total[1h])` vẫn cao khi không có traffic? `0/0` trả về gì trong PromQL?
+2. **Alert lifecycle:** Alert firing → incident fixed → nhưng alert không resolve. Trong production, on-call engineer nên làm gì? (silence alert + ghi chú? hay chạy synthetic traffic?)
+3. **Root cause của phantom alert:** Vấn đề nằm ở alert rule hay ở bản chất của rate-based metrics?
+4. **Production fix:** Viết lại alert rule thêm điều kiện gì để tránh phantom alert? (Gợi ý: `rate(total[5m]) > 0`)
+5. **Alert fatigue:** Nếu team bắt đầu ignore SLO alerts vì "lại phantom alert" — hậu quả là gì khi incident thật xảy ra?
+
+**Ví dụ production tương tự:**
+
+> Công ty e-commerce, service `payment-webhook` nhận callback từ Stripe. Ban đêm (0h-6h) chỉ ~5-10 requests/giờ. Deploy lúc 21:00 có bug → 3 webhooks fail → error rate 100% → burn rate 200x. Rollback xong 21:10 nhưng alert firing đến 02:00 sáng (5 tiếng!) vì không có webhook mới. On-call bị đánh thức 2 lần cho incident đã fix.
+
+**Fix trong alert rule:**
+```yaml
+# Thêm traffic guard — chỉ alert khi CÓ traffic
+- alert: APIGatewayFastBurn
+  expr: |
+    slo:api_gateway_availability:burn_rate_1h > 14.4
+    and slo:api_gateway_availability:burn_rate_5m > 14.4
+    and rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m]) > 0
+```
+
+**Rollback:** Không cần — đây là learning exercise.
+
+**Bài học:** SLO burn rate alerts cần **traffic guard** (`rate(total) > 0`) cho low-traffic services. Không có traffic = không đủ data để tính burn rate chính xác.
+
+---
+
+### 🧪 Experiment 10: Timezone Trap — Đọc sai Dashboard do Timezone
+
+> **📋 Runbook:** Không có alert tương ứng — đây là human error trong incident investigation, không phải system issue.
+
+> Đây là incident thực tế đã xảy ra khi investigate alert trong lab này — Grafana browser timezone (UTC+7) ≠ server timezone (UTC) → đọc sai time window → investigate sai khoảng thời gian.
+
+**Giả thuyết:** Khi Grafana timezone khác server timezone, on-call engineer sẽ suy luận sai về thời điểm xảy ra incident.
+
+**Inject:**
+```bash
+# Không inject failure — thay đổi Grafana timezone
+# 1. Mở Grafana → Profile → Preferences → Timezone
+# 2. Đổi từ UTC sang "Browser Time" (hoặc UTC+7)
+# 3. Mở bất kỳ dashboard nào và đọc time range
+```
+
+**Bẫy cần nhận biết:**
+
+| Grafana hiển thị | Server (UTC) | Bạn nghĩ | Thực tế |
+|-----------------|-------------|-----------|---------|
+| 00:00 - 08:00 (UTC+7) | 17:00 - 01:00 UTC | "Sáng nay 0h-8h" | "Chiều/tối hôm qua" |
+| Alert lúc 02:00 (UTC+7) | 19:00 UTC hôm trước | "2 giờ sáng" | "7 giờ tối" |
+| Traffic drop lúc 07:00 (UTC+7) | 00:00 UTC | "7 giờ sáng nay" | "Nửa đêm" |
+
+**Ví dụ cụ thể từ lab này:**
+
+```
+Tình huống: Alert "APIGatewayFastBurn" firing
+Dashboard time picker: "2026-05-19 00:00:00 to 07:59:59"
+Availability gauge: 92.4%
+
+Suy luận SAI (không biết timezone):
+  "Sáng nay 0h-8h, hệ thống availability 92.4%"
+  → Tìm incident trong khoảng 0h-8h sáng nay
+
+Suy luận ĐÚNG (biết timezone UTC+7):
+  Dashboard = 00:00-08:00 UTC+7 = 17:00-01:00 UTC
+  → Tìm incident trong khoảng 5PM-1AM hôm qua/nay (UTC)
+  → Traffic-gen chạy lúc 14:40 UTC+7 (trước window 9 tiếng!)
+```
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Timezone awareness:** Grafana timezone setting ở đâu? Cách kiểm tra nhanh timezone đang dùng?
+2. **UTC convention:** Tại sao production teams thường thống nhất dùng UTC cho monitoring? Khi nào dùng local time có lợi?
+3. **Cross-reference:** Khi đọc dashboard time range, bạn cần cross-reference với timestamp nào? (server logs, docker logs, alert firing time — tất cả đều dùng UTC)
+4. **Incident impact:** Timezone sai có thể gây sai lệch investigation bao lâu? (Trong ví dụ này: tìm sai 9 tiếng)
+5. **Team practice:** Nếu team có người ở nhiều timezone (VN, US, EU), cách nào tránh nhầm lẫn khi handoff incident?
+
+**Best practice:**
+
+```
+① Grafana: set timezone = UTC cho tất cả monitoring dashboards
+② Docker: đảm bảo host timezone = UTC (timedatectl set-timezone UTC)
+③ Logs: luôn log timestamps ở UTC (ISO 8601: 2026-05-19T03:00:00Z)
+④ Team: quy ước "nói giờ UTC khi discuss incident" — "incident lúc 17:00Z"
+```
+
+**Rollback:** Đổi Grafana timezone về UTC: Profile → Preferences → Timezone → UTC.
+
+**Bài học:** Timezone mismatch là **human error phổ biến nhất** trong incident investigation. Chỉ cần 1 người đọc sai timezone → toàn bộ timeline sai → investigate sai hướng → kéo dài MTTR.
+
+---
+
 ## Part 3: Checklist sau mỗi Experiment
 
 Sử dụng template sau cho mỗi bài thực hành:
@@ -709,3 +843,5 @@ Sử dụng template sau cho mỗi bài thực hành:
 | 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
 | 7 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking |
 | 8 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
+| 9 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
+| 10 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
