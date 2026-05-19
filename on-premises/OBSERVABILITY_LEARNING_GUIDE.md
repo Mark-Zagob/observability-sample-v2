@@ -245,6 +245,15 @@ Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
 
 > **Lưu ý:** `TargetDown` (up == 0) **không** firing trong experiment này vì Prometheus không scrape order-service trực tiếp — metrics đi qua OTel Collector (vẫn healthy). Đây là lý do cần Blackbox Exporter.
 
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Down vs Slow:** Service down hiển thị thế nào trên dashboard? (no data, RPS = 0). Khác gì service slow? (data vẫn có, nhưng duration cao)
+2. **Blast radius:** order-service chết → service nào vẫn hoạt động bình thường? Tại sao payment-service không bị ảnh hưởng?
+3. **2 lớp monitoring:** Tại sao `TargetDown` không firing mà `ServiceHealthCheckFailed` lại firing? Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được?
+4. **Ứng dụng production:** Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? (Gợi ý: xem RB-24)
+
 **Rollback:**
 ```bash
 docker start order-service
@@ -281,6 +290,15 @@ App Performance → P95/P99 duration spike ở Order Service
       → Alerting → HighLatencyP95 firing
 ```
 
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **USE method:** DB saturation thể hiện ở metric nào? (connection pool utilization, query duration). Đây là U, S, hay E trong USE?
+2. **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
+3. **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → rồi timeout → rồi error)
+4. **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" — bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
+
 **Rollback:** Lock tự release sau 60s, hoặc kill session:
 ```bash
 docker exec postgres psql -U app -d orders -c "
@@ -313,6 +331,15 @@ Kafka Overview → Consumer lag tăng liên tục cho notification-workers group
       → Unified Overview → Notification Worker error rate có thể tăng
 ```
 
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Leading indicator:** Consumer lag bắt đầu tăng bao lâu trước khi user thấy ảnh hưởng? Tại sao gọi nó là "leading"?
+2. **Pause vs Stop:** `docker pause` khác `docker stop` thế nào trên dashboard? (pause: container vẫn "running" nhưng frozen, không có restart count)
+3. **Catch-up behavior:** Sau khi unpause, lag giảm ngay hay giảm dần? Tại sao? Mất bao lâu để về 0?
+4. **Ứng dụng production:** Notification bị delay 5 phút — khách hàng chưa bị ảnh hưởng trực tiếp nhưng SLA email notification là 2 phút. Bạn cần page on-call hay tạo ticket?
+
 **Rollback:**
 ```bash
 docker unpause notification-worker
@@ -344,6 +371,16 @@ Unified Overview → Payment Service RPS = 0
         → Kafka Overview → produce rate vẫn có, consume rate vẫn có
           → Tracing → trace chain bị đứt ở payment span (error)
 ```
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Cascade pattern:** Payment chết → order-service phản ứng thế nào? Crash theo hay trả error rồi tiếp tục? Đây gọi là gì? (graceful degradation)
+2. **Trace chain:** Mở 1 trace lúc payment down → span payment bị error → nhưng order-service span status là gì? (error hay ok?)
+3. **Kafka behavior:** produce rate thay đổi thế nào? Tại sao notification-worker vẫn hoạt động dù payment chết?
+4. **SLO impact:** Burn rate của API Gateway vs Payment — cái nào tăng nhanh hơn? Tại sao?
+5. **Ứng dụng production:** Payment gateway (Stripe/VNPay) bị sự cố — bạn nên stop nhận order mới hay vẫn nhận và retry sau?
 
 **Bài học:** Cascading failure pattern — upstream service (order) ghi nhận lỗi nhưng không crash. Downstream (notification) vẫn hoạt động. Đây là **graceful degradation**.
 
@@ -542,6 +579,16 @@ App Performance → Order Service: inventory_checks{result="out_of_stock"} tăng
       → Kafka Overview → produce rate giảm (ít events vì orders fail)
 ```
 
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **3 loại failure:** Phân biệt infrastructure failure (Exp 1), code bug, và design-level failure. Experiment này thuộc loại nào? Tại sao?
+2. **Dashboard limitation:** Dashboard nào cho thấy triệu chứng rõ nhất? Dashboard nào **không giúp gì** trong trường hợp này? Tại sao?
+3. **Missing event flow:** Vẽ sơ đồ event flow bình thường: `order.created → payment → notification → restock check`. Khi stock = 0, chuỗi bị đứt ở đâu?
+4. **Monitoring gap:** Bạn có thể viết alert rule nào để detect trạng thái deadlock này không? (Gợi ý: `orders_total{status="out_of_stock"} > X` kết hợp `restock_events_total == 0`)
+5. **Ứng dụng production:** Team PM báo "không ai đặt hàng được" nhưng tất cả infrastructure metrics đều xanh — bạn investigate thế nào?
+
 **Bài học:** Đây là **design-level failure** — không phải infrastructure, không phải code bug, mà là missing event flow. Dashboard cho thấy triệu chứng nhưng root cause nằm ở architecture.
 
 **Rollback:**
@@ -570,6 +617,16 @@ Infrastructure → Docker Containers → memory usage tăng đến limit
     → Alerting → HighMemoryUsage có thể firing
       → Docker Containers → restart count tăng nếu OOMKilled
 ```
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **USE method:** Memory pressure là U (Utilization), S (Saturation), hay E (Errors)? Khi nào nó chuyển từ Saturation sang Errors? (GC pauses → OOMKilled)
+2. **Predictive alerting:** `predict_linear()` dự đoán memory exhaustion — nó firing bao lâu trước khi OOM thực sự xảy ra? Giá trị này hữu ích thế nào lúc 3 giờ sáng?
+3. **Cascading effect:** Memory pressure ảnh hưởng latency thế nào? Tại sao P95 tăng trước P50? (GC pauses ảnh hưởng tail latency trước)
+4. **Container restart:** OOMKilled container tự restart → metrics có bị mất không? Làm sao phân biệt "service healthy sau restart" vs "service đang flapping"?
+5. **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ — bạn tăng memory limit hay investigate memory leak? Cách quyết định?
 
 **Rollback:**
 ```bash
@@ -608,6 +665,16 @@ Web UI → Inventory Worker badge = DOWN (red)
 ```
 
 **Fix:** `docker restart web-ui` (reload nginx DNS)
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Monitoring blind spot:** Tại sao Prometheus/Blackbox Exporter không detect được vấn đề này? (Gợi ý: probe đi thẳng tới service, không qua nginx proxy)
+2. **Misleading dashboard:** Web UI báo DOWN nhưng `docker ps` báo healthy — bạn tin cái nào? Cách cross-reference để xác nhận?
+3. **DNS in Docker:** Container IP thay đổi khi nào? Tại sao nginx cache DNS lại gây vấn đề? Giải pháp production là gì? (resolver, service mesh)
+4. **Incident classification:** Đây là SEV mấy theo incident-runbook-templates? (SEV3-4: service chạy, chỉ 1 proxy path bị ảnh hưởng)
+5. **Ứng dụng production:** Sau deploy mới, 1 trong 5 service báo DOWN trên status page nhưng health check vẫn pass — nguyên nhân có thể là gì ngoài DNS cache?
 
 **Bài học:** Dashboard có thể **misleading** — service thực sự healthy nhưng proxy layer không reach được. Cần cross-reference với container status.
 
