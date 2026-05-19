@@ -44,6 +44,15 @@ Web UI → API Gateway → Order Service → Payment Service
 - ❌ Health check endpoint chuẩn (liveness/readiness)
 - ❌ Rate limiting
 - ❌ Structured error response chuẩn (RFC 7807)
+- ❌ TLS termination (HTTPS)
+- ❌ Secrets management (JWT keys, DB passwords)
+- ❌ Network segmentation (Docker networks per tier)
+- ❌ Resource limits (CPU/memory per container)
+- ❌ Backup/Restore procedures
+- ❌ Graceful shutdown (Kafka consumers)
+- ❌ Log rotation & retention
+- ❌ CI pipeline (lint, test, build)
+- ❌ Horizontal scaling (multiple instances + load balancing)
 
 ---
 
@@ -165,10 +174,11 @@ GET  /auth/verify       → Verify JWT (internal, cho các services khác gọi)
 
 | Pattern | Mô tả |
 |---------|-------|
-| JWT propagation | API Gateway forward JWT → Order Service verify → Payment Service verify |
+| JWT local verification | API Gateway verify JWT locally bằng public key (không cần gọi HTTP tới Auth Service). Auth down = new login fail, nhưng existing sessions vẫn hoạt động |
 | RBAC | User roles: `customer`, `admin`, `service` |
 | Token refresh | Access token 15min, refresh token 7d |
 | Service-to-service auth | Internal JWT với role `service` cho inter-service calls |
+| Key rotation | JWT signing key rotation procedure — publish new public key trước, rotate private key sau |
 
 **Schema bổ sung:**
 ```sql
@@ -276,14 +286,41 @@ Compensation (shipping fail):
 | `order.shipping_failed` | Shipping Worker | Notification Worker |
 | `order.refunded` | Shipping Worker | Notification Worker, Inventory Worker |
 
+**Saga State Machine:**
+```
+States: INITIATED → PAYMENT_PENDING → PAYMENT_COMPLETED → SHIPPING_PENDING
+        → SHIPPED | SHIPPING_FAILED → COMPENSATING → REFUNDED | COMPENSATION_FAILED
+
+Rules:
+  - Timeout: 5 minutes per step, 15 minutes total saga
+  - Retry: 3 attempts with exponential backoff (1s, 5s, 25s)
+  - DLQ: after max_retries exhausted OR total timeout exceeded
+  - Crash recovery: on startup, query saga_state for PENDING states → resume
+```
+
+**Schema bổ sung (shipping_db):**
+```sql
+CREATE TABLE saga_state (
+    saga_id     VARCHAR(50) PRIMARY KEY,
+    order_id    VARCHAR(50) NOT NULL,
+    state       VARCHAR(50) NOT NULL,
+    retries     INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    timeout_at  TIMESTAMP,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+);
+```
+
 **Patterns mới học được:**
 
 | Pattern | Mô tả |
 |---------|-------|
-| **Saga Orchestration** | Coordinator quản lý multi-step transaction |
+| **Saga Orchestration** | Coordinator quản lý multi-step transaction với persistent state |
 | **Compensation** | Rollback khi downstream service fail |
 | **Dead Letter Queue** | Messages xử lý fail → DLQ topic để review |
 | **Retry with backoff** | Exponential backoff cho transient failures |
+| **Crash recovery** | Resume incomplete sagas on restart từ saga_state table |
 
 ---
 
@@ -308,14 +345,15 @@ GET  /search/orders?q=ORD-123        → Search orders by ID/status
 POST /search/reindex                 → Manual reindex trigger
 ```
 
-**Data sync approach:**
+**Data sync approach (Event-driven):**
 ```
-Option A: Event-driven sync (recommended)
-  Order Service → publish order.created → Search Worker → index vào OpenSearch
-  
-Option B: CDC (Change Data Capture)
-  PostgreSQL → WAL → Debezium → Kafka → Search Worker → OpenSearch
-  (phức tạp hơn, nhưng production-grade hơn)
+Sync strategy:
+  1. Event-driven: listen order.created, order.updated → index to OpenSearch
+  2. Backfill: POST /search/reindex → full scan app_db → bulk index
+  3. Idempotency: use order_id as OpenSearch document _id (upsert, not insert)
+  4. Failure handling: if OpenSearch write fails → publish to search.sync.dlq
+  5. Index versioning: use aliases (orders_v1, orders_v2) for zero-downtime reindex
+  6. Lag metric: track time giữa Kafka event timestamp và OpenSearch indexed_at
 ```
 
 **Patterns mới học được:**
@@ -323,8 +361,9 @@ Option B: CDC (Change Data Capture)
 | Pattern | Mô tả |
 |---------|-------|
 | **CQRS** | Separate read model (OpenSearch) vs write model (PostgreSQL) |
-| **Eventual consistency** | Search index có thể lag 1-5s sau khi write |
+| **Eventual consistency** | Search index có thể lag 1-5s sau khi write, đo bằng metric |
 | **Bulk indexing** | Batch sync cho reindex operations |
+| **Index aliasing** | Zero-downtime reindex bằng alias switching |
 | **Search relevance** | Scoring, boosting, fuzzy matching |
 
 ---
@@ -562,16 +601,24 @@ Patterns:
 
 ```
 Tất cả patterns cũ +
-  🆕 Saga Orchestration (distributed transactions)
+  🆕 Saga Orchestration (distributed transactions + crash recovery)
   🆕 Compensation (rollback when downstream fails)
-  🆕 Circuit Breaker (failure isolation)
+  🆕 Circuit Breaker (failure isolation + observability)
   🆕 CQRS (read/write model separation)
-  🆕 Eventual Consistency (sync lag)
+  🆕 Eventual Consistency (sync lag + measurement)
   🆕 Dead Letter Queue (failed message handling)
-  🆕 JWT Propagation (cross-service auth)
+  🆕 JWT Local Verification (resilient auth)
   🆕 RBAC (role-based access control)
   🆕 Graceful Degradation (fallback khi dependency down)
   🆕 Retry with Exponential Backoff
+  🆕 TLS Termination (HTTPS)
+  🆕 Secrets Management (Docker secrets + .env)
+  🆕 Network Segmentation (Docker networks per tier)
+  🆕 Resource Limits (CPU/memory per container)
+  🆕 Graceful Shutdown (SIGTERM handling)
+  🆕 Backup/Restore (per-database + DR drill)
+  🆕 Index Aliasing (zero-downtime reindex)
+  🆕 CI Pipeline (lint + test + build)
 ```
 
 ---
@@ -615,10 +662,16 @@ Shipping Worker → Shipping Svc:  circuit breaker (3 failures → open 60s)
 
 **Trạng thái:**
 ```
-Closed  → requests đi bình thường, đếm failures
-Open    → requests bị reject ngay, trả fallback response
+Closed    → requests đi bình thường, đếm failures
+Open      → requests bị reject ngay, trả fallback response
 Half-Open → cho 1 request thử, nếu OK → Close, nếu fail → Open lại
 ```
+
+**Observability (bắt buộc):**
+- Metric: `circuit_breaker_state{service="payment", state="open|closed|half_open"}` (Gauge)
+- Metric: `circuit_breaker_failures_total{service="payment"}` (Counter)
+- Alert: `CircuitBreakerOpen` — fires khi CB ở state "open" > 30s
+- Log: structured log mỗi state transition với `trace_id`
 
 ### Rate Limiting
 
@@ -631,6 +684,12 @@ Per-IP:     50 requests/second (cho unauthenticated endpoints)
 ```
 
 **Implementation:** Redis-based sliding window counter.
+
+**Observability:**
+- Metric: `rate_limit_hits_total{tier="global|user|ip"}` (Counter)
+- Internal bypass: requests với `X-Internal-Service` header + service JWT skip rate limit
+- Response: 429 + RFC 7807 body + `Retry-After` header
+- Alert: `RateLimitSpikeDetected` — rate_limit_hits > 100/min sustained 5min
 
 ### Structured Error Response (RFC 7807)
 
@@ -649,7 +708,181 @@ Tất cả services trả error theo chuẩn:
 
 **Tại sao:** Khi có 10 services, error format không thống nhất → debug rất khó. `trace_id` trong error response giúp correlate với distributed traces.
 
----
+### Graceful Shutdown (Kafka Consumers)
+
+Tất cả Kafka consumers phải xử lý SIGTERM đúng:
+
+```python
+import signal, sys
+
+def shutdown_handler(signum, frame):
+    consumer.close()    # commits final offsets
+    db_connection.close()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown_handler)
+```
+
+```yaml
+# docker-compose.yml
+services:
+  notification-worker:
+    stop_grace_period: 30s   # thời gian chờ trước SIGKILL
+```
+
+**Tại sao:** Kill consumer mid-processing có thể gây duplicate processing hoặc saga state inconsistency.
+
+### TLS Termination
+
+HTTPS cho tất cả external traffic:
+
+```
+Client ──HTTPS──► nginx (TLS termination) ──HTTP──► API Gateway ──► services
+```
+
+- Self-signed certificates cho lab (openssl)
+- nginx reverse proxy handle TLS
+- Internal traffic giữa services vẫn HTTP (within Docker network)
+- Certificate renewal procedure (scripted)
+
+**DevOps learning:** TLS setup, certificate management, nginx SSL config, redirect HTTP→HTTPS.
+
+### Secrets Management
+
+Không hardcode secrets trong docker-compose.yml:
+
+```yaml
+# docker-compose.yml
+services:
+  order-service:
+    env_file: .env.order   # file-based secrets, NOT inline
+    secrets:
+      - db_password
+      - jwt_public_key
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  jwt_public_key:
+    file: ./secrets/jwt_public.pem
+```
+
+- `.env.*` files trong `.gitignore`
+- `secrets/` directory với restricted permissions (chmod 600)
+- JWT key pair: private key chỉ Auth Service có, public key distribute cho các services
+- Rotation procedure: generate new key → deploy public key → rotate private key
+
+### Network Segmentation
+
+Tách Docker networks theo tier:
+
+```yaml
+networks:
+  frontend:    # Web UI, nginx
+  backend:     # API Gateway, services
+  data:        # PostgreSQL, Redis, Kafka, OpenSearch
+  observability:  # OTel, Prometheus, Grafana (external)
+
+services:
+  web-ui:
+    networks: [frontend]
+  api-gateway:
+    networks: [frontend, backend]   # bridge frontend → backend
+  order-service:
+    networks: [backend, data]       # access DB/cache
+  postgres:
+    networks: [data]                # chỉ data tier access được
+```
+
+**Tại sao:** Web UI không nên connect trực tiếp tới PostgreSQL. Network segmentation enforce tại infrastructure level.
+
+### Resource Limits
+
+```yaml
+services:
+  order-service:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+  opensearch:
+    deploy:
+      resources:
+        limits:
+          memory: 3G    # JVM heap + OS overhead
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+```
+
+**Tại sao:** Without limits, 1 service có thể eat toàn bộ RAM của VM → OOM killer random containers.
+
+### Backup & Restore
+
+```bash
+# Backup per-database
+pg_dump -h localhost -U app_user app_db > backup/app_db_$(date +%Y%m%d).sql
+pg_dump -h localhost -U auth_user auth_db > backup/auth_db_$(date +%Y%m%d).sql
+pg_dump -h localhost -U shipping_user shipping_db > backup/shipping_db_$(date +%Y%m%d).sql
+
+# Restore
+pg_restore -h localhost -U app_user -d app_db < backup/app_db_20250519.sql
+
+# Verify backup integrity
+pg_restore --list backup/app_db_20250519.sql  # dry-run, no actual restore
+```
+
+- Backup schedule: daily (cron or Docker healthcheck trick)
+- Retention: 7 days local, rotate oldest
+- Verify: monthly restore drill to verify backups are usable
+- **RTO/RPO definitions:** RTO = 30 min (restore from backup), RPO = 24h (daily backup)
+
+### Log Rotation
+
+```yaml
+# docker-compose.yml — apply cho tất cả services
+services:
+  order-service:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+**Tại sao:** Without log rotation, Docker logs grow unbounded → disk full → entire VM down.
+
+### CI Pipeline (GitHub Actions)
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint (flake8)
+        run: flake8 applications-vm/applications/
+      - name: Unit tests
+        run: pytest applications-vm/applications/ --tb=short
+      - name: Build images
+        run: docker compose -f applications-vm/applications/docker-compose.yml build
+      - name: Health check smoke test
+        run: |
+          docker compose up -d
+          sleep 30
+          curl -f http://localhost:5000/health/live
+          docker compose down
+```
+
+- Deploy vẫn manual (`docker compose pull && up -d` trên VM)
+- CI chỉ validate: code quality + build success + basic health
+- Production deployment automation thuộc AWS plan (Terraform + ECS)
 
 ## Observability Mở Rộng
 
@@ -692,103 +925,163 @@ Tất cả services trả error theo chuẩn:
 ### Phase 0: Production Readiness (trước khi thêm services)
 
 ```
-Effort: ~1-2 ngày
+Effort: ~3-4 ngày
 Dependencies: Không có
 Impact: Tất cả 6 services hiện tại
 
-Bước:
+Application:
   1. Thêm /health/live + /health/ready cho 6 services hiện tại
   2. Thêm healthcheck trong docker-compose.yml
   3. Chuẩn hóa error response format (RFC 7807)
   4. Chuẩn hóa logging format (đã có structured JSON, verify consistency)
+  5. Thêm graceful shutdown handler cho Kafka consumers (SIGTERM)
+
+Infrastructure:
+  6. Network segmentation: tách Docker networks (frontend, backend, data, observability)
+  7. Resource limits: CPU/memory limits cho tất cả containers
+  8. Log rotation: json-file driver với max-size/max-file
+  9. stop_grace_period: 30s cho tất cả workers
+
+CI:
+  10. Setup GitHub Actions: lint (flake8) → build → smoke test
 
 Verify:
   - curl /health/ready → 200 khi service healthy
   - Stop PostgreSQL → /health/ready → 503
   - Error responses đúng format RFC 7807
+  - Web UI không connect được trực tiếp tới PostgreSQL (network segmentation)
+  - docker stats hiển thị memory limits
+  - docker compose down: consumers commit offsets trước khi exit
+  - CI pipeline pass trên GitHub
 ```
 
-### Phase 1: Auth Service
+### Phase 1: Auth Service + TLS + Secrets
 
 ```
-Effort: ~2-3 ngày
-Dependencies: Phase 0 (health checks)
+Effort: ~4-5 ngày
+Dependencies: Phase 0 (health checks, network segmentation)
 Impact: Tất cả services cần update middleware
 
-Bước:
+Application:
   1. Tạo auth_db + init-auth.sql (users, refresh_tokens tables)
   2. Tạo Auth Service (register, login, verify, refresh)
-  3. Update API Gateway — thêm JWT middleware + rate limiting
+  3. Update API Gateway — thêm JWT middleware (local public key verification) + rate limiting
   4. Update Order Service — extract user_id từ token
   5. Update Web UI — thêm login/register page
-  6. Thêm Grafana dashboard: Auth Overview
-  7. Test: end-to-end flow với authentication
+
+Infrastructure:
+  6. TLS termination: self-signed cert + nginx SSL config
+  7. Secrets management: JWT key pair, DB passwords trong .env files + Docker secrets
+  8. HTTP → HTTPS redirect
+
+Observability:
+  9. Thêm Grafana dashboard: Auth Overview
+  10. Alert: AuthBruteForceDetected (failed logins > 10/min)
+
+Runbook deliverables:
+  - RB-AUTH-01: Auth Service Down (new logins fail, existing sessions OK)
+  - RB-AUTH-02: Brute Force Detected (rate limit spike on /auth/login)
+  - RB-AUTH-03: JWT Key Rotation procedure
+  - RB-TLS-01: Certificate Expired / Renewal
 
 Verify:
   - Unauthenticated request → 401
   - Authenticated request → flow bình thường
   - Expired token → 401, refresh → new token
   - Rate limit exceeded → 429 Too Many Requests
-  - Auth Service down → circuit breaker → 503 Service Unavailable
+  - Auth Service down → existing JWT vẫn valid (local verification)
+  - HTTPS works, HTTP redirects to HTTPS
+  - Secrets không hiện trong docker-compose.yml hoặc git
 ```
 
-### Phase 2: Shipping Service + Shipping Worker
+### Phase 2: Shipping Service + Shipping Worker + Backup
 
 ```
-Effort: ~3-5 ngày
+Effort: ~5-7 ngày
 Dependencies: Phase 1 (Auth) nếu muốn auth, hoặc độc lập
 Impact: Mở rộng order lifecycle, thêm Kafka topics
 
-Bước:
-  1. Tạo shipping_db + init-shipping.sql (shipments table)
+Application:
+  1. Tạo shipping_db + init-shipping.sql (shipments + saga_state tables)
   2. Tạo Shipping Service (CRUD shipments) + circuit breaker
-  3. Tạo Shipping Worker (Saga orchestrator) + DLQ handling
+  3. Tạo Shipping Worker (Saga orchestrator) + DLQ handling + crash recovery
   4. Thêm Kafka topics: order.shipped, order.shipping_failed, order.refunded
   5. Thêm DLQ topic: order.shipping.dlq
   6. Update Notification Worker — handle shipping events
   7. Update Inventory Worker — handle refund events
   8. Update Web UI — hiển thị shipping status + tracking
-  9. Thêm Grafana dashboard: Saga Monitor
-  10. Test: happy path + compensation path
+
+Infrastructure:
+  9. Backup/Restore: setup pg_dump scripts cho app_db, auth_db, shipping_db
+  10. Horizontal scaling test: chạy 2 instances Shipping Worker (consumer group rebalancing)
+  11. Backup verification: restore backup to temp DB, verify data integrity
+
+Observability:
+  12. Thêm Grafana dashboard: Saga Monitor
+  13. Alert: SagaStuckInPending, DLQGrowing, CircuitBreakerOpen
+
+Runbook deliverables:
+  - RB-SAGA-01: Saga Stuck in PENDING (timeout not triggered)
+  - RB-SAGA-02: DLQ Growing (compensation failures accumulating)
+  - RB-SAGA-03: Shipping Service Down (CB open, sagas queuing)
+  - RB-BACKUP-01: Database Restore Procedure (per-database)
 
 Verify:
   - Order → Payment OK → Shipping OK → status: shipped
   - Order → Payment OK → Shipping FAIL → refund → status: refunded
-  - Kill Shipping Worker mid-saga → resume after restart
+  - Kill Shipping Worker mid-saga → resume after restart (saga_state)
   - Saga timeout → DLQ → manual review
   - Circuit breaker open → Shipping Worker stops calling Shipping Service
+  - 2 Shipping Workers → Kafka rebalance, no duplicate processing
+  - Backup restore drill: dump → drop → restore → verify data
 ```
 
-### Phase 3: Search Service
+### Phase 3: Search Service + Index Management
 
 ```
-Effort: ~2-3 ngày
+Effort: ~3-4 ngày
 Dependencies: Không có — standalone service
 Impact: Thêm OpenSearch container, data sync
 
-Bước:
-  1. Thêm OpenSearch container vào docker-compose (+ healthcheck)
-  2. Tạo Search Service (search API + indexing)
-  3. Tạo sync mechanism (event-driven: listen order.created → index)
-  4. Update API Gateway — route /search/* (circuit breaker)
-  5. Update Web UI — thêm search bar
-  6. Thêm Grafana dashboard: Search Health (index lag, query latency)
-  7. Test: create order → search tìm thấy (eventual consistency)
+Application:
+  1. Thêm OpenSearch container vào docker-compose (+ healthcheck + resource limits 3GB)
+  2. Tạo Search Service (search API + event-driven indexing)
+  3. Implement idempotent sync (order_id as document _id, upsert)
+  4. Implement backfill: POST /search/reindex → full scan app_db
+  5. Implement index aliasing (orders_v1, orders_v2) for zero-downtime reindex
+  6. Update API Gateway — route /search/* (circuit breaker)
+  7. Update Web UI — thêm search bar
+
+Infrastructure:
+  8. OpenSearch snapshot/backup configuration
+  9. Index lifecycle policy (delete old indices after 30 days)
+  10. Failure handling: search.sync.dlq cho failed indexing
+
+Observability:
+  11. Thêm Grafana dashboard: Search Health (index lag, query latency)
+  12. Metric: search_index_lag_seconds (event timestamp vs indexed_at)
+  13. Alert: SearchIndexLagHigh (lag > 30s)
+
+Runbook deliverables:
+  - RB-SEARCH-01: OpenSearch Cluster Red (all replicas lost)
+  - RB-SEARCH-02: Index Corruption → Reindex from PostgreSQL
+  - RB-SEARCH-03: Search Index Lag High (sync falling behind)
 
 Verify:
   - Search trả kết quả đúng
   - Tạo order mới → search thấy sau ≤ 5s (measure actual lag)
   - OpenSearch down → graceful error, core flow không ảnh hưởng
   - Reindex command → full sync hoàn tất
+  - Zero-downtime reindex: alias switch với no search disruption
 ```
 
-### Phase 4: Integration + Chaos Testing + SLO
+### Phase 4: Integration + Chaos Testing + SLO + DR Drill
 
 ```
-Effort: ~3-5 ngày
+Effort: ~5-7 ngày
 Dependencies: Phase 0-3 hoàn tất
 
-Bước:
+Integration:
   1. End-to-end test toàn bộ 10 services
   2. Thiết lập SLI/SLO dashboards trong Grafana
   3. Thêm alerting rules:
@@ -796,20 +1089,32 @@ Bước:
      - Auth error rate > 1% → alert (brute force?)
      - Search index lag > 30s → alert
      - Circuit breaker open → alert
-  4. Chạy chaos exercises:
-     a. Kill Auth → observe cascade → verify circuit breaker
-     b. Kill Shipping mid-saga → verify compensation
-     c. Corrupt OpenSearch index → verify graceful degradation
-     d. Kafka consumer lag → verify backpressure
-     e. PostgreSQL failover (stop + restart) → verify reconnection
-  5. Viết runbook recovery cho mỗi scenario
-  6. Document SLO burn rate qua 1 tuần vận hành
+
+Chaos Exercises:
+  4. Kill Auth → observe existing sessions still work (local JWT) → new logins fail
+  5. Kill Shipping mid-saga → verify crash recovery from saga_state
+  6. Corrupt OpenSearch index → verify graceful degradation + reindex
+  7. Kafka consumer lag → verify backpressure + scaling
+  8. PostgreSQL stop + restart → verify reconnection + health check transition
+  9. Fill disk to 95% → verify predict_linear alert fires
+
+Disaster Recovery Drill:
+  10. Full DR: dump all DBs → docker compose down → remove volumes → restore → verify
+  11. Document RTO (target: 30 min) và RPO (target: 24h) thực tế
+  12. On-call simulation: trigger random alert, triage theo runbook, đo MTTR
+
+Documentation:
+  13. Update INCIDENT_RUNBOOK.md với runbooks từ Phase 1-3
+  14. Document SLO burn rate qua 1 tuần vận hành
+  15. Write post-mortem template cho mỗi chaos exercise
 
 Verify:
   - Tất cả traces span đúng 10 services
   - SLO dashboards hiển thị burn rate
   - Mỗi chaos exercise có documented recovery < 5 phút
   - Alert → Telegram notification trong < 1 phút
+  - DR drill: full restore hoàn tất < 30 phút
+  - CI pipeline pass với 10 services
 ```
 
 ---
@@ -820,9 +1125,9 @@ Verify:
 
 | Resource | Hiện tại (6 svc) | Sau mở rộng (10 svc) | Delta |
 |----------|-----------------|---------------------|-------|
-| RAM | ~2.5 GB | ~4.5 GB (+OpenSearch ~1.5 GB) | +2 GB |
-| CPU | 2-4 cores đủ | 4-6 cores khuyến nghị | +2 cores |
-| Disk | ~1 GB | ~3 GB (OpenSearch indices) | +2 GB |
+| RAM | ~2.5 GB | ~7 GB (+OpenSearch ~3 GB) | +4.5 GB |
+| CPU | 2-4 cores đủ | 6-8 cores khuyến nghị | +4 cores |
+| Disk | ~1 GB | ~5 GB (OpenSearch indices + backups) | +4 GB |
 
 ### AWS (ước tính khi deploy)
 
@@ -841,14 +1146,19 @@ Verify:
 |--------|-------|-----|
 | Services | 6 | 10 |
 | Kafka topics | 3 | 8 + 1 DLQ |
-| Design patterns | 7 | 20 |
+| Design patterns | 7 | 25+ |
 | Failure scenarios | ~5 | ~15 |
-| Resilience patterns | 0 | 3 (circuit breaker, rate limit, health checks) |
+| Resilience patterns | 0 | 5 (CB, rate limit, health checks, graceful shutdown, graceful degradation) |
+| Security | 0 | 3 (TLS, secrets management, JWT/RBAC) |
 | Communication patterns | 2 (HTTP, Kafka) | 3 (+JWT propagation) |
 | Database systems | 2 (PostgreSQL, Redis) | 3 (+OpenSearch) |
 | Databases | 1 (shared) | 3 (app_db, auth_db, shipping_db) + OpenSearch |
 | DB strategy | Shared DB | Hybrid (1 instance, multiple DBs) |
-| Observability | Metrics + Logs + Traces | + SLI/SLO dashboards + per-service metrics |
-| Grafana dashboards | Existing | +3 (Auth, Saga, Search) |
+| Infrastructure ops | Basic | Network segmentation, resource limits, log rotation, backup/restore |
+| CI/CD | None | GitHub Actions (lint → test → build) |
+| Observability | Metrics + Logs + Traces | + SLI/SLO dashboards + per-service metrics + CB/rate limit metrics |
+| Grafana dashboards | Existing | +4 (Auth, Saga, Search, Cross-Service) |
+| Runbooks | 0 per new service | 10+ (per-phase deliverables) |
+| Effort | - | ~20-27 ngày (5 phases) |
 
-> **Kết luận:** Mở rộng 4 services + resilience patterns + SLI/SLO sẽ tăng learning surface gấp ~3x so với hiện tại. Đặc biệt Phase 0 (production readiness) và Phase 4 (SLO + chaos) là nơi học được nhiều kiến thức SRE nhất — không phải từ code mà từ **cách vận hành và đo lường reliability**.
+> **Kết luận:** Mở rộng 4 services + production-grade operational patterns sẽ tăng learning surface gấp ~4x so với hiện tại. Docker Compose được sử dụng như **production orchestrator** (không phải toy/demo) — tất cả concepts (TLS, secrets, network segmentation, backup, CI, graceful shutdown) đều production-grade, chỉ khác K8s ở deployment tooling. AWS deployment với Terraform/EKS/ECS là plan riêng.
