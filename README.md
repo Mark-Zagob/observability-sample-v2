@@ -23,7 +23,7 @@ Dự án này bao gồm **hai phần chính**:
 
 | Phần | Trạng thái | Mô tả |
 |------|-----------|-------|
-| **On-Premises** (Docker Compose) | ✅ Hoàn tất | Hệ thống e-commerce microservices + full observability stack chạy trên 2 VMs |
+| **On-Premises** (Docker Compose) | 🔄 Phase 1 hoàn tất | 6 microservices + full observability stack trên 2 VMs. [Expansion Plan](on-premises/EXPANSION_PLAN.md) lên 10 services đang triển khai |
 | **Terraform — AWS** | 🚧 Đang phát triển | Infrastructure-as-code để deploy hệ thống lên AWS (VPC, RDS, Security, Policy-as-Code) |
 
 ### Bạn sẽ học được gì?
@@ -83,8 +83,13 @@ Internet → Route53 → WAF → ALB → Compute (ECS/EKS) → RDS + ElastiCache
 ```
 observability-sample-v2/
 │
-├── on-premises/                          # ✅ Docker Compose — hoàn tất
+├── on-premises/                          # 🔄 Docker Compose — Phase 1 done
 │   ├── ARCHITECTURE.md                   # Kiến trúc, data flows, DB schema, design patterns
+│   ├── EXPANSION_PLAN.md                 # Roadmap mở rộng 6 → 10 services (Saga, CQRS, Circuit Breaking)
+│   ├── INCIDENT_RUNBOOK.md               # 22 runbooks cho tất cả alert rules
+│   ├── OBSERVABILITY_LEARNING_GUIDE.md   # 7 chaos experiments + hands-on exercises
+│   ├── devops-question.md                # DevOps interview practice (junior/mid)
+│   ├── devops-question-senior.md         # DevOps interview practice (senior)
 │   │
 │   ├── applications-vm/                  # VM chạy ứng dụng
 │   │   └── applications/
@@ -175,7 +180,7 @@ observability-sample-v2/
 | **Loki** | 3100 | Log aggregation với LogQL |
 | **Alertmanager** | 9093 | Alert routing → Telegram |
 
-### Lộ Trình Học Observability (6 Phases)
+### Lộ Trình Học Observability (6 Phases + Chaos Experiments)
 
 | Phase | Chủ đề | Nội dung chính |
 |-------|--------|---------------|
@@ -185,6 +190,9 @@ observability-sample-v2/
 | **4** | Alerting | Alertmanager, Recording Rules, Telegram, `predict_linear()` |
 | **5** | App Instrumentation | Custom metrics (Counter, Histogram), manual spans, OTel SDK |
 | **6** | Correlation & SLO | Metrics↔Logs↔Traces correlation, SLI/SLO monitoring |
+
+> 📖 Sau khi hoàn thành 6 phases, tiếp tục với [**7 Chaos Experiments**](on-premises/OBSERVABILITY_LEARNING_GUIDE.md)
+> để thực hành incident triage: DB saturation, cascading failure, Kafka consumer lag, SLO burn rate analysis.
 
 ### Design Patterns
 
@@ -302,9 +310,21 @@ docker compose up -d
 
 ### Tài liệu trong repo
 
+**On-Premises:**
+
 | File | Nội dung |
 |------|---------|
-| [`on-premises/ARCHITECTURE.md`](on-premises/ARCHITECTURE.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns, DevOps knowledge |
+| [`on-premises/ARCHITECTURE.md`](on-premises/ARCHITECTURE.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns |
+| [`on-premises/EXPANSION_PLAN.md`](on-premises/EXPANSION_PLAN.md) | Roadmap mở rộng 6 → 10 services — Saga, CQRS, Circuit Breaking, TLS, CI/CD |
+| [`on-premises/INCIDENT_RUNBOOK.md`](on-premises/INCIDENT_RUNBOOK.md) | 22 incident runbooks — SEV1-4 severity, escalation matrix, recovery procedures |
+| [`on-premises/OBSERVABILITY_LEARNING_GUIDE.md`](on-premises/OBSERVABILITY_LEARNING_GUIDE.md) | 7 chaos experiments — DB saturation, cascading failure, Kafka lag, SLO burn rate |
+| [`on-premises/devops-question.md`](on-premises/devops-question.md) | DevOps interview practice — junior/mid level |
+| [`on-premises/devops-question-senior.md`](on-premises/devops-question-senior.md) | DevOps interview practice — senior level |
+
+**Terraform / AWS:**
+
+| File | Nội dung |
+|------|---------|
 | [`terraform/ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | Kiến trúc AWS — VPC topology, compute phases, security flow |
 | [`terraform/IMPLEMENTATION_PLAN.md`](terraform/IMPLEMENTATION_PLAN.md) | Kế hoạch triển khai Terraform chi tiết |
 | [`terraform/chaos-exercises-network.md`](terraform/chaos-exercises-network.md) | Chaos engineering — 12 break/test/recover exercises |
