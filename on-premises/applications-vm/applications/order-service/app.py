@@ -40,6 +40,7 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.propagate import inject
+from opentelemetry.metrics import Observation
 
 # ----------------------------------------------------------
 # Initialize logging + OTel
@@ -78,6 +79,18 @@ db_pool_active = meter.create_up_down_counter(
     unit="1",
 )
 
+DB_POOL_MAX = 10  # must match maxconn in DatabasePool init below
+
+def _pool_max_callback(options):
+    yield Observation(DB_POOL_MAX)
+
+meter.create_observable_gauge(
+    name="db_connection_pool_max",
+    description="Maximum database connections in pool",
+    unit="1",
+    callbacks=[_pool_max_callback],
+)
+
 cache_ops_counter = meter.create_counter(
     name="cache_operations_total",
     description="Cache operations (hit/miss/set/error)",
@@ -108,7 +121,9 @@ inventory_checks_counter = meter.create_counter(
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-db = DatabasePool(DATABASE_URL, minconn=2, maxconn=10, pool_active_counter=db_pool_active)
+db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
+                  pool_active_counter=db_pool_active,
+                  query_duration_histogram=db_query_duration)
 cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
                    cache_duration=cache_duration)
 

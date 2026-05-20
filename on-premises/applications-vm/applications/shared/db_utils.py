@@ -69,12 +69,14 @@ def parse_db_url(url):
 class DatabasePool:
     """Lazy-initialized PostgreSQL connection pool with metrics support."""
 
-    def __init__(self, db_url, minconn=2, maxconn=10, pool_active_counter=None):
+    def __init__(self, db_url, minconn=2, maxconn=10, pool_active_counter=None,
+                 query_duration_histogram=None):
         self._params = parse_db_url(db_url)
         self._minconn = minconn
         self._maxconn = maxconn
         self._pool = None
         self._pool_active_counter = pool_active_counter
+        self._query_duration_histogram = query_duration_histogram
 
     def _get_pool(self):
         if self._pool is None:
@@ -92,6 +94,8 @@ class DatabasePool:
         conn = pool.getconn()
         if self._pool_active_counter:
             self._pool_active_counter.add(1)
+        start = time.time()
+        operation = query.strip().split()[0].upper() if query.strip() else "UNKNOWN"
         try:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -108,9 +112,17 @@ class DatabasePool:
                          extra={"query": query[:100], "error": str(e)})
             raise
         finally:
+            duration = time.time() - start
             pool.putconn(conn)
             if self._pool_active_counter:
                 self._pool_active_counter.add(-1)
+            if self._query_duration_histogram:
+                self._query_duration_histogram.record(duration, {"operation": operation})
+            if duration > 0.1:
+                logger.warning("Slow database query",
+                               extra={"operation": operation,
+                                      "duration_ms": round(duration * 1000, 1),
+                                      "query": query[:200]})
 
     def get_conn(self):
         """Get a raw connection for manual transaction control."""

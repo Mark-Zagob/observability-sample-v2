@@ -271,9 +271,13 @@ docker start order-service
 
 **Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, error rate sẽ tăng theo sau.
 
-**Inject:**
+> ⚠️ **QUAN TRỌNG:** Experiment này cần **2 terminal chạy song song**. Table lock chỉ gây contention khi
+> có traffic đang cố query table `products`. Nếu chạy lock mà không có traffic → dashboard sẽ không có data.
+
+**Inject (2 terminals song song):**
+
 ```bash
-# Tạo table lock trong 60s để tạo contention
+# Terminal 1: Tạo table lock trong 60s (command này sẽ block 60 giây)
 docker exec postgres psql -U app -d orders -c "
   BEGIN;
   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
@@ -282,12 +286,25 @@ docker exec postgres psql -U app -d orders -c "
 "
 ```
 
+```bash
+# Terminal 2: ĐỒNG THỜI — tạo traffic để gây contention
+# Option A: Dùng traffic-gen API (browse_heavy gọi /products nhiều nhất)
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "browse_heavy", "rate": 5, "duration": 90}'
+
+# Option B: Hoặc tạo orders thủ công trên Web UI (http://<app-vm-ip>:3000)
+```
+
+> Lưu ý: duration=90s > 60s lock → bạn sẽ thấy cả lúc lock (latency cao) và lúc release (latency trở lại bình thường).
+
 **Dashboard reading path:**
 ```
 App Performance → P95/P99 duration spike ở Order Service
-  → DB Performance → connection pool active tăng, query duration tăng
-    → Tracing → span "db.query" chiếm 90%+ thời gian
-      → Alerting → HighLatencyP95 firing
+  → DB Performance → connection pool active tăng lên ~8-10, query duration spike
+    → Tracing → mở 1 slow trace → span get_product_info / insert_order chiếm 90%+ thời gian
+      → Bên trong có child span psycopg2 auto-instrumented (SELECT/INSERT) bị block bởi lock
+        → Alerting → HighLatencyP95 firing
 ```
 
 **✅ Kỳ vọng & Câu hỏi kiểm tra:**
