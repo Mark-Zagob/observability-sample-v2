@@ -178,11 +178,11 @@ api-gateway POST /order ──────────────────�
 
 | Metric | Giá trị | Bình thường |
 |--------|---------|-------------|
-| Connection pool active | 10/10 | 3-4/10 🔴 Pool đầy |
+| Connection pool active | 10/10 | 2-3/10 🔴 Pool đầy |
 | Avg query duration | 2.5s | 5ms 🔴 Gấp 500 lần |
 | Slow queries | 38 | 0 🔴 |
 
-→ **Root cause:** DB bị saturated. Kiểm tra Loki logs → PostgreSQL autovacuum đang chạy trên bảng `orders`, lock table → mọi INSERT phải chờ.
+→ **Root cause:** DB bị saturated. Pool đầy vì gthread workers (2×8 = 16 threads) cùng lấy connection, vượt quá pool max (10). Kiểm tra Loki logs → PostgreSQL autovacuum đang chạy trên bảng `orders`, lock table → mọi query phải chờ.
 
 #### Tổng kết flow
 
@@ -269,42 +269,61 @@ docker start order-service
 
 > **📋 Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) · [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) · [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
 
-**Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, error rate sẽ tăng theo sau.
+**Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, connection pool sẽ bị exhaust, error rate sẽ tăng theo sau.
 
-> ⚠️ **QUAN TRỌNG:** Experiment này cần **2 terminal chạy song song**. Table lock chỉ gây contention khi
+> ⚠️ **QUAN TRỌNG:** Experiment này cần **3 terminal chạy song song**. Table lock chỉ gây contention khi
 > có traffic đang cố query table `products`. Nếu chạy lock mà không có traffic → dashboard sẽ không có data.
 
-**Inject (2 terminals song song):**
+> **Tại sao cần rate cao?** API Gateway và Order Service chạy **gthread workers** (2 workers × 8 threads = 16 concurrent requests).
+> DB connection pool max = 10. Với rate đủ cao, 16 threads cùng cố lấy connection → pool 10/10 đầy →
+> 6 threads còn lại phải **queue chờ** `getconn()` → latency stacking → timeout → errors cascade.
+> Với rate thấp (5 req/s), requests tuần tự nên pool chỉ nhích lên 1-2 — không thể hiện được saturation.
+
+**Inject (3 terminals song song):**
 
 ```bash
-# Terminal 1: Tạo table lock trong 60s (command này sẽ block 60 giây)
+# Terminal 1: Flush product cache để request phải query DB ngay lập tức
+# (Nếu cache warm, browse requests sẽ hit cache → bypass DB → không thấy contention)
+docker exec redis redis-cli DEL "product:catalog"
+```
+
+```bash
+# Terminal 2: Tạo table lock trong 90s (command này sẽ block 90 giây)
 docker exec postgres psql -U app -d orders -c "
   BEGIN;
   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
-  SELECT pg_sleep(60);
+  SELECT pg_sleep(90);
   COMMIT;
 "
 ```
 
 ```bash
-# Terminal 2: ĐỒNG THỜI — tạo traffic để gây contention
-# Option A: Dùng traffic-gen API (browse_heavy gọi /products nhiều nhất)
+# Terminal 3: ĐỒNG THỜI — tạo traffic rate cao để gây contention
+# Rate 20 = ~20 req/s, trong đó ~70% gọi /products (browse_heavy + browse_then_buy)
+# → ~14 concurrent DB queries bị block → pool 10/10 exhaust
 curl -X POST http://localhost:5003/start \
   -H "Content-Type: application/json" \
-  -d '{"scenario": "browse_heavy", "rate": 5, "duration": 90}'
-
-# Option B: Hoặc tạo orders thủ công trên Web UI (http://<app-vm-ip>:3000)
+  -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
 ```
 
-> Lưu ý: duration=90s > 60s lock → bạn sẽ thấy cả lúc lock (latency cao) và lúc release (latency trở lại bình thường).
+> **Timing:** lock=90s, traffic=120s → bạn sẽ thấy 3 phases trên dashboard:
+> 1. **Phase contention** (0-90s): pool đầy, latency spike, errors cascade
+> 2. **Phase recovery** (90-120s): lock release → pool giảm, latency trở lại, backlog xử lý
+> 3. **Phase steady** (sau 120s): traffic stop → metrics stabilize
+
+> **Cache-aside interaction:** Order Service dùng Redis cache (TTL=60s) cho product catalog.
+> Nếu cache warm → browse requests trả về từ cache, không query DB → không bị ảnh hưởng bởi lock.
+> Bước flush cache ở Terminal 1 đảm bảo request đầu tiên phải query DB → block → các requests
+> sau cũng phải query DB (vì cache chưa được set lại) → tạo contention thực sự.
 
 **Dashboard reading path:**
 ```
-App Performance → P95/P99 duration spike ở Order Service
-  → DB Performance → connection pool active tăng lên ~8-10, query duration spike
-    → Tracing → mở 1 slow trace → span get_product_info / insert_order chiếm 90%+ thời gian
-      → Bên trong có child span psycopg2 auto-instrumented (SELECT/INSERT) bị block bởi lock
-        → Alerting → HighLatencyP95 firing
+App Performance → P95/P99 duration spike ở Order Service (từ ~400ms lên 5-30s)
+  → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
+    → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
+      → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
+        → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
+          → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
 ```
 
 **✅ Kỳ vọng & Câu hỏi kiểm tra:**
@@ -312,11 +331,14 @@ App Performance → P95/P99 duration spike ở Order Service
 > Sau khi chạy experiment này, bạn phải trả lời được:
 
 1. **USE method:** DB saturation thể hiện ở metric nào? (connection pool utilization, query duration). Đây là U, S, hay E trong USE?
-2. **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
-3. **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → rồi timeout → rồi error)
-4. **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" — bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
+2. **Pool exhaustion:** Tại sao pool active tăng lên 8-10 thay vì chỉ 1-2? (vì gthread cho phép 8 threads/worker xử lý concurrent → 8 threads cùng lấy connection → pool đầy). Với sync workers (1 request/worker), pool chỉ bao giờ lên tối đa = số workers — đây là kiến thức quan trọng khi sizing connection pool.
+3. **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
+4. **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → connection queue → timeout → error)
+5. **Cache interaction:** Nếu KHÔNG flush cache trước khi lock, experiment sẽ khác thế nào? (browse requests hit cache → không bị ảnh hưởng → pool không đầy). Đây là lý do cache-aside pattern giúp **giảm blast radius** của DB issues.
+6. **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" — bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
+7. **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
 
-**Rollback:** Lock tự release sau 60s, hoặc kill session:
+**Rollback:** Lock tự release sau 90s, hoặc kill session:
 ```bash
 docker exec postgres psql -U app -d orders -c "
   SELECT pg_terminate_backend(pid) FROM pg_stat_activity
