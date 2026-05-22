@@ -1045,46 +1045,23 @@ docker unpause notification-worker
 
 # Part 3: Post-Exercise Activities (Hậu kỳ & Post-Mortem)
 
-Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ngay. Hãy thực hành **Post-Mortem Process** (tham chiếu [Mục 0.5](#05-enhanced-post-mortem--5-whys)) bằng template sau:
+Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ngay. Hãy thực hành viết **Blameless Post-Mortem**.
 
-```markdown
-## Blameless Post-Mortem: [Tên Experiment]
-**Date:** YYYY-MM-DD | **Duration:** X phút | **SEV:** [1/2/3/4]
+> 📂 **Thực hành ở đâu?**
+> Tất cả các bài Post-mortem được lưu trữ tại thư mục [`/post-mortems`](../post-mortems/) ở root của repository.
+> - Xem [`00-TEMPLATE.md`](../post-mortems/00-TEMPLATE.md) để copy template trống.
+> - Xem [`01-GOLDEN-EXAMPLE-DB-Saturation.md`](../post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md) để tham khảo "tiêu chuẩn vàng" (cách viết 5 Whys, SEV assessment, Action Items).
 
-### 1. Timeline (Dựa trên Incident Log real-time bạn đã ghi)
-- [HH:MM] Inject failure
-- [HH:MM] Alert fired (MTTD = X phút)
-- [HH:MM] Root cause identified
-- [HH:MM] Rollback executed
-- [HH:MM] Alert resolved (MTTR = X phút)
-
-### 2. Impact & Metrics
-- Users/Requests affected: [Ước lượng]
-- Error Budget consumed: [X%]
-- MTTD: [X phút] | MTTR: [X phút]
-
-### 3. Root Cause Analysis (5 Whys)
-1. Why [triệu chứng]? → ...
-2. Why ...? → ...
-3. Why ...? → ...
-4. Why ...? → ...
-5. Why ...? → [Systemic gap]
-
-### 4. What Went Well / What Went Poorly
-- **Well:** (VD: Blackbox Exporter detect service down ngay lập tức dù không có traffic)
-- **Poorly:** (VD: Mất 10 phút mới nhớ cách query pg_stat_activity để tìm lock)
-
-### 5. Action Items (SMART)
-| Action | Owner | Deadline | Priority |
-|--------|-------|----------|----------|
-| Thêm traffic guard vào SLO alert rule | @me | 2026-06-01 | P1 |
-| Tạo cheatsheet các câu lệnh DB troubleshooting | @me | 2026-06-05 | P2 |
-```
-
-**Blameless Principles:**
+### Blameless Principles (Nhắc lại)
 - ❌ "Tôi đã quên flush cache trước khi lock DB"
 - ✅ "Quy trình inject failure thiếu checklist chuẩn bị state (cache warm/cold)"
 - **Rule:** Mọi "human error" đều là **system gap**. Hệ thống tốt khiến human error khó xảy ra hoặc ít impact.
+
+### Mục tiêu của việc viết Post-mortem:
+1. Rèn luyện kỹ năng tóm tắt sự cố (Executive Summary) cho stakeholders.
+2. Đào sâu root cause (5 Whys) thay vì chỉ dừng lại ở triệu chứng.
+3. Tạo ra Action Items thực tế để cải thiện hệ thống (hoặc cải thiện chính Runbook).
+4. **Review SEV Assessment:** So sánh Initial SEV vs Re-assessed SEV → tại sao đúng/sai? Bài học gì?
 
 ---
 
