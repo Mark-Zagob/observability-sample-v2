@@ -39,7 +39,20 @@ Production teams dùng thêm một lớp **impact-based SEV classification** đ�
 3. **Có data loss hoặc corruption không?** (Có → SEV-1)
 4. **Có security implication không?** (Data breach → SEV-1 + Security team)
 5. **Có SLA/SLO contractual commitment bị vi phạm không?**
+### 0.1.1 Practice: Áp dụng SEV trong Experiments
+Khi chạy mỗi experiment, thực hành **workflow 5 bước** này trước khi dive vào technical investigation:
+1. Alert firing → DỪNG LẠI, đừng investigate ngay.
+2. Trả lời 5 câu Impact Assessment (xem 0.1).
+3. Ghi SEV ước lượng + lý do vào Incident Log.
+4. Investigate technical → hiểu rõ impact hơn.
+5. Re-assess: cần upgrade/downgrade SEV không?
 
+**Tại sao workflow này quan trọng:**
+- Production on-call engineer có **30 giây đầu** để quyết định: "Gọi sếp dậy hay tạo ticket?"
+- SEV không phải static — ban đầu có thể sai, cần re-assess sau khi có thêm information
+- Skill này **KHÔNG thể học từ runbook** — chỉ có thể luyện qua lặp lại
+
+**Rule cho solo engineer:** Nếu trả lời YES từ 2 câu impact assessment trở lên → escalate Team Lead **ngay lập tức**, không chờ 15 phút theo Escalation Matrix.
 ## 0.2 Incident Roles — Ai làm gì?
 | Role | Trách nhiệm | Solo adaptation |
 |------|-------------|-----------------|
@@ -51,20 +64,28 @@ Production teams dùng thêm một lớp **impact-based SEV classification** đ�
 **Quy tắc cho Solo Engineer:** Mọi action phải log timestamp + decision reason. Dùng Incident Log Format (0.3).
 
 ## 0.3 Incident Log Format — Ghi real-time
-Copy template này vào file text/Notion khi alert bắt đầu firing:
+Copy template này vào file text/Notion khi alert bắt đầu firing. 
+**Đừng tin vào trí nhớ lúc 3 AM** — ghi real-time là bắt buộc.
 
 ```markdown
 # Incident Log — [Tên incident ngắn]
-**Start:** YYYY-MM-DD HH:MM UTC | **SEV:** [1/2/3/4] | **IC:** [Tên bạn]
+**Start:** YYYY-MM-DD HH:MM UTC
+**Alert(s):** [tên alerts firing]
+**IC:** [Tên bạn]
 
-## Timeline
-- [HH:MM] 🔔 Alert fired: [tên alert]
+## SEV Assessment (ghi trong 30s đầu)
+- **Initial SEV:** [1/2/3/4] vì [lý do ngắn gọn, dùng 5 câu impact assessment]
+- **Escalation decision:** [Có/Không escalate, ai, tại sao]
+
+## Timeline (ghi MỖI khi có action/observation mới)
+- [HH:MM] 🔔 Alert fired: [tên]
 - [HH:MM] 👀 Ack alert, bắt đầu investigate
-- [HH:MM] 🔍 Check [dashboard X] → thấy [observation]
-- [HH:MM] 🤔 Hypothesis: [giả thuyết root cause]
+- [HH:MM] 🔍 Check [dashboard] → thấy [observation]
+- [HH:MM] 🤔 Hypothesis: [giả thuyết]
 - [HH:MM] 🎯 Decision: [action] vì [reason]
   - Considered: [alternative đã cân nhắc]
 - [HH:MM] ⚡ Executed: [kết quả]
+- [HH:MM] 🔁 **SEV Re-assessment:** [Upgrade/Downgrade/Giữ nguyên] từ SEV-X → SEV-Y vì [lý do mới phát hiện]
 - [HH:MM] ✅ Alert resolved
 
 ## Decisions Log
@@ -314,6 +335,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Blast radius:** order-service chết → service nào vẫn hoạt động bình thường? Tại sao payment-service không bị ảnh hưởng?
 - [ ] **2 lớp monitoring:** Tại sao `TargetDown` không firing mà `ServiceHealthCheckFailed` lại firing? Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được?
 - [ ] **Ứng dụng production:** Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? (Gợi ý: xem RB-24)
+- [ ] **SEV Assessment:** Dựa trên 5 câu impact assessment, bạn phân loại incident này là SEV mấy? Có escalation theo Escalation Matrix không? (Gợi ý: xem Context Matrix trong Part 4)
 
 **Rollback:**
 ```bash
@@ -387,6 +409,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Cache interaction:** Nếu KHÔNG flush cache trước khi lock, experiment sẽ khác thế nào? (browse requests hit cache → không bị ảnh hưởng → pool không đầy). Đây là lý do cache-aside pattern giúp giảm blast radius của DB issues.
 - [ ] **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" → bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
 - [ ] **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
+- [ ] **SEV Assessment:** Với traffic `browse_heavy` rate 20 req/s, bạn phân SEV mấy? Nếu experiment này xảy ra lúc 3 AM với 0 traffic thì SEV thay đổi thế nào? (Đây là bài học quan trọng nhất về SEV — xem Context Matrix)
 
 **Rollback:** Lock tự release sau 90s, hoặc kill session:
 ```bash
@@ -426,6 +449,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Pause vs Stop:** `docker pause` khác `docker stop` thế nào trên dashboard? (pause: container vẫn "running" nhưng frozen, không có restart count)
 - [ ] **Catch-up behavior:** Sau khi unpause, lag giảm ngay hay giảm dần? Tại sao? Mất bao lâu để về 0?
 - [ ] **Ứng dụng production:** Notification bị delay 5 phút → khách hàng chưa bị ảnh hưởng trực tiếp nhưng SLA email notification là 2 phút. Bạn cần page on-call hay tạo ticket?
+- [ ] **SEV Assessment:** Notification bị delay nhưng user chưa thấy ảnh hưởng trực tiếp → bạn phân SEV mấy? Khi nào cần escalate lên Team Lead?
 
 **Rollback:**
 ```bash
@@ -466,6 +490,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Kafka behavior:** produce rate thay đổi thế nào? Tại sao notification-worker vẫn hoạt động dù payment chết?
 - [ ] **SLO impact:** Burn rate của API Gateway vs Payment → cái nào tăng nhanh hơn? Tại sao?
 - [ ] **Ứng dụng production:** Payment gateway (Stripe/VNPay) bị sự cố → bạn nên stop nhận order mới hay vẫn nhận và retry sau?
+- [ ] **SEV Assessment:** Payment failure = revenue impact trực tiếp → Theo 5 câu impact assessment, bạn có cần notify Finance + PM ngay không? SEV mấy?
 
 **Bài học:** Cascading failure pattern → upstream service (order) ghi nhận lỗi nhưng không crash. Downstream (notification) vẫn hoạt động. Đây là graceful degradation.
 
@@ -540,6 +565,7 @@ Sau khi inject xong, mở **SLO Overview** dashboard và trả lời:
 - [ ] Error Budget gauge giảm bao nhiêu? Tính thử công thức: `error_rate × thời_gian_lỗi / 216 phút`
 - [ ] Latency Compliance panel: giá trị bao nhiêu? So với SLO target 95%?
 - [ ] Latency Burn Rate: có khác biệt gì so với Availability Burn Rate không?
+- [ ] **SEV Assessment:** Fast burn (14.4x) = critical alert → Nhưng nếu xảy ra lúc 3 AM không traffic (phantom alert) thì SEV thực sự là gì?
 
 **Bài học quan trọng:** Trong Experiment 4 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể bình thường → vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần cả 2 loại SLO.
 
@@ -669,6 +695,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Missing event flow:** Vẽ sơ đồ event flow bình thường: `order.created → payment → notification → restock check`. Khi stock = 0, chuỗi bị đứt ở đâu?
 - [ ] **Monitoring gap:** Bạn có thể viết alert rule nào để detect trạng thái deadlock này không? (Gợi ý: `orders_total{status="out_of_stock"} > X` kết hợp `restock_events_total == 0`)
 - [ ] **Ứng dụng production:** Team PM báo "không ai đặt hàng được" nhưng tất cả infrastructure metrics đều xanh → bạn investigate thế nào?
+- [ ] **SEV Assessment:** Catalog issue, không ai đặt hàng được → Đây là SEV mấy? Có cần page VP Eng không hay chỉ Team Lead?
 
 **Bài học:** Đây là **design-level failure** → không phải infrastructure, không phải code bug, mà là missing event flow. Dashboard cho thấy triệu chứng nhưng root cause nằm ở architecture.
 
@@ -706,6 +733,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Cascading effect:** Memory pressure ảnh hưởng latency thế nào? Tại sao P95 tăng trước P50? (GC pauses ảnh hưởng tail latency trước)
 - [ ] **Container restart:** OOMKilled container tự restart → metrics có bị mất không? Làm sao phân biệt "service healthy sau restart" vs "service đang flapping"?
 - [ ] **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ → bạn tăng memory limit hay investigate memory leak? Cách quyết định?
+- [ ] **SEV Assessment:** Container bị giới hạn memory, GC pauses → User thấy slow nhưng không error → SEV mấy? Predictive alert có cần page không?
 
 **Rollback:**
 ```bash
@@ -752,6 +780,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **DNS in Docker:** Container IP thay đổi khi nào? Tại sao nginx cache DNS lại gây vấn đề? Giải pháp production là gì? (resolver, service mesh)
 - [ ] **Incident classification:** Đây là SEV mấy theo incident-runbook-templates? (SEV3-4: service chạy, chỉ 1 proxy path bị ảnh hưởng)
 - [ ] **Ứng dụng production:** Sau deploy mới, 1 trong 5 service báo DOWN trên status page nhưng health check vẫn pass → nguyên nhân có thể là gì ngoài DNS cache?
+- [ ] **SEV Assessment:** Chỉ 1 proxy path bị ảnh hưởng, service thực sự healthy → Theo incident-runbook-templates đây là SEV mấy? Cần page ai?
 
 **Bài học:** Dashboard có thể **misleading** → service thực sự healthy nhưng proxy layer không reach được. Cần cross-reference với container status.
 
@@ -802,6 +831,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Root cause của phantom alert:** Vấn đề nằm ở alert rule hay ở bản chất của rate-based metrics?
 - [ ] **Production fix:** Viết lại alert rule thêm điều kiện gì để tránh phantom alert? (Gợi ý: `rate(total[5m]) > 0`)
 - [ ] **Alert fatigue:** Nếu team bắt đầu ignore SLO alerts vì "lại phantom alert" → hậu quả là gì khi incident thật xảy ra?
+- [ ] **SEV Assessment:** Alert firing nhưng service healthy + no traffic → Đây có phải incident không? Nếu KHÔNG phải, bạn ghi vào Incident Log thế nào?
 
 **Ví dụ production tương tự:**
 Công ty e-commerce, service `payment-webhook` nhận callback từ Stripe. Ban đêm (0h-6h) chỉ ~5-10 requests/giờ. Deploy lúc 21:00 có bug → 3 webhooks fail → error rate 100% → burn rate 200x. Rollback xong 21:10 nhưng alert firing đến 02:00 sáng (5 tiếng!) vì không có webhook mới. On-call bị đánh thức 2 lần cho incident đã fix.
@@ -870,6 +900,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Cross-reference:** Khi đọc dashboard time range, bạn cần cross-reference với timestamp nào? (server logs, docker logs, alert firing time → tất cả đều dùng UTC)
 - [ ] **Incident impact:** Timezone sai có thể gây sai lệch investigation bao lâu? (Trong ví dụ này: tìm sai 9 tiếng)
 - [ ] **Team practice:** Nếu team có người ở nhiều timezone (VN, US, EU), cách nào tránh nhầm lẫn khi handoff incident?
+- [ ] **SEV Assessment:** Đọc sai timezone có thể dẫn đến phân SEV sai → Ví dụ: nghĩ là "sáng nay" nhưng thực tế là "tối hôm qua" → escalation sai người. Bạn sẽ chuẩn hóa timezone trong team thế nào?
 
 **Best practice:**
 - 🔧 **Grafana:** set timezone = UTC cho tất cả monitoring dashboards
@@ -924,6 +955,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **DB amplification:** Hit rate 80% nghĩa là DB chỉ serve 20% requests. Khi cache down, DB phải serve 100% → gấp 5 lần. Connection pool có chịu được không?
 - [ ] **Cache-performance dashboard:** Panel nào cho thấy vấn đề nhanh nhất? Panel nào trở thành "no data" khi Redis down?
 - [ ] **Ứng dụng production:** Redis cluster bị restart lúc flash sale → bạn cần ước lượng gì trước khi cho traffic vào lại? (DB capacity có chịu được 100% traffic không? Cần warm cache trước không?)
+- [ ] **SEV Assessment:** Redis down → service chậm nhưng không crash (graceful degradation) → SEV mấy? Khi nào cần escalate lên Engineering Manager?
 
 **Bài học:** Cache-aside pattern **che giấu** DB performance issues. Khi cache down, DB load tăng `1 / (1 - hit_rate)` lần. Với hit rate 80%, DB load tăng 5x. Biết con số này giúp sizing DB cho worst case.
 
@@ -993,6 +1025,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Independent failures:** `KafkaConsumerLagHigh` có liên quan tới DB lock không? Tại sao không? (notification-worker pause là inject riêng, DB lock không ảnh hưởng Kafka)
 - [ ] **Fix order:** Nếu bạn chỉ có thể fix 1 thứ trước → DB lock hay unpause worker? Tại sao? (DB lock → ảnh hưởng user trực tiếp; Kafka lag → delay notification nhưng user vẫn đặt hàng được)
 - [ ] **Ứng dụng production:** Lúc 3 giờ sáng nhận 5 alerts PagerDuty cùng lúc → bạn dùng kỹ thuật gì để không panic? (Đọc tất cả → phân nhóm → tìm correlation → fix root cause → symptoms tự resolve)
+- [ ] **SEV Assessment:** 4+ alerts firing cùng lúc, nhiều root causes → Bạn phân SEV cho TOÀN BỘ incident hay cho từng root cause? Ai là người decide SEV khi có nhiều SME tham gia?
 
 **Bài học:** Khi nhiều alerts firing, đừng fix từng alert → phân nhóm theo correlation, tìm root cause chung, fix root cause thì symptoms tự resolve. Đây là **skill quan trọng nhất** của on-call engineer.
 
@@ -1071,6 +1104,36 @@ Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ng
 | 10 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
 | 11 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
 | 12 | Multi-Alert Triage | ⭐⭐⭐⭐⭐ | Compound failure, alert correlation, triage priority |
+
+## SEV Context Matrix — Tham khảo sau khi thực hành
+
+Cùng 1 alert `critical` (burn-rate based) có thể là SEV khác nhau tùy business context. 
+Bảng này giúp bạn **so sánh SEV assessment của mình** với production-grade judgment.
+
+| Experiment | Context A: Low Traffic / Off-hours | Context B: Peak / Flash Sale |
+|------------|-------------------------------------|-------------------------------|
+| Exp 1: Service Down | **SEV-3** (1 feature affected, ít user) | **SEV-2** (core feature down, nhiều user) |
+| Exp 2: DB Saturation | **SEV-4** (no user impact, 3 AM) | **SEV-1** (tất cả orders fail, flash sale) |
+| Exp 3: Kafka Lag | **SEV-3** (delayed notifications) | **SEV-2** (SLA email 2 phút bị breach) |
+| Exp 4: Payment Down | **SEV-3** (maintenance window) | **SEV-1** (revenue loss trực tiếp) |
+| Exp 6: Stock Deadlock | **SEV-3** (catalog issue) | **SEV-2** (không bán được hàng) |
+| Exp 9: Phantom Alert | **Not an incident** (silence alert + log) | **SEV-2** (nếu có traffic thật) |
+| Exp 11: Cache-Miss | **SEV-4** (perf degradation nhẹ) | **SEV-2** (checkout chậm, user bỏ giỏ) |
+| Exp 12: Multi-Alert | **SEV-2** (compound issue) | **SEV-1** (everything broken) |
+
+### 🎯 3 Bài học quan trọng nhất từ bảng này:
+
+**1. SEV phụ thuộc vào BUSINESS CONTEXT, không chỉ technical signal**
+- Alert "critical" lúc 3 AM không traffic ≠ alert "critical" lúc flash sale
+- On-call engineer giỏi biết **khi nào cần gọi sếp dậy, khi nào chỉ cần tạo ticket**
+
+**2. Initial SEV thường sai — cần Re-assess**
+- Sau 15 phút investigate, bạn có thêm information → upgrade hoặc downgrade SEV
+- Ghi cả **Initial SEV** và **Re-assessed SEV** vào Incident Log (xem template 0.3)
+
+**3. Phantom alerts KHÔNG phải incident**
+- Alert firing + service healthy + no traffic → silence + log "phantom"
+- Đừng waste escalation cho phantom alerts — nhưng cũng đừng ignore nếu không chắc
 
 **Lời khuyên cuối cùng:** 
 Tool không thay thế được process. Tốt nhất là master manual process (dùng lab này + Incident Log + Post-Mortem) trước khi add các tools như PagerDuty hay incident.io. Chúc bạn thực hành tốt! 🚀
