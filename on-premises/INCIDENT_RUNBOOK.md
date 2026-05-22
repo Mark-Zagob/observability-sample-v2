@@ -4,7 +4,7 @@
 
 Tài liệu quy trình xử lý cho **mỗi alert** trong hệ thống. Khi alert firing, mở runbook → tìm alert → follow từng bước.
 
-> **Prerequisite:** Đã hoàn thành Incident Simulation (OBSERVABILITY_LEARNING_GUIDE.md) — biết đọc dashboard.
+> **Prerequisite:** Đã hoàn thành Incident Simulation (INCIDENT_SIMULATION_GUIDE.md) — biết đọc dashboard.
 
 ### Thực hành Runbook với Experiments
 
@@ -12,16 +12,18 @@ Dùng bảng sau để luyện tập: chạy experiment → khi alert firing →
 
 | Experiment | Inject gì | Alerts sẽ firing | Runbook |
 |-----------|----------|------------------|---------|
-| [Exp 1: Service Down](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-1-service-down-health-check-failed) | `docker stop order-service` | ServiceHealthCheckFailed, ServiceNoTraces | RB-24, RB-23 |
-| [Exp 2: DB Saturation](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-2-database-saturation-high-latency) | DB table lock | HighLatencyP95, HighErrorRate, LatencyFastBurn | RB-22, RB-21, RB-12 |
-| [Exp 3: Kafka Lag](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-3-kafka-consumer-lag-notification-worker-slow) | `docker pause notification-worker` | KafkaConsumerLagHigh/Critical, ConsumerGroupDown | RB-16, RB-17, RB-18 |
-| [Exp 4: Cascading Failure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-4-cascading-failure-payment-service-down) | `docker stop payment-service` | TargetDown, PaymentFastBurn, APIGatewayFastBurn | RB-01, RB-10, RB-08 |
-| [Exp 5: Burn Rate](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-5-slo-burn-rate-deep-dive-learning-exercise) | Dùng data từ Exp 2/4 | (learning — không inject mới) | RB-08→13 |
-| [Exp 6: Stock Deadlock](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-6-stock-depletion-deadlock-logic-bug) | Set stock = 0 | HighErrorRate | RB-21 |
-| [Exp 7: Memory Pressure](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-7-memory-pressure-container-resource-limit) | Memory limit 64m | HighMemoryUsage, HighLatencyP95 | RB-03, RB-06, RB-22 |
-| [Exp 8: DNS Cache](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-8-dns-cache-stale-nginx-proxy-issue) | Rebuild container | Không có alert tương ứng | Manual investigation |
-| [Exp 9: Phantom Alert](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-9-phantom-alert--slo-burn-rate-khi-không-có-traffic) | Stop payment → run traffic → start payment → chờ | APIGatewayFastBurn (stale) | RB-08 (Step 0) |
-| [Exp 10: Timezone Trap](OBSERVABILITY_LEARNING_GUIDE.md#-experiment-10-timezone-trap--đọc-sai-dashboard-do-timezone) | Đổi Grafana timezone | Không inject failure | Investigation practice |
+| [Exp 1: Service Down](INCIDENT_SIMULATION_GUIDE.md#-experiment-1-service-down-health-check-failed) | `docker stop order-service` | ServiceHealthCheckFailed, ServiceNoTraces | RB-24, RB-23 |
+| [Exp 2: DB Saturation](INCIDENT_SIMULATION_GUIDE.md#-experiment-2-database-saturation-high-latency) | DB table lock | HighLatencyP95, HighErrorRate, LatencyFastBurn | RB-22, RB-21, RB-12 |
+| [Exp 3: Kafka Lag](INCIDENT_SIMULATION_GUIDE.md#-experiment-3-kafka-consumer-lag-notification-worker-slow) | `docker pause notification-worker` | KafkaConsumerLagHigh/Critical, ConsumerGroupDown | RB-16, RB-17, RB-18 |
+| [Exp 4: Cascading Failure](INCIDENT_SIMULATION_GUIDE.md#-experiment-4-cascading-failure-payment-service-down) | `docker stop payment-service` | TargetDown, PaymentFastBurn, APIGatewayFastBurn | RB-01, RB-10, RB-08 |
+| [Exp 5: Burn Rate](INCIDENT_SIMULATION_GUIDE.md#-experiment-5-slo-burn-rate-deep-dive-learning-exercise) | Dùng data từ Exp 2/4 | (learning — không inject mới) | RB-08→13 |
+| [Exp 6: Stock Deadlock](INCIDENT_SIMULATION_GUIDE.md#-experiment-6-stock-depletion-deadlock-logic-bug) | Set stock = 0 | HighErrorRate | RB-21 |
+| [Exp 7: Memory Pressure](INCIDENT_SIMULATION_GUIDE.md#-experiment-7-memory-pressure-container-resource-limit) | Memory limit 64m | HighMemoryUsage, HighLatencyP95 | RB-03, RB-06, RB-22 |
+| [Exp 8: DNS Cache](INCIDENT_SIMULATION_GUIDE.md#-experiment-8-dns-cache-stale-nginx-proxy-issue) | Rebuild container | Không có alert tương ứng | Manual investigation |
+| [Exp 9: Phantom Alert](INCIDENT_SIMULATION_GUIDE.md#-experiment-9-phantom-alert--slo-burn-rate-khi-không-có-traffic) | Stop payment → run traffic → start payment → chờ | APIGatewayFastBurn (stale) | RB-08 (Step 0) |
+| [Exp 10: Timezone Trap](INCIDENT_SIMULATION_GUIDE.md#-experiment-10-timezone-trap--đọc-sai-dashboard-do-timezone) | Đổi Grafana timezone | Không inject failure | Investigation practice |
+| [Exp 11: Cache-Miss Storm](INCIDENT_SIMULATION_GUIDE.md#-experiment-11-cache-miss-storm-redis-dependency) | `docker stop redis` | HighLatencyP95 (có thể) | RB-22 |
+| [Exp 12: Multi-Alert Triage](INCIDENT_SIMULATION_GUIDE.md#-experiment-12-multi-alert-triage-compound-failure) | DB lock + pause worker | HighLatencyP95, HighErrorRate, KafkaConsumerLagHigh, LatencyFastBurn | RB-22, RB-21, RB-16, RB-12 |
 
 ---
 
@@ -32,6 +34,26 @@ Dùng bảng sau để luyện tập: chạy experiment → khi alert firing →
 | **critical** | fast | < 15 phút | Page on-call, bắt đầu xử lý ngay | Telegram/PagerDuty |
 | **warning** | slow | < 4 giờ | Tạo ticket, xử lý trong ngày | Slack/Email |
 | **none** | — | — | Watchdog — chỉ alert khi RESOLVED | — |
+
+---
+
+## Escalation Matrix
+
+> Áp dụng cho **tất cả critical alerts**. Mỗi runbook RB critical bên dưới sẽ tham chiếu bảng này.
+
+| Điều kiện | Escalate tới | Liên hệ |
+|-----------|-------------|--------|
+| Critical alert chưa resolve sau **15 phút** | Team Lead | Slack/Telegram |
+| Critical alert chưa resolve sau **30 phút** | Engineering Manager | Phone call |
+| Nghi ngờ data breach / security issue | Security Team | #security-incidents |
+| Ảnh hưởng revenue (Payment failures) | Finance + PM | @finance-oncall |
+| Cần thông báo khách hàng | Support Lead | @support-lead |
+| Không xác định được root cause sau **45 phút** | Senior Engineer / Architect | Phone call |
+
+**Nguyên tắc escalation:**
+- Escalate **sớm**, không chờ hết thời gian. Nếu cảm thấy stuck → escalate ngay.
+- Escalation **không phải thất bại** — đó là việc đảm bảo incident được xử lý đúng người.
+- Ghi lại thời điểm escalation trong incident timeline.
 
 ---
 
@@ -101,6 +123,8 @@ Bước 4: Verify recovery
 **Dashboard path:** Alerting Overview → Unified Overview → Docker Containers
 
 **Phân biệt với:** HighErrorRate (service running nhưng trả lỗi) vs TargetDown (service không respond)
+
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Target down > 15 phút → Team Lead.
 
 ---
 
@@ -253,7 +277,7 @@ Khi Watchdog RESOLVED:
 
 ## Part 2: SLO Burn Rate Alerts
 
-> **Tham khảo:** OBSERVABILITY_LEARNING_GUIDE.md → Experiment 5 cho theory chi tiết.
+> **Tham khảo:** INCIDENT_SIMULATION_GUIDE.md → Experiment 5 cho theory chi tiết.
 
 ### 🔴 RB-08: APIGatewayFastBurn
 
@@ -362,6 +386,8 @@ Bước 3: Common causes
   → Rollback/restart ngay nếu không rõ root cause
 ```
 
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Payment failure = revenue impact → escalate Finance + PM ngay khi xác nhận. Chưa resolve sau 15 phút → Engineering Manager.
+
 ---
 
 ### 🟡 RB-11: PaymentSlowBurn
@@ -428,6 +454,8 @@ Bước 4: Nếu vẫn fail → kiểm tra Kafka broker:
   docker logs kafka --tail 20
 ```
 
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Kafka exporter down = monitoring blind cho event pipeline. Chưa resolve sau 15 phút → Team Lead.
+
 ---
 
 ### 🟡 RB-15: KafkaTopicUnderReplicated
@@ -488,6 +516,8 @@ Nếu vẫn lag → check produce rate trên Kafka Overview
   → Nếu produce rate cũng cao → traffic spike, cần scale
 ```
 
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Lag > 1000 kéo dài > 15 phút → Team Lead. Lag vẫn tăng sau restart → Engineering Manager.
+
 ---
 
 ### 🔴 RB-18: KafkaConsumerGroupDown
@@ -507,6 +537,8 @@ Bước 3: Verify
   → Kafka Overview → consumer group members > 0
   → Consumer lag bắt đầu giảm (catch-up)
 ```
+
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Consumer group down > 15 phút → Team Lead.
 
 ---
 
@@ -642,6 +674,8 @@ Bước 4: Verify recovery
 - `ServiceHealthCheckFailed` — Application service health endpoint down
 - `ServiceNoTraces` — Service chạy nhưng không produce traces (cần traffic-gen)
 
+**Escalation:** Xem [Escalation Matrix](#escalation-matrix). Service health check failed > 15 phút → Team Lead.
+
 ---
 
 ## Part 5: Incident Response Template
@@ -675,6 +709,65 @@ Sử dụng template sau khi xử lý incident:
 - [ ] [Fix] Mô tả fix đã apply
 - [ ] [Prevent] Gì cần làm để ngăn tái diễn
 - [ ] [Detect] Runbook/alert cần update gì
+- [ ] [Follow-up] Deadline cho action items: ___
+```
+
+### Communication Templates
+
+Sử dụng 3 templates sau để thông báo trong quá trình xử lý incident:
+
+#### Initial Notification (gửi ngay khi bắt đầu xử lý)
+
+```
+🚨 INCIDENT: [Mô tả ngắn]
+
+Severity: [critical / warning]
+Status: Investigating
+Impact: [Mô tả ảnh hưởng — bao nhiêu % users, feature nào]
+Start Time: [HH:MM UTC]
+On-call: [Tên người xử lý]
+
+Đang investigate, update tiếp trong 15 phút.
+Channel: #incident-YYYY-MM-DD
+```
+
+#### Status Update (gửi mỗi 15-30 phút cho critical, 1-2 giờ cho warning)
+
+```
+📊 UPDATE: [Mô tả ngắn]
+
+Status: [Investigating / Mitigating / Monitoring]
+Impact: [Cập nhật — tăng/giảm/không đổi]
+Duration: [X phút kể từ khi bắt đầu]
+
+Actions Taken:
+- [Hành động 1]
+- [Hành động 2]
+
+Next Steps:
+- [Việc sẽ làm tiếp]
+
+ETA to Resolution: [~X phút / Chưa xác định]
+```
+
+#### Resolution Notification (gửi khi incident resolved)
+
+```
+✅ RESOLVED: [Mô tả ngắn]
+
+Duration: [X phút]
+Impact: [Tổng kết — bao nhiêu requests/users bị ảnh hưởng]
+Root Cause: [1-2 câu]
+Resolution: [Đã làm gì để fix]
+
+Metrics:
+- MTTD: [X phút]
+- MTTR: [X phút]
+- Error Budget consumed: [X%]
+
+Follow-up:
+- Post-mortem scheduled: [Ngày]
+- Action items: [Link tới ticket/issue]
 ```
 
 ---

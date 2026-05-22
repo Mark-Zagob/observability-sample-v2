@@ -27,7 +27,7 @@ Hệ thống gồm **2 VMs** giao tiếp qua Docker external network:
 
 Xem chi tiết tại:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Kiến trúc chi tiết, data flows, DB schema, design patterns, DevOps knowledge
-- [OBSERVABILITY_LEARNING_GUIDE.md](OBSERVABILITY_LEARNING_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation (10 experiments)
+- [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation (12 experiments)
 - [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) — Runbook xử lý incident cho 24 loại alert
 
 ```
@@ -116,7 +116,7 @@ docker compose up -d
 on-premises/
 ├── README.md                          ← File này
 ├── ARCHITECTURE.md                    ← Kiến trúc, data flows, DB schema, design patterns
-├── OBSERVABILITY_LEARNING_GUIDE.md    ← Dashboard reading & incident simulation
+├── INCIDENT_SIMULATION_GUIDE.md    ← Dashboard reading & incident simulation
 ├── devops-question.md                 ← DevOps interview questions (Junior–Mid)
 ├── devops-question-senior.md          ← DevOps interview questions (Senior)
 ├── applications-vm/

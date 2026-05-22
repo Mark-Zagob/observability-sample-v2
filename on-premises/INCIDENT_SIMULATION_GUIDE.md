@@ -1,8 +1,8 @@
-# 📊 Dashboard Reading & Incident Simulation Guide
+# 📊 Incident Simulation Guide
 
 ## Mục tiêu
 
-Hướng dẫn đọc dashboard theo chuẩn production-grade bằng phương pháp **Incident Flow** — đi theo luồng sự cố thực tế thay vì đọc từng dashboard rời rạc. Kèm 8 bài thực hành giả lập incident trên hệ thống hiện tại.
+Hướng dẫn đọc dashboard theo chuẩn production-grade bằng phương pháp **Incident Flow** — đi theo luồng sự cố thực tế thay vì đọc từng dashboard rời rạc. Kèm 12 bài thực hành giả lập incident trên hệ thống hiện tại.
 
 > **Prerequisite:** Hệ thống observability-sample-v2 đang chạy (applications-vm + observability-vm).
 
@@ -210,6 +210,40 @@ Alert (Latency burn rate)
 3. **Rollback < 30s** — luôn có cách revert nhanh
 4. **Một biến số** — chỉ thay đổi 1 thứ mỗi lần
 5. **Ghi lại bài học** — mỗi experiment phải có learning summary
+
+### Cách đo Baseline (bắt buộc trước mỗi Experiment)
+
+> **Tại sao:** Không có baseline = không biết metrics thay đổi bao nhiêu. "P95 = 3s" vô nghĩa nếu không biết bình thường là 400ms hay 2s.
+
+**Bước 1:** Đảm bảo hệ thống stable — không có alert firing, không có traffic-gen đang chạy.
+
+**Bước 2:** Chạy traffic nhẹ để tạo baseline data:
+```bash
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+```
+
+**Bước 3:** Trong khi traffic chạy, mở từng dashboard và ghi lại giá trị:
+
+| Dashboard | Metric | Đọc ở panel nào | Baseline tham khảo |
+|-----------|--------|-----------------|-------------------|
+| Unified Overview | RPS per service | Service Health | api-gateway ~2 req/s |
+| Unified Overview | Error rate | Service Health | < 1% |
+| Unified Overview | P95 latency | Service Health | 300-600ms |
+| App Performance | P50 / P95 / P99 | Duration panels | P50 ~200ms, P99 ~800ms |
+| DB Performance | Connection pool active | Pool panel | 1-3/10 |
+| DB Performance | Avg query duration | Query panel | 1-10ms |
+| Cache Performance | Hit rate | Hit Rate panel | > 80% |
+| Cache Performance | Latency | Latency panel | < 5ms |
+| Kafka Overview | Consumer lag | Lag panel | 0-5 |
+| Infrastructure | CPU usage | Node Exporter | < 30% |
+| Infrastructure | Memory usage | Node Exporter | < 60% |
+| Alerting | Active alerts | Alert count | Chỉ Watchdog |
+
+**Bước 4:** Ghi timestamp bắt đầu inject failure (dùng cho tính MTTD sau).
+
+> **Mẹo:** Dùng Grafana annotation (nhấn Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject — giúp so sánh trước/sau dễ hơn.
 
 ---
 
@@ -853,19 +887,173 @@ Suy luận ĐÚNG (biết timezone UTC+7):
 
 ---
 
+### 🧪 Experiment 11: Cache-Miss Storm (Redis Dependency)
+
+> **📋 Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) (latency tăng do DB overload khi cache miss)
+
+> Dashboard `cache-performance` chưa bao giờ được dùng trong experiments trước — đây là experiment đầu tiên cover nó.
+
+**Giả thuyết:** Khi Redis bị stop, tất cả requests phải query DB trực tiếp → DB load tăng đột ngột → P95 latency tăng. Cache-aside pattern là **single point of performance** dù không phải single point of failure.
+
+**Inject (2 terminals):**
+
+```bash
+# Terminal 1: Stop Redis
+docker stop redis
+```
+
+```bash
+# Terminal 2: Chạy traffic (browse_heavy để maximize cache miss impact)
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "browse_heavy", "rate": 10, "duration": 120}'
+```
+
+**Dashboard reading path:**
+```
+Cache Performance → Hit Rate = 0% (hoặc no data), Latency = no data
+  → DB Performance → query duration tăng, connection pool active tăng
+    → App Performance → Order Service P95 tăng (mọi request hit DB)
+      → Unified Overview → Error rate có thể tăng nếu DB overwhelmed
+        → Tracing → span get_product_catalog chậm hơn bình thường
+```
+
+**Quan sát kỳ vọng:**
+- Cache Performance dashboard: hit rate drop về 0, hoặc panels hiển thị "no data"
+- DB Performance: query count tăng gấp nhiều lần (bình thường cache serve ~80% requests)
+- App Performance: P95 tăng nhưng có thể **không tăng nhiều** nếu DB chưa quá tải — đây cũng là bài học
+- So sánh: P95 khi có cache vs không cache → đo được **cache giá trị bao nhiêu ms**
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Cache dependency:** Redis down → service có crash không? Hay chỉ chậm hơn? Đây gọi là gì? (graceful degradation — service vẫn hoạt động, chỉ mất performance)
+2. **Cache value measurement:** P95 khi có cache = ___ms, P95 khi không cache = ___ms. Cache giúp giảm bao nhiêu %?
+3. **DB amplification:** Hit rate 80% nghĩa là DB chỉ serve 20% requests. Khi cache down, DB phải serve 100% — gấp **5 lần**. Connection pool có chịu được không?
+4. **Cache-performance dashboard:** Panel nào cho thấy vấn đề nhanh nhất? Panel nào trở thành "no data" khi Redis down?
+5. **Ứng dụng production:** Redis cluster bị restart lúc flash sale — bạn cần ước lượng gì trước khi cho traffic vào lại? (DB capacity có chịu được 100% traffic không? Cần warm cache trước không?)
+
+**Bài học:** Cache-aside pattern che giấu DB performance issues. Khi cache down, DB load tăng **1 / (1 - hit_rate)** lần. Với hit rate 80%, DB load tăng 5x. Biết con số này giúp sizing DB cho worst case.
+
+**Rollback:**
+```bash
+docker start redis
+# Cache sẽ tự warm lại khi có requests mới (cache-aside pattern)
+```
+
+---
+
+### 🧪 Experiment 12: Multi-Alert Triage (Compound Failure)
+
+> **📋 Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) · [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) · [RB-16 KafkaConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) · [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
+
+> Đây là experiment **khó nhất** — lần đầu tiên inject 2 failures cùng lúc. Mục tiêu không phải hiểu từng failure (đã làm ở Exp 2, 3) mà là luyện **kỹ năng triage khi nhiều alerts firing đồng thời**.
+
+**Giả thuyết:** Khi DB bị lock VÀ notification-worker bị pause cùng lúc, 4-5 alerts sẽ firing đồng thời. On-call engineer phải phân biệt root cause vs symptom và quyết định fix cái nào trước.
+
+**Inject (3 terminals):**
+
+```bash
+# Terminal 1: Flush cache + Lock DB table 90s
+docker exec redis redis-cli DEL "product:catalog"
+docker exec postgres psql -U app -d orders -c "
+  BEGIN;
+  LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
+  SELECT pg_sleep(90);
+  COMMIT;
+"
+```
+
+```bash
+# Terminal 2: Pause notification-worker
+docker pause notification-worker
+```
+
+```bash
+# Terminal 3: Chạy traffic cao
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
+```
+
+**Alerts kỳ vọng (có thể firing trong 5-10 phút):**
+
+| Alert | Root cause? | Symptom? |
+|-------|------------|----------|
+| HighLatencyP95 | ← DB lock | Root cause #1 |
+| HighErrorRate | ← timeout từ DB lock | Symptom of DB |
+| KafkaConsumerLagHigh | ← notification-worker paused | Root cause #2 |
+| APIGatewayLatencyFastBurn | ← cascade từ DB lock | Symptom of DB |
+
+**Dashboard reading path:**
+```
+Alerting Overview → 4+ alerts firing cùng lúc
+  → STOP. Đừng click vào alert đầu tiên. Đọc TẤT CẢ alerts trước.
+    → Phân nhóm:
+       Nhóm 1 (Latency/Error): HighLatencyP95 + HighErrorRate + LatencyFastBurn
+         → Correlation: cùng liên quan latency → likely cùng root cause
+       Nhóm 2 (Kafka): KafkaConsumerLagHigh
+         → Không liên quan latency → root cause riêng
+    → Fix Nhóm 1 trước (severity cao hơn, ảnh hưởng user trực tiếp)
+    → Fix Nhóm 2 sau (lag tăng nhưng chưa ảnh hưởng user ngay)
+```
+
+**✅ Kỳ vọng & Câu hỏi kiểm tra:**
+
+> Sau khi chạy experiment này, bạn phải trả lời được:
+
+1. **Triage priority:** 4 alerts firing cùng lúc — bạn xử lý theo thứ tự nào? Tại sao? (Gợi ý: severity + user impact)
+2. **Root cause vs symptom:** `HighErrorRate` là root cause hay symptom? Làm sao biết? (Nếu fix DB lock → error rate tự giảm → nó là symptom)
+3. **Correlation:** Làm sao nhận ra `HighLatencyP95` + `HighErrorRate` + `LatencyFastBurn` cùng root cause? (timing gần nhau, cùng service, latency → error → burn rate là cascade)
+4. **Independent failures:** `KafkaConsumerLagHigh` có liên quan tới DB lock không? Tại sao không? (notification-worker pause là inject riêng, DB lock không ảnh hưởng Kafka)
+5. **Fix order:** Nếu bạn chỉ có thể fix 1 thứ trước — DB lock hay unpause worker? Tại sao? (DB lock → ảnh hưởng user trực tiếp; Kafka lag → delay notification nhưng user vẫn đặt hàng được)
+6. **Ứng dụng production:** Lúc 3 giờ sáng nhận 5 alerts PagerDuty cùng lúc — bạn dùng kỹ thuật gì để không panic? (Đọc tất cả → phân nhóm → tìm correlation → fix root cause → symptoms tự resolve)
+
+**Bài học:** Khi nhiều alerts firing, **đừng fix từng alert** — phân nhóm theo correlation, tìm root cause chung, fix root cause thì symptoms tự resolve. Đây là skill quan trọng nhất của on-call engineer.
+
+**Rollback:**
+```bash
+# DB lock tự release sau 90s, hoặc:
+docker exec postgres psql -U app -d orders -c "
+  SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+  WHERE state = 'active' AND query LIKE '%pg_sleep%';
+"
+# Unpause notification-worker
+docker unpause notification-worker
+```
+
+---
+
 ## Part 3: Checklist sau mỗi Experiment
 
 Sử dụng template sau cho mỗi bài thực hành:
 
 ```markdown
 ## Experiment: [Tên]
-- [ ] Ghi baseline metrics trước khi inject
-- [ ] Chụp screenshot dashboards trước/sau
+**Timestamp inject:** YYYY-MM-DD HH:MM:SS (UTC)
+
+### Baseline (trước inject)
+- [ ] Ghi baseline metrics (xem bảng "Cách đo Baseline")
+- [ ] Chụp screenshot dashboards: Unified Overview, App Performance, dashboard liên quan
+
+### Incident (trong inject)
 - [ ] Alert nào đã firing? Sau bao lâu?
+- [ ] **MTTD** = alert_firing_time − inject_time = ___ phút
 - [ ] Dashboard nào cho thấy root cause nhanh nhất?
 - [ ] Dashboard nào misleading hoặc không hữu ích?
-- [ ] Rollback thành công? Mất bao lâu để metrics recover?
+
+### Recovery (sau rollback)
+- [ ] Rollback thành công? Mất bao lâu?
+- [ ] **MTTR** = recovery_time − inject_time = ___ phút
+- [ ] Alert đã chuyển RESOLVED? Sau bao lâu kể từ rollback?
+- [ ] Metrics đã trở về baseline? (so sánh với giá trị ghi ở bước Baseline)
+- [ ] Chụp screenshot dashboards sau recovery
+
+### Bài học
+- [ ] Root cause:
 - [ ] Bài học rút ra:
+- [ ] Runbook cần update gì:
 ```
 
 ---
@@ -880,7 +1068,10 @@ Sử dụng template sau cho mỗi bài thực hành:
 | 4 | Stock Deadlock | ⭐⭐⭐ | Design-level failure, cross-dashboard correlation |
 | 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method |
 | 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
-| 7 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking |
-| 8 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
-| 9 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
-| 10 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
+| 7 | Cache-Miss Storm | ⭐⭐⭐ | Cache dependency, DB amplification, graceful degradation |
+| 8 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking |
+| 9 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
+| 10 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
+| 11 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
+| 12 | Multi-Alert Triage | ⭐⭐⭐⭐⭐ | Compound failure, alert correlation, triage priority |
+
