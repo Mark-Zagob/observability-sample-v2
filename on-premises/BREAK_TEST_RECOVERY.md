@@ -4,6 +4,29 @@
 Hiểu sâu internals của từng infrastructure component bằng cách **phá → kiểm tra bên trong → khôi phục**. Khác với Incident Simulation (luyện đọc dashboard + triage), B/T/R tập trung vào **CLI/query inspection** — bạn sẽ biết component hoạt động thế nào dưới "nắp ca-pô".
 
 **Prerequisite:** Đã hoàn thành ít nhất Experiment 1-4 trong `INCIDENT_SIMULATION_GUIDE.md`.
+---
+
+## Khi nào dùng BTR vs Incident Simulation?
+
+| Scenario | Dùng guide nào |
+|----------|----------------|
+| Alert firing lúc 3 AM | **IS** — Đọc dashboard, triage nhanh |
+| Muốn hiểu tại sao connection pool exhaustion | **BTR PG-1** — Inspect pg_stat_activity |
+| Kafka consumer lag tăng | **IS** Exp 3 — Dashboard path |
+| Muốn hiểu tại sao lag tăng (offsets? rebalance?) | **BTR KF-1, KF-4** — CLI inspection |
+| Production incident cần fix nhanh | **IS** + **RUNBOOK** |
+| Learning session, muốn hiểu sâu | **BTR** |
+
+**Workflow kết hợp:**
+1. Chạy IS experiment → thấy symptom trên dashboard
+2. Dùng BTR để hiểu **tại sao** symptom đó xảy ra
+3. Viết post-mortem với cả 2 perspectives
+
+**Ví dụ thực tế:**
+- IS Exp 2 (DB Saturation) cho thấy P95 tăng 8x
+- BTR PG-1 giải thích **tại sao** pool exhaustion xảy ra (gthread workers vs pool max)
+- BTR PG-5 chỉ cách **detect** lock trước khi nó gây saturation
+- BTR PG-2 giải thích **hậu quả lâu dài** (dead tuples, bloat)
 
 ---
 
@@ -276,6 +299,10 @@ docker exec postgres psql -U app -d orders -c "VACUUM orders;"
 **Kiến thức:** Backup strategies, restore flow, và tại sao backup không đủ — cần test restore.
 **Độ khó:** ⭐⭐⭐
 
+> ⚠️ **DESTRUCTIVE OPERATION:** Exercise này DROP TABLE. 
+> **Chỉ chạy trên lab, KHÔNG chạy trên production.**
+> Luôn tạo backup TRƯỚC KHI break (xem bước 1).
+
 ### Break
 ```bash
 # Bước 1: Tạo backup TRƯỚC KHI phá
@@ -328,6 +355,13 @@ curl -s http://localhost:5001/health/live | head -5
 
 **Kiến thức:** Lock types, lock conflicts, deadlock detection.
 **Độ khó:** ⭐⭐⭐
+
+> ⚠️ **LONG-RUNNING LOCK:** Transaction A giữ lock 60 giây.
+> Nếu có traffic đang chạy, requests sẽ timeout hoặc fail.
+> **Production rule:** Luôn set `statement_timeout` để tránh lock vô hạn.
+> ```sql
+> SET statement_timeout = '30s';  -- Auto-kill query sau 30s
+> ```
 
 ### Break
 ```bash
@@ -512,6 +546,12 @@ docker exec kafka kafka-consumer-groups.sh \
 ```
 
 ### Test (inspect internals)
+
+> ⚠️ **RESET OFFSET TO EARLIEST** sẽ khiến consumer reprocess TẤT CẢ messages.
+> Nếu notification-worker gửi email cho mỗi order → users nhận duplicate email.
+> **Production rule:** Chỉ reset offset khi bạn đã implement idempotent consumer 
+> (check processed_events table trước khi process).
+
 ```bash
 # Verify offset đã reset
 docker exec kafka kafka-consumer-groups.sh \
@@ -794,6 +834,10 @@ docker exec redis redis-cli EXISTS "product:catalog"
 | `allkeys-lru` | Evict least recently used key (phổ biến nhất) |
 | `volatile-lru` | Evict LRU key có TTL |
 | `allkeys-random` | Random evict |
+
+> ⚠️ **FLUSHALL xóa TẤT CẢ data trong Redis**, bao gồm cả `product:catalog` cache.
+> Sau khi chạy FLUSHALL, app sẽ có cache-miss storm → P95 tăng tạm thời.
+> Đây là expected behavior — cache sẽ tự warm lại khi có traffic.
 
 ### Recovery
 ```bash
@@ -1659,33 +1703,46 @@ Không cần.
 
 # Recommended Order
 
-| Thứ tự | Exercise | Độ khó | Component | Kiến thức chính |
-|--------|----------|--------|-----------|-----------------|
-| 1 | PG-1 Connection Pool | ⭐ | PostgreSQL | pg_stat_activity, connection states |
-| 2 | PG-6 Query Analysis | ⭐⭐ | PostgreSQL | EXPLAIN ANALYZE, index |
-| 3 | RD-3 Key Analysis | ⭐ | Redis | SCAN, MEMORY USAGE |
-| 4 | KF-1 Offset Management | ⭐⭐ | Kafka | Consumer groups, offsets |
-| 5 | PM-4 Scrape & Targets | ⭐⭐ | Prometheus | up metric, target states |
-| 6 | PG-2 Dead Tuples | ⭐⭐ | PostgreSQL | MVCC, VACUUM |
-| 7 | RD-1 Memory & Eviction | ⭐⭐ | Redis | maxmemory, eviction |
-| 8 | KF-2 Log Segments | ⭐⭐ | Kafka | Disk storage, retention |
-| 9 | AM-1 Routing Tree | ⭐⭐ | Alertmanager | Route matching |
-| 10 | AM-2 Silence | ⭐⭐ | Alertmanager | Silence, inhibition |
-| 11 | LK-1 Label Cardinality | ⭐⭐⭐ | Loki | Label design |
-| 12 | LK-2 LogQL Performance | ⭐⭐ | Loki | Query optimization |
-| 13 | PG-5 Lock Monitoring | ⭐⭐⭐ | PostgreSQL | pg_locks, deadlock |
-| 14 | PG-3 WAL & Checkpoint | ⭐⭐⭐ | PostgreSQL | WAL, durability |
-| 15 | RD-2 Persistence | ⭐⭐⭐ | Redis | RDB vs AOF |
-| 16 | KF-3 Producer Delivery | ⭐⭐⭐ | Kafka | acks, retries |
-| 17 | PM-1 TSDB & WAL | ⭐⭐⭐ | Prometheus | WAL replay, blocks |
-| 18 | PM-2 Cardinality | ⭐⭐⭐ | Prometheus | Series explosion |
-| 19 | OT-1 Collector Restart | ⭐⭐ | OTel | Buffering, retry |
-| 20 | OT-2 Tail Sampling | ⭐⭐⭐ | OTel | Sampling policies |
-| 21 | PG-4 Backup & PITR | ⭐⭐⭐ | PostgreSQL | pg_dump, restore |
-| 22 | RD-4 Slowlog | ⭐⭐ | Redis | O(N) commands |
-| 23 | KF-4 Consumer Rebalance | ⭐⭐⭐ | Kafka | Partition assignment |
-| 24 | KF-5 Topic Configuration | ⭐⭐ | Kafka | Dynamic configs |
-| 25 | AM-3 Grouping | ⭐⭐⭐ | Alertmanager | group_wait timing |
-| 26 | PM-3 Retention & Storage | ⭐⭐ | Prometheus | Capacity planning |
-| 27 | LK-3 Storage | ⭐⭐ | Loki | MinIO, retention |
-| 28 | OT-3 Tempo Storage | ⭐⭐ | Tempo | Block storage |
+| Thứ tự | Exercise | Độ khó | Time | Component | Kiến thức chính |
+|--------|----------|--------|------|-----------|-----------------|
+| 1 | PG-1 Connection Pool | ⭐ | 15m | PostgreSQL | pg_stat_activity, connection states |
+| 2 | PG-6 Query Analysis | ⭐⭐ | 20m | PostgreSQL | EXPLAIN ANALYZE, index |
+| 3 | RD-3 Key Analysis | ⭐ | 10m | Redis | SCAN, MEMORY USAGE |
+| 4 | KF-1 Offset Management | ⭐⭐ | 20m | Kafka | Consumer groups, offsets |
+| 5 | PM-4 Scrape & Targets | ⭐⭐ | 15m | Prometheus | up metric, target states |
+| 6 | PG-2 Dead Tuples | ⭐⭐ | 25m | PostgreSQL | MVCC, VACUUM |
+| 7 | RD-1 Memory & Eviction | ⭐⭐ | 20m | Redis | maxmemory, eviction |
+| 8 | KF-2 Log Segments | ⭐⭐ | 15m | Kafka | Disk storage, retention |
+| 9 | AM-1 Routing Tree | ⭐⭐ | 20m | Alertmanager | Route matching |
+| 10 | AM-2 Silence | ⭐⭐ | 20m | Alertmanager | Silence, inhibition |
+| 11 | LK-1 Label Cardinality | ⭐⭐⭐ | 25m | Loki | Label design |
+| 12 | LK-2 LogQL Performance | ⭐⭐ | 15m | Loki | Query optimization |
+| 13 | PG-5 Lock Monitoring | ⭐⭐⭐ | 30m | PostgreSQL | pg_locks, deadlock |
+| 14 | PG-3 WAL & Checkpoint | ⭐⭐⭐ | 30m | PostgreSQL | WAL, durability |
+| 15 | RD-2 Persistence | ⭐⭐⭐ | 25m | Redis | RDB vs AOF |
+| 16 | KF-3 Producer Delivery | ⭐⭐⭐ | 25m | Kafka | acks, retries |
+| 17 | PM-1 TSDB & WAL | ⭐⭐⭐ | 30m | Prometheus | WAL replay, blocks |
+| 18 | PM-2 Cardinality | ⭐⭐⭐ | 25m | Prometheus | Series explosion |
+| 19 | OT-1 Collector Restart | ⭐⭐ | 20m | OTel | Buffering, retry |
+| 20 | OT-2 Tail Sampling | ⭐⭐⭐ | 30m | OTel | Sampling policies |
+| 21 | PG-4 Backup & PITR | ⭐⭐⭐ | 35m | PostgreSQL | pg_dump, restore |
+| 22 | RD-4 Slowlog | ⭐⭐ | 15m | Redis | O(N) commands |
+| 23 | KF-4 Consumer Rebalance | ⭐⭐⭐ | 25m | Kafka | Partition assignment |
+| 24 | KF-5 Topic Configuration | ⭐⭐ | 20m | Kafka | Dynamic configs |
+| 25 | AM-3 Grouping | ⭐⭐⭐ | 25m | Alertmanager | group_wait timing |
+| 26 | PM-3 Retention & Storage | ⭐⭐ | 20m | Prometheus | Capacity planning |
+| 27 | LK-3 Storage | ⭐⭐ | 15m | Loki | MinIO, retention |
+| 28 | OT-3 Tempo Storage | ⭐⭐ | 15m | Tempo | Block storage |
+
+**Tổng thời gian:** ~12-15 giờ để hoàn thành tất cả 28 exercises.
+
+**Estimated times theo độ khó:**
+- ⭐ = 10-15 phút
+- ⭐⭐ = 15-25 phút  
+- ⭐⭐⭐ = 25-35 phút
+
+**Learning schedule gợi ý:**
+- **Week 1:** Exercises 1-10 (basics, ~3 giờ)
+- **Week 2:** Exercises 11-20 (intermediate, ~4 giờ)
+- **Week 3:** Exercises 21-28 (advanced, ~3 giờ)
+- **Week 4:** Review + combine với IS experiments
