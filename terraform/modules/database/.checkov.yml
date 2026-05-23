@@ -1,0 +1,19 @@
+# Checkov Configuration — Database Module
+# Skipped checks are documented in ../policy/EXCEPTIONS.md
+compact: true
+quiet: true
+framework:
+  - terraform
+skip-check:
+  # Test fixtures — not production code (PE-020, PE-021, PE-022)
+  - CKV_AWS_382    # SG egress in test setup
+  - CKV2_AWS_5     # SG attachment in test setup
+  - CKV2_AWS_12    # VPC default SG in test
+  - CKV2_AWS_11    # VPC flow logs in test
+  # Environment-aware — handled by OPA policies (PE-012, PE-013)
+  - CKV_AWS_157    # Multi-AZ (OPA rds.rego env-aware)
+  - CKV_AWS_293    # Deletion Protection (OPA rds.rego env-aware)
+  # False positive (PE-011)
+  - CKV_AWS_118    # Enhanced Monitoring (variable not evaluated by Checkov)
+  # Retention policy (PE-010)
+  - CKV_AWS_338    # Log retention 365d (OPA enforce 30d minimum)

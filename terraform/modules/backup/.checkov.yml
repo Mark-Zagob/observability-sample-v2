@@ -1,0 +1,18 @@
+# =============================================================
+# Checkov Configuration — Backup Module
+# =============================================================
+# All skips are documented in policy/EXCEPTIONS.md with PE-IDs.
+# =============================================================
+
+skip-check:
+  # False Positives — S3 separate resource pattern
+  # Checkov cannot correlate aws_s3_bucket_* resources with count
+  - CKV_AWS_145  # PE-040: KMS → aws_s3_bucket_server_side_encryption_configuration
+  - CKV_AWS_21   # PE-041: Versioning → aws_s3_bucket_versioning
+  - CKV2_AWS_6   # PE-042: Public access block → aws_s3_bucket_public_access_block
+  - CKV2_AWS_61  # PE-043: Lifecycle → aws_s3_bucket_lifecycle_configuration
+  - CKV_AWS_18   # PE-044: Access logging → aws_s3_bucket_logging
+
+  # Not Applicable — by design
+  - CKV_AWS_144  # PE-045: Cross-region replication (reports are regenerable)
+  - CKV2_AWS_62  # PE-046: Event notifications (not needed for CSV reports)

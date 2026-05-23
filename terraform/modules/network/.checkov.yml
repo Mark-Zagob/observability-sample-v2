@@ -1,0 +1,11 @@
+# Checkov Configuration — Network Module
+# Skipped checks are documented in ../policy/EXCEPTIONS.md
+compact: true
+quiet: true
+framework:
+  - terraform
+skip-check:
+  # Public subnets NEED public IPs for NAT Gateway and ALB (PE-030)
+  - CKV_AWS_130
+  # Log retention managed by OPA policy (prod=90d, non-prod=30d) (PE-010)
+  - CKV_AWS_338
