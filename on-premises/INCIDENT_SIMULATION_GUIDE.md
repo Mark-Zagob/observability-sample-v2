@@ -1048,9 +1048,9 @@ docker unpause notification-worker
 Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ngay. Hãy thực hành viết **Blameless Post-Mortem**.
 
 > 📂 **Thực hành ở đâu?**
-> Tất cả các bài Post-mortem được lưu trữ tại thư mục [`/post-mortems`](../post-mortems/) ở root của repository.
-> - Xem [`00-TEMPLATE.md`](../post-mortems/00-TEMPLATE.md) để copy template trống.
-> - Xem [`01-GOLDEN-EXAMPLE-DB-Saturation.md`](../post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md) để tham khảo "tiêu chuẩn vàng" (cách viết 5 Whys, SEV assessment, Action Items).
+> Tất cả các bài Post-mortem được lưu trữ tại thư mục [`/post-mortems`](./post-mortems/) ở root của repository.
+> - Xem [`00-TEMPLATE.md`](./post-mortems/00-TEMPLATE.md) để copy template trống.
+> - Xem [`01-GOLDEN-EXAMPLE-DB-Saturation.md`](./post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md) để tham khảo "tiêu chuẩn vàng" (cách viết 5 Whys, SEV assessment, Action Items).
 
 ### Blameless Principles (Nhắc lại)
 - ❌ "Tôi đã quên flush cache trước khi lock DB"
