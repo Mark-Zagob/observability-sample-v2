@@ -1345,7 +1345,7 @@ Chuyển dịch từ "Manual Testing & Chaos" (Phase 4) sang "Automated Reliabil
 
 #### Deliverables (Cấu trúc thư mục mới)
 ```plaintext
-observability-lab/
+on-premises/
 └── tests/
     ├── load/                  # k6 scripts & thresholds
     │   ├── baseline.js
