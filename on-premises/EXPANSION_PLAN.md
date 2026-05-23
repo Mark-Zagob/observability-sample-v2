@@ -1075,7 +1075,110 @@ Verify:
   - Zero-downtime reindex: alias switch với no search disruption
 ```
 
-### Phase 4: Integration + Chaos Testing + SLO + DR Drill
+### Phase 4: Advanced Observability & Reliability Engineering
+```
+Effort: ~5-7 ngày
+Dependencies: Phase 1-3 hoàn tất (Toàn bộ 10 services đã chạy ổn định)
+Impact: Toàn bộ pipeline Observability, thay đổi cách định nghĩa reliability và debug
+
+Mục tiêu:
+Chuyển dịch observability từ "reactive monitoring" (đợi alert mới biết lỗi) sang "proactive reliability engineering" (đo lường business impact, proactive synthetic testing, và debug distributed transactions end-to-end).
+
+5 Trụ cột triển khai:
+  A. Saga Distributed Tracing
+  B. SLO & MWMBR Alerting cho services mới
+  C. Synthetic Monitoring (User-Centric SLIs)
+  D. Multi-ID Log Correlation
+  E. Business Metrics Instrumentation
+
+A. Saga Distributed Tracing (Gắn với Phase 2)
+Application:
+  1. Instrument Saga Worker để inject `saga_id` và `saga_state` vào OTel span attributes.
+  2. Cấu hình Kafka Producer/Consumer inject và extract `saga_id` qua Kafka message headers (bên cạnh W3C `traceparent` chuẩn).
+  3. Enrich structured logs của tất cả workers với `saga_id` để đồng bộ qua 3 pillars.
+
+Infrastructure:
+  4. Update OTel Collector config: Thêm `saga.id` vào whitelist của spanmetrics connector và tail-sampling policies (luôn giữ lại 100% traces có `saga.state=COMPENSATING`).
+
+Observability:
+  5. Grafana Dashboard "Saga Monitor":
+     - Panel: Saga Duration Distribution (Histogram).
+     - Panel: Saga State Machine Flow (Node Graph plugin).
+     - Panel: DLQ Size & Compensation Failure Rate.
+  6. Tempo TraceQL Queries: Lưu các query mẫu để tìm traces theo `saga.id` hoặc filter các sagas bị timeout.
+  7. Recording Rules & Alerts:
+     - Alert: `SagaHighFailureRate` (Tỷ lệ compensation > 5% trong 5 phút).
+     - Alert: `SagaDLQGrowing` (Messages trong DLQ topic > 10).
+
+B. SLO & MWMBR Alerting cho Services Mới
+Application:
+  1. Định nghĩa SLIs cho các services mới:
+     - Auth Service: Login latency P99 < 200ms (Target 99.5%).
+     - Shipping Service: Shipment creation success rate (Target 99.5%).
+     - Search Service: Query latency P95 < 300ms & Index lag < 10s (Target 95%).
+
+Infrastructure:
+  2. Prometheus Recording Rules: Tạo các SLI recording rules theo chuẩn naming convention `sli:<service>_<signal>:<window>` (5m, 30m, 1h, 6h).
+
+Observability:
+  3. Grafana SLO Dashboard: Mở rộng dashboard hiện tại, thêm các gauges và burn-rate charts cho Auth, Shipping, Search.
+  4. MWMBR Alerts (Multi-Window Multi-Burn-Rate):
+     - Cấu hình Fast-burn (14.4x) và Slow-burn (3x) alerts cho các SLOs mới.
+     - Áp dụng Traffic Guards (dựa trên span metrics) để tránh phantom alerts khi không có traffic.
+
+C. Synthetic Monitoring (User-Centric SLIs)
+Infrastructure:
+  1. Đóng gói Playwright E2E tests thành một Docker container headless Chrome.
+  2. Triển khai container này trong Docker Compose, cấu hình chạy định kỳ (Cron / Systemd timer) mỗi 5 phút.
+  3. Deploy một lightweight metrics exporter (Python/Node) để parse JSON results từ Playwright và push metrics (journey duration, success rate) về Prometheus Pushgateway.
+
+Observability:
+  4. Grafana Dashboard "Synthetic Journeys": Hiển thị Success Rate và P95 Duration của các luồng "Critical Purchase" và "Search" từ góc độ người dùng thực tế (outside-in).
+  5. Alert: `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi fail 2 lần liên tiếp, bất kể server-side metrics có đang xanh hay không).
+
+D. Multi-ID Log Correlation
+Application:
+  1. Chuẩn hóa logging context: Đảm bảo mọi services đều enrich logs với `user_id`, `session_id`, `order_id` (bên cạnh `trace_id`, `span_id` mặc định của OTel).
+
+Infrastructure:
+  2. Grafana Alloy / Loki Pipeline: Cấu hình pipeline extract các correlation IDs này từ JSON logs (nhưng KHÔNG đưa vào Loki labels để tránh cardinality explosion, chỉ dùng cho LogQL line filters).
+  3. Grafana Datasource Config (Derived Fields):
+     - Cấu hình regex để biến `saga_id`, `user_id`, `order_id` trong Log panel thành các hyperlink.
+     - Click vào `trace_id` -> Jump to Tempo.
+     - Click vào `order_id` -> Jump to Business KPI dashboard với filter sẵn.
+
+E. Business Metrics Instrumentation
+Application:
+  1. Instrument OTel Custom Metrics gắn liền với business KPIs:
+     - Order Service: `revenue_dollars` (Histogram).
+     - Payment Service: `payment_success_total` (Counter, group by provider).
+     - Search Service: `search_to_purchase_total` (Counter, track qua session_id).
+     - API Gateway: `cart_additions_total` vs `cart_checkouts_total`.
+
+Observability:
+  2. Grafana Dashboard "Business KPIs":
+     - Panel: Real-time Revenue per Hour.
+     - Panel: Payment Success Rate by Provider (Stripe vs PayPal).
+     - Panel: Cart Abandonment Rate.
+     - Panel: Search Conversion Funnel.
+  3. Business Alerts (Optional): `RevenueDropped`, `HighCartAbandonment`, `PaymentProviderDegraded`.
+
+Runbook Deliverables:
+  - RB-SAGA-04: Saga High Failure Rate & DLQ Overflow.
+  - RB-SLO-NEW: SLO Violation cho Auth, Shipping, Search.
+  - RB-SYNTHETIC-01: Synthetic Journey Failing (Outside-in troubleshooting).
+  - RB-CORRELATION-01: Debug User-Specific & Saga Issues (Multi-ID tracing).
+  - RB-BUSINESS-01: Payment Provider Degraded & Revenue Drop.
+
+Verify:
+  - Trace một Saga từ Order -> Payment -> Shipping trên Tempo, thấy full chain `saga_id` và state transitions.
+  - Inject latency vào Auth Service -> AuthLoginLatencyFastBurn alert fires trong < 2 phút.
+  - Stop Payment Service -> Synthetic Journey alert fires (dù server-side health checks vẫn có thể pass).
+  - Query Loki bằng `{user_id="user-123"} | saga_id!=""` để cross-correlate user actions với backend sagas.
+  - Dashboard Business KPIs cập nhật real-time revenue và cart abandonment rate khi chạy Traffic Generator.
+```
+
+### Phase 5: Integration + Chaos Testing + SLO + DR Drill
 
 ```
 Effort: ~5-7 ngày
@@ -1117,6 +1220,83 @@ Verify:
   - CI pipeline pass với 10 services
 ```
 
+### Phase 6: Reliability & Automated Testing Strategy
+
+```
+Effort: ~5-7 ngày
+Dependencies: Phase 4 (Integration & Chaos) hoàn tất
+Impact: Toàn bộ CI/CD pipeline, thay đổi cách merge code và deploy
+
+Mục tiêu:
+Chuyển dịch từ "Manual Testing & Chaos" (Phase 4) sang "Automated Reliability Gates". 
+Đảm bảo mọi thay đổi code đều được validate tự động về: Performance (SLO), API Contracts (Anti-breakage), và User Journeys (E2E) trước khi merge.
+
+Testing Pillars & Tooling Strategy
+| Pillar
+|Tool
+|Mục đích (SRE/Platform Lens)
+|Integration Point
+|
+| ---|---|---|---|
+| Performance & SLO
+|k6
+|Validate P99 latency & throughput không vi phạm SLO khi có code mới.
+|CI Pipeline, export metrics to Prometheus
+|
+| API Contract
+|Pact
+|Ngăn chặn breaking changes giữa 10 services (Consumer-Driven Contracts).
+|Pact Broker container, CI pre-merge gate
+|
+| Synthetic / E2E
+|Playwright
+|Đo lường SLI từ góc độ người dùng (User Journey) thay vì chỉ server-side metrics.
+|Scheduled container (Cron), push metrics to Pushgateway
+|
+
+Architecture & Integration
+1. k6 Load Testing (Performance Baseline):
+   - Chạy script `baseline.js` trong CI sau khi build Docker image thành công.
+   - k6 output trực tiếp vào Prometheus (qua remote_write hoặc OTel Collector).
+   - CI Gate: Auto-fail PR nếu `p99 latency > SLO threshold` hoặc `error rate > 0.5%`.
+
+2. Pact Contract Testing (API Governance):
+   - Deploy `pact-broker` (Ruby/PostgreSQL) làm service phụ trợ trong Docker Compose (hoặc CI container).
+   - Các service đóng vai trò Consumer (VD: Shipping Worker) publish expectations.
+   - Các service đóng vai trò Provider (VD: Order Service) verify contracts trước khi cho phép merge.
+   - Ngăn chặn lỗi: Order Service đổi tên field `order_id` -> `orderId` làm Shipping Worker crash.
+
+3. Playwright Synthetic Monitoring (User-Centric SLI):
+   - Đóng gói Playwright tests thành một Docker container headless Chrome.
+   - Chạy định kỳ (mỗi 5 phút) trên Observability VM hoặc CI nightly.
+   - Đo thời gian hoàn thành luồng "Login -> Create Order -> View Events".
+   - Push duration metrics về Prometheus để hiển thị trên Grafana SLO Dashboard.
+
+Deliverables (Cấu trúc thư mục mới)
+observability-lab/
++-- tests/
+    +-- load/                  # k6 scripts & thresholds
+       +-- baseline.js
+       +-- stress.js
+    +-- contracts/             # Pact consumer/provider tests
+       +-- broker/            # Docker compose cho Pact Broker
+       +-- consumers/
+       +-- providers/
+    +-- e2e/                   # Playwright synthetic journeys
+        +-- journeys/
+        +-- Dockerfile         # Headless chrome container
+
+Observability (Mở rộng Grafana):
+- Dashboard: "CI/CD Reliability Gates" (Hiển thị lịch sử P99 latency qua các lần chạy k6).
+- Dashboard: "Synthetic User Journeys" (Success rate & duration của Playwright tests).
+- Alert: `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi bị lỗi, bất kể server metrics có đang xanh hay không).
+
+Verify:
+- Tạo một PR cố tình làm thay đổi HTTP Status Code của Order Service -> CI block merge do Pact Contract fail.
+- Tạo một PR cố tình thêm `time.sleep(2)` vào Payment Service -> CI block merge do k6 P99 vượt SLO.
+- Dashboard Synthetic hiển thị được thời gian thực của luồng "Create Order" từ góc độ browser.
+- Toàn bộ tests chạy headless và tự động cleanup sau khi CI chạy xong.
+```
 ---
 
 ## Chi Phí Ảnh Hưởng
