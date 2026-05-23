@@ -29,6 +29,7 @@ Xem chi tiết tại:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Kiến trúc chi tiết, data flows, DB schema, design patterns, DevOps knowledge
 - [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) — Hướng dẫn đọc dashboard & thực hành incident simulation (12 experiments)
 - [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) — Runbook xử lý incident cho 24 loại alert
+- [BREAK_TEST_RECOVERY.md](BREAK_TEST_RECOVERY.md) — Break/Test/Recovery cho 7 components (28 exercises)
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -116,7 +117,9 @@ docker compose up -d
 on-premises/
 ├── README.md                          ← File này
 ├── ARCHITECTURE.md                    ← Kiến trúc, data flows, DB schema, design patterns
-├── INCIDENT_SIMULATION_GUIDE.md    ← Dashboard reading & incident simulation
+├── INCIDENT_SIMULATION_GUIDE.md       ← Dashboard reading & incident simulation
+├── INCIDENT_RUNBOOK.md                ← Runbook xử lý 24 loại alert
+├── BREAK_TEST_RECOVERY.md             ← Break/Test/Recovery 28 bài thực hành
 ├── devops-question.md                 ← DevOps interview questions (Junior–Mid)
 ├── devops-question-senior.md          ← DevOps interview questions (Senior)
 ├── applications-vm/
