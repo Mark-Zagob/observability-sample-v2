@@ -159,7 +159,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "1 - ((sum(rate(payments_total{status=\"completed\"}[5m])) or vector(0)) / (sum(rate(payments_total[5m])) or vector(1)))", "legendFormat": "Error Rate" }
+        { "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))", "legendFormat": "Error Rate" }
       ]
     },
 

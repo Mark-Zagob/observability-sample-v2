@@ -6365,7 +6365,7 @@ modules:
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "1 - ((sum(rate(payments_total{status=\"completed\"}[5m])) or vector(0)) / (sum(rate(payments_total[5m])) or vector(1)))", "legendFormat": "Error Rate" }
+        { "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))", "legendFormat": "Error Rate" }
       ]
     },
 
@@ -16823,81 +16823,68 @@ Verify:
 
 ### Phase 6: Reliability & Automated Testing Strategy
 
-```
-Effort: ~5-7 ngày
-Dependencies: Phase 4 (Integration & Chaos) hoàn tất
-Impact: Toàn bộ CI/CD pipeline, thay đổi cách merge code và deploy
+**Effort:** ~5-7 ngày  
+**Dependencies:** Phase 4 (Integration & Chaos) hoàn tất  
+**Impact:** Toàn bộ CI/CD pipeline, thay đổi cách merge code và deploy
 
-Mục tiêu:
-Chuyển dịch từ "Manual Testing & Chaos" (Phase 4) sang "Automated Reliability Gates". 
+**Mục tiêu:**  
+Chuyển dịch từ "Manual Testing & Chaos" (Phase 4) sang "Automated Reliability Gates".  
 Đảm bảo mọi thay đổi code đều được validate tự động về: Performance (SLO), API Contracts (Anti-breakage), và User Journeys (E2E) trước khi merge.
 
-Testing Pillars & Tooling Strategy
-| Pillar
-|Tool
-|Mục đích (SRE/Platform Lens)
-|Integration Point
-|
-| ---|---|---|---|
-| Performance & SLO
-|k6
-|Validate P99 latency & throughput không vi phạm SLO khi có code mới.
-|CI Pipeline, export metrics to Prometheus
-|
-| API Contract
-|Pact
-|Ngăn chặn breaking changes giữa 10 services (Consumer-Driven Contracts).
-|Pact Broker container, CI pre-merge gate
-|
-| Synthetic / E2E
-|Playwright
-|Đo lường SLI từ góc độ người dùng (User Journey) thay vì chỉ server-side metrics.
-|Scheduled container (Cron), push metrics to Pushgateway
-|
+#### Testing Pillars & Tooling Strategy
 
-Architecture & Integration
-1. k6 Load Testing (Performance Baseline):
-   - Chạy script `baseline.js` trong CI sau khi build Docker image thành công.
-   - k6 output trực tiếp vào Prometheus (qua remote_write hoặc OTel Collector).
-   - CI Gate: Auto-fail PR nếu `p99 latency > SLO threshold` hoặc `error rate > 0.5%`.
+| Pillar | Tool | Mục đích (SRE/Platform Lens) | Integration Point |
+|--------|------|------------------------------|-------------------|
+| Performance & SLO | k6 | Validate P99 latency & throughput không vi phạm SLO khi có code mới | CI Pipeline, export metrics to Prometheus |
+| API Contract | Pact | Ngăn chặn breaking changes giữa 10 services (Consumer-Driven Contracts) | Pact Broker container, CI pre-merge gate |
+| Synthetic / E2E | Playwright | Đo lường SLI từ góc độ người dùng (User Journey) thay vì chỉ server-side metrics | Scheduled container (Cron), push metrics to Pushgateway |
 
-2. Pact Contract Testing (API Governance):
-   - Deploy `pact-broker` (Ruby/PostgreSQL) làm service phụ trợ trong Docker Compose (hoặc CI container).
-   - Các service đóng vai trò Consumer (VD: Shipping Worker) publish expectations.
-   - Các service đóng vai trò Provider (VD: Order Service) verify contracts trước khi cho phép merge.
-   - Ngăn chặn lỗi: Order Service đổi tên field `order_id` -> `orderId` làm Shipping Worker crash.
+#### Architecture & Integration
+**1. k6 Load Testing (Performance Baseline):**
+- Chạy script `baseline.js` trong CI sau khi build Docker image thành công
+- k6 output trực tiếp vào Prometheus (qua remote_write hoặc OTel Collector)
+- CI Gate: Auto-fail PR nếu `p99 latency > SLO threshold` hoặc `error rate > 0.5%`
 
-3. Playwright Synthetic Monitoring (User-Centric SLI):
-   - Đóng gói Playwright tests thành một Docker container headless Chrome.
-   - Chạy định kỳ (mỗi 5 phút) trên Observability VM hoặc CI nightly.
-   - Đo thời gian hoàn thành luồng "Login -> Create Order -> View Events".
-   - Push duration metrics về Prometheus để hiển thị trên Grafana SLO Dashboard.
+**2. Pact Contract Testing (API Governance):**
+- Deploy `pact-broker` (Ruby/PostgreSQL) làm service phụ trợ trong Docker Compose (hoặc CI container)
+- Các service đóng vai trò Consumer (VD: Shipping Worker) publish expectations
+- Các service đóng vai trò Provider (VD: Order Service) verify contracts trước khi cho phép merge
+- Ngăn chặn lỗi: Order Service đổi tên field `order_id` -> `orderId` làm Shipping Worker crash
 
-Deliverables (Cấu trúc thư mục mới)
-observability-lab/
-+-- tests/
-    +-- load/                  # k6 scripts & thresholds
-       +-- baseline.js
-       +-- stress.js
-    +-- contracts/             # Pact consumer/provider tests
-       +-- broker/            # Docker compose cho Pact Broker
-       +-- consumers/
-       +-- providers/
-    +-- e2e/                   # Playwright synthetic journeys
-        +-- journeys/
-        +-- Dockerfile         # Headless chrome container
+**3. Playwright Synthetic Monitoring (User-Centric SLI):**
+- Đóng gói Playwright tests thành một Docker container headless Chrome
+- Chạy định kỳ (mỗi 5 phút) trên Observability VM hoặc CI nightly
+- Đo thời gian hoàn thành luồng "Login -> Create Order -> View Events"
+- Push duration metrics về Prometheus để hiển thị trên Grafana SLO Dashboard
 
-Observability (Mở rộng Grafana):
-- Dashboard: "CI/CD Reliability Gates" (Hiển thị lịch sử P99 latency qua các lần chạy k6).
-- Dashboard: "Synthetic User Journeys" (Success rate & duration của Playwright tests).
-- Alert: `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi bị lỗi, bất kể server metrics có đang xanh hay không).
-
-Verify:
-- Tạo một PR cố tình làm thay đổi HTTP Status Code của Order Service -> CI block merge do Pact Contract fail.
-- Tạo một PR cố tình thêm `time.sleep(2)` vào Payment Service -> CI block merge do k6 P99 vượt SLO.
-- Dashboard Synthetic hiển thị được thời gian thực của luồng "Create Order" từ góc độ browser.
-- Toàn bộ tests chạy headless và tự động cleanup sau khi CI chạy xong.
+#### Deliverables (Cấu trúc thư mục mới)
+```plaintext
+on-premises/
+└── tests/
+    ├── load/                  # k6 scripts & thresholds
+    │   ├── baseline.js
+    │   └── stress.js
+    ├── contracts/             # Pact consumer/provider tests
+    │   ├── broker/            # Docker compose cho Pact Broker
+    │   ├── consumers/
+    │   └── providers/
+    └── e2e/                   # Playwright synthetic journeys
+        ├── journeys/
+        └── Dockerfile         # Headless chrome container
 ```
+#### Observability (Mở rộng Grafana)
+
+- **Dashboard:** "CI/CD Reliability Gates" (Hiển thị lịch sử P99 latency qua các lần chạy k6)
+- **Dashboard:** "Synthetic User Journeys" (Success rate & duration của Playwright tests)
+- **Alert:** `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi bị lỗi, bất kể server metrics có đang xanh hay không)
+
+#### Verify
+
+- Tạo một PR cố tình làm thay đổi HTTP Status Code của Order Service → CI block merge do Pact Contract fail
+- Tạo một PR cố tình thêm `time.sleep(2)` vào Payment Service → CI block merge do k6 P99 vượt SLO
+- Dashboard Synthetic hiển thị được thời gian thực của luồng "Create Order" từ góc độ browser
+- Toàn bộ tests chạy headless và tự động cleanup sau khi CI chạy xong
+
 ---
 
 ## Chi Phí Ảnh Hưởng
