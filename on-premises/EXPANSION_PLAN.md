@@ -884,39 +884,121 @@ jobs:
 - CI chỉ validate: code quality + build success + basic health
 - Production deployment automation thuộc AWS plan (Terraform + ECS)
 
-## Observability Mở Rộng
+### Observability Mở Rộng
 
-### Per-Service Metrics (mỗi service mới phải có)
-
+#### 1. Per-Service Metrics (mỗi service mới phải có)
 | Metric type | Ví dụ | Instrument |
-|------------|-------|------------|
-| **Request rate** | `http_requests_total{service="auth",method="POST",path="/login"}` | Counter |
-| **Latency** | `http_request_duration_seconds{service="shipping"}` | Histogram |
-| **Error rate** | `http_requests_total{status="5xx",service="search"}` | Counter |
-| **Business metric** | `saga_compensations_total{reason="shipping_failed"}` | Counter |
-| **Queue lag** | `kafka_consumer_lag{group="shipping-worker"}` | Gauge |
-| **Circuit breaker state** | `circuit_breaker_state{target="payment",state="open"}` | Gauge |
-| **DB connections** | `db_pool_active_connections{database="auth_db"}` | Gauge |
+|-------------|-------|------------|
+| Request rate | `http_requests_total{service="auth", method="POST", path="/login"}` | Counter |
+| Latency | `http_request_duration_seconds{service="shipping"}` | Histogram |
+| Error rate | `http_requests_total{status="5xx", service="search"}` | Counter |
+| Business metric | `saga_compensations_total{reason="shipping_failed"}` | Counter |
+| Queue lag | `kafka_consumer_lag{group="shipping-worker"}` | Gauge |
+| Circuit breaker state | `circuit_breaker_state{target="payment", state="open"}` | Gauge |
+| DB connections | `db_pool_active_connections{database="auth_db"}` | Gauge |
 
-### SLI/SLO Definitions
+#### 2. SLI/SLO Definitions
+| Service | SLI | SLO Target | Error Budget (30d) |
+|---------|-----|------------|--------------------|
+| API Gateway | Availability (non-5xx) | 99.5% | 216 phút |
+| API Gateway | Latency P95 < 500ms | 95% | 2160 phút |
+| Payment Service | Success rate | 99.0% | 432 phút |
+| Auth Service | Login latency P99 | < 200ms (99.5%) | 216 phút |
+| Auth Service | Token verify latency P99 | < 50ms (99.9%) | 43 phút |
+| Shipping Service | Creation success rate | 99.5% | 216 phút |
+| Shipping Service | Creation latency P95 | < 500ms (95%) | 2160 phút |
+| Shipping Worker | Saga completion rate | 99% | 432 phút |
+| Search Service | Query latency P95 | < 300ms (95%) | 2160 phút |
+| Search Service | Index lag | < 10s (95% compliant) | 2160 phút |
 
-| Service | SLI | SLO Target |
-|---------|-----|------------|
-| API Gateway | Request success rate (non-5xx) | 99.5% over 7 days |
-| Order Service | Order creation latency p99 | < 500ms |
-| Auth Service | Login latency p99 | < 200ms |
-| Shipping Worker | Saga completion rate | 99% (1% allowed compensations) |
-| Search Service | Search latency p99 | < 300ms |
-| Search Service | Index freshness (lag) | < 10 seconds |
+**MWMBR Alert Thresholds (Multi-Window Multi-Burn-Rate):**
+| Severity | Burn Rate | Short Window | Long Window | Budget consumed | Action |
+|----------|-----------|--------------|-------------|-----------------|--------|
+| Critical (page) | 14.4x | 5m | 1h | 2% trong 1h | Page on-call |
+| Warning (ticket) | 3x | 30m | 6h | 5% trong 6h | Tạo ticket |
 
-### Grafana Dashboards Mới
+**Traffic Guards (chống phantom alerts):**
+- Tất cả SLO alerts PHẢI có điều kiện `rate(total_requests[5m]) > 0.1`
+- Ngăn alert firing khi không có traffic (stale metrics từ lần chạy trước)
+- Đặc biệt quan trọng cho low-traffic services (Auth login lúc 3AM, webhook endpoints)
 
-| Dashboard | Panels |
-|-----------|--------|
-| **Auth Overview** | Login rate, token refresh rate, failed logins (brute force?), active sessions |
-| **Saga Monitor** | Saga in-flight, completion rate, compensation rate, DLQ size |
-| **Search Health** | Index lag, query latency, OpenSearch cluster health |
-| **Cross-Service** | Service dependency map, error propagation, trace duration distribution |
+#### 3. Grafana Dashboards Mới
+| Dashboard | Loại | Panels chính |
+|-----------|------|--------------|
+| Auth Overview | Service | Login rate, token refresh rate, failed logins, active sessions, brute force detection |
+| Saga Monitor | Business flow | Saga duration histogram, state machine flow (Node Graph), compensation rate, DLQ size |
+| Search Health | Service | Index lag, query latency P95, OpenSearch cluster health, reindex progress |
+| Cross-Service | Architecture | Service dependency map, error propagation paths, trace duration distribution |
+| Synthetic Journeys | Proactive | Journey success rate (by location), P95 duration, failure breakdown by step |
+| Business KPIs | Business | Revenue/hour, payment success by provider, cart abandonment rate, search conversion funnel |
+| User Activity | Debug | User journey timeline, error rate per user, session duration (filter by user_id) |
+| Order Details | Debug | Order lifecycle timeline, processing time per step, related logs (filter by order_id) |
+
+**Dashboard Correlation Features:**
+- Derived Fields trong Loki datasource: click `trace_id` → jump to Tempo
+- Derived Fields: click `saga_id` → jump to Saga Monitor với filter
+- Derived Fields: click `user_id` → jump to User Activity dashboard
+- Derived Fields: click `order_id` → jump to Order Details dashboard
+
+#### 4. Saga Distributed Tracing
+**Problem:** Saga pattern liên quan 5+ services. Khi Saga fail ở step 3, cần trace toàn bộ lifecycle để debug.
+
+**Solution (chi tiết implementation xem Phase 4):**
+1. Inject `saga_id` vào mọi span trong Saga Worker (span attribute)
+2. Propagate `saga_id` qua Kafka headers (bên cạnh W3C `traceparent` chuẩn)
+3. Enrich structured logs với `saga_id` (đồng bộ qua 3 pillars)
+4. OTel Collector: whitelist `saga.id` trong spanmetrics + tail-sampling
+5. Tail-sampling policy: giữ 100% traces có `saga.state=COMPENSATING`
+
+**Tempo TraceQL Queries (lưu mẫu):**
+- `{ span.saga.state = "COMPENSATING" }` — tìm tất cả sagas bị compensation
+- `{ span.saga.id != "" && duration > 30s }` — tìm sagas chậm
+
+**Recording Rules:** `saga:duration_p95:5m`, `saga:failure_rate:5m`, `saga:dlq_size`
+
+#### 5. Multi-ID Log Correlation
+**Problem:** Hiện tại chỉ có `trace_id` trong logs. Thiếu context để debug business-level issues (cần `user_id`, `order_id`, `session_id`).
+
+**Solution:**
+1. Enrich logs với multiple correlation IDs.
+2. Loki pipeline: extract IDs từ JSON logs (KHÔNG đưa vào Loki labels để tránh cardinality explosion).
+3. Grafana Derived Fields: biến IDs thành hyperlinks trong Log panel.
+
+**LogQL Queries (lưu mẫu):**
+- `{container_name=~".+"} | json | user_id="user-123"` — tất cả logs của 1 user
+- Cross-correlation: `{user_id="user-123"} | saga_id!=""` — tìm sagas của 1 user
+
+#### 6. Synthetic Monitoring (User-Centric SLIs)
+**Problem:** Blackbox Exporter chỉ probe `/health/live` → passive monitoring. Cần test full user journeys từ outside-in.
+
+**Solution:**
+1. Playwright E2E tests đóng gói thành Docker container headless Chrome.
+2. Chạy định kỳ mỗi 5 phút, push metrics về Prometheus.
+3. SLO mới: "95% purchase journeys complete < 5s từ tất cả locations".
+4. Alert: `SyntheticJourneyFailing` — phát hiện issues TRƯỚC KHI real users report.
+
+#### 7. Business Metrics (Bridge Tech ↔ Business)
+| Metric | Service | Type | Ý nghĩa business |
+|--------|---------|------|------------------|
+| `revenue_dollars` | Order Service | Histogram | Revenue per hour (real-time) |
+| `payment_success_total{provider}` | Payment Service | Counter | Payment success by provider |
+| `search_to_purchase_total` | Search Service | Counter | Search queries dẫn đến purchase |
+| `cart_additions_total` vs `cart_checkouts_total` | API Gateway | Counter | Cart abandonment rate |
+
+**Recording Rules:** `business:revenue_per_hour:1h`, `business:cart_abandonment_rate:1h`
+
+#### 8. Alerts cho Services Mới
+| Alert | Severity | Condition | Service |
+|-------|----------|-----------|---------|
+| AuthLoginLatencyFastBurn | critical | P99 > 200ms, burn rate 14.4x (5m + 1h) | Auth |
+| AuthBruteForceDetected | warning | Failed logins > 10/min từ 1 IP | Auth |
+| ShippingSuccessRateFastBurn | critical | Success rate burn rate 14.4x (5m + 1h) | Shipping |
+| SagaHighFailureRate | critical | Compensation rate > 5% trong 5 phút | Shipping Worker |
+| SagaDLQGrowing | warning | DLQ messages > 10 trong 10 phút | Shipping Worker |
+| SearchIndexLagFastBurn | critical | Index lag burn rate 14.4x (5m + 1h) | Search |
+| CircuitBreakerOpen | warning | CB ở state "open" > 30s | Tất cả services dùng CB |
+
+**Lưu ý:** Tất cả SLO alerts PHẢI có traffic guard để tránh phantom alerts.
 
 ---
 
@@ -1076,107 +1158,112 @@ Verify:
 ```
 
 ### Phase 4: Advanced Observability & Reliability Engineering
-```
-Effort: ~5-7 ngày
-Dependencies: Phase 1-3 hoàn tất (Toàn bộ 10 services đã chạy ổn định)
-Impact: Toàn bộ pipeline Observability, thay đổi cách định nghĩa reliability và debug
+**Effort:** ~5-7 ngày  
+**Dependencies:** Phase 1-3 hoàn tất (Toàn bộ 10 services đã chạy ổn định)  
+**Impact:** Toàn bộ pipeline Observability, thay đổi cách định nghĩa reliability và debug  
 
-Mục tiêu:
+**Mục tiêu:**
 Chuyển dịch observability từ "reactive monitoring" (đợi alert mới biết lỗi) sang "proactive reliability engineering" (đo lường business impact, proactive synthetic testing, và debug distributed transactions end-to-end).
 
-5 Trụ cột triển khai:
-  A. Saga Distributed Tracing
-  B. SLO & MWMBR Alerting cho services mới
-  C. Synthetic Monitoring (User-Centric SLIs)
-  D. Multi-ID Log Correlation
-  E. Business Metrics Instrumentation
+**5 Trụ cột triển khai:**  
+A. Saga Distributed Tracing  
+B. SLO & MWMBR Alerting cho services mới  
+C. Synthetic Monitoring (User-Centric SLIs)  
+D. Multi-ID Log Correlation  
+E. Business Metrics Instrumentation  
 
-A. Saga Distributed Tracing (Gắn với Phase 2)
-Application:
-  1. Instrument Saga Worker để inject `saga_id` và `saga_state` vào OTel span attributes.
-  2. Cấu hình Kafka Producer/Consumer inject và extract `saga_id` qua Kafka message headers (bên cạnh W3C `traceparent` chuẩn).
-  3. Enrich structured logs của tất cả workers với `saga_id` để đồng bộ qua 3 pillars.
+#### A. Saga Distributed Tracing (Gắn với Phase 2)
+**Application:**
+1. Instrument Saga Worker để inject `saga_id` và `saga_state` vào OTel span attributes.
+2. Cấu hình Kafka Producer/Consumer inject và extract `saga_id` qua Kafka message headers (bên cạnh W3C `traceparent` chuẩn).
+3. Enrich structured logs của tất cả workers với `saga_id` để đồng bộ qua 3 pillars.
 
-Infrastructure:
-  4. Update OTel Collector config: Thêm `saga.id` vào whitelist của spanmetrics connector và tail-sampling policies (luôn giữ lại 100% traces có `saga.state=COMPENSATING`).
+**Infrastructure:**  
 
-Observability:
-  5. Grafana Dashboard "Saga Monitor":
-     - Panel: Saga Duration Distribution (Histogram).
-     - Panel: Saga State Machine Flow (Node Graph plugin).
-     - Panel: DLQ Size & Compensation Failure Rate.
-  6. Tempo TraceQL Queries: Lưu các query mẫu để tìm traces theo `saga.id` hoặc filter các sagas bị timeout.
-  7. Recording Rules & Alerts:
-     - Alert: `SagaHighFailureRate` (Tỷ lệ compensation > 5% trong 5 phút).
-     - Alert: `SagaDLQGrowing` (Messages trong DLQ topic > 10).
+4. Update OTel Collector config: Thêm `saga.id` vào whitelist của spanmetrics connector và tail-sampling policies (luôn giữ lại 100% traces có `saga.state=COMPENSATING`).
 
-B. SLO & MWMBR Alerting cho Services Mới
-Application:
-  1. Định nghĩa SLIs cho các services mới:
-     - Auth Service: Login latency P99 < 200ms (Target 99.5%).
-     - Shipping Service: Shipment creation success rate (Target 99.5%).
-     - Search Service: Query latency P95 < 300ms & Index lag < 10s (Target 95%).
+**Observability:**  
 
-Infrastructure:
-  2. Prometheus Recording Rules: Tạo các SLI recording rules theo chuẩn naming convention `sli:<service>_<signal>:<window>` (5m, 30m, 1h, 6h).
+5. Grafana Dashboard "Saga Monitor":
+   - Panel: Saga Duration Distribution (Histogram).
+   - Panel: Saga State Machine Flow (Node Graph plugin).
+   - Panel: DLQ Size & Compensation Failure Rate.  
+6. Tempo TraceQL Queries: Lưu các query mẫu để tìm traces theo `saga.id` hoặc filter các sagas bị timeout.
+7. Recording Rules & Alerts:
+   - Alert: `SagaHighFailureRate` (Tỷ lệ compensation > 5% trong 5 phút).
+   - Alert: `SagaDLQGrowing` (Messages trong DLQ topic > 10).
 
-Observability:
-  3. Grafana SLO Dashboard: Mở rộng dashboard hiện tại, thêm các gauges và burn-rate charts cho Auth, Shipping, Search.
-  4. MWMBR Alerts (Multi-Window Multi-Burn-Rate):
-     - Cấu hình Fast-burn (14.4x) và Slow-burn (3x) alerts cho các SLOs mới.
-     - Áp dụng Traffic Guards (dựa trên span metrics) để tránh phantom alerts khi không có traffic.
+#### B. SLO & MWMBR Alerting cho Services Mới
+**Application:**
+1. Định nghĩa SLIs cho các services mới:
+   - Auth Service: Login latency P99 < 200ms (Target 99.5%).
+   - Shipping Service: Shipment creation success rate (Target 99.5%).
+   - Search Service: Query latency P95 < 300ms & Index lag < 10s (Target 95%).
 
-C. Synthetic Monitoring (User-Centric SLIs)
-Infrastructure:
-  1. Đóng gói Playwright E2E tests thành một Docker container headless Chrome.
-  2. Triển khai container này trong Docker Compose, cấu hình chạy định kỳ (Cron / Systemd timer) mỗi 5 phút.
-  3. Deploy một lightweight metrics exporter (Python/Node) để parse JSON results từ Playwright và push metrics (journey duration, success rate) về Prometheus Pushgateway.
+**Infrastructure:**  
 
-Observability:
-  4. Grafana Dashboard "Synthetic Journeys": Hiển thị Success Rate và P95 Duration của các luồng "Critical Purchase" và "Search" từ góc độ người dùng thực tế (outside-in).
-  5. Alert: `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi fail 2 lần liên tiếp, bất kể server-side metrics có đang xanh hay không).
+2. Prometheus Recording Rules: Tạo các SLI recording rules theo chuẩn naming convention `sli:<service>_<signal>:<window>` (5m, 30m, 1h, 6h).
 
-D. Multi-ID Log Correlation
-Application:
-  1. Chuẩn hóa logging context: Đảm bảo mọi services đều enrich logs với `user_id`, `session_id`, `order_id` (bên cạnh `trace_id`, `span_id` mặc định của OTel).
+**Observability:**  
 
-Infrastructure:
-  2. Grafana Alloy / Loki Pipeline: Cấu hình pipeline extract các correlation IDs này từ JSON logs (nhưng KHÔNG đưa vào Loki labels để tránh cardinality explosion, chỉ dùng cho LogQL line filters).
-  3. Grafana Datasource Config (Derived Fields):
-     - Cấu hình regex để biến `saga_id`, `user_id`, `order_id` trong Log panel thành các hyperlink.
-     - Click vào `trace_id` -> Jump to Tempo.
-     - Click vào `order_id` -> Jump to Business KPI dashboard với filter sẵn.
+3. Grafana SLO Dashboard: Mở rộng dashboard hiện tại, thêm các gauges và burn-rate charts cho Auth, Shipping, Search.
+4. MWMBR Alerts (Multi-Window Multi-Burn-Rate):
+   - Cấu hình Fast-burn (14.4x) và Slow-burn (3x) alerts cho các SLOs mới.
+   - Áp dụng Traffic Guards (dựa trên span metrics) để tránh phantom alerts khi không có traffic.
 
-E. Business Metrics Instrumentation
-Application:
-  1. Instrument OTel Custom Metrics gắn liền với business KPIs:
-     - Order Service: `revenue_dollars` (Histogram).
-     - Payment Service: `payment_success_total` (Counter, group by provider).
-     - Search Service: `search_to_purchase_total` (Counter, track qua session_id).
-     - API Gateway: `cart_additions_total` vs `cart_checkouts_total`.
+#### C. Synthetic Monitoring (User-Centric SLIs)
+**Infrastructure:**
+1. Đóng gói Playwright E2E tests thành một Docker container headless Chrome.
+2. Triển khai container này trong Docker Compose, cấu hình chạy định kỳ (Cron / Systemd timer) mỗi 5 phút.
+3. Deploy một lightweight metrics exporter (Python/Node) để parse JSON results từ Playwright và push metrics (journey duration, success rate) về Prometheus Pushgateway.
 
-Observability:
-  2. Grafana Dashboard "Business KPIs":
-     - Panel: Real-time Revenue per Hour.
-     - Panel: Payment Success Rate by Provider (Stripe vs PayPal).
-     - Panel: Cart Abandonment Rate.
-     - Panel: Search Conversion Funnel.
-  3. Business Alerts (Optional): `RevenueDropped`, `HighCartAbandonment`, `PaymentProviderDegraded`.
+**Observability:**  
 
-Runbook Deliverables:
-  - RB-SAGA-04: Saga High Failure Rate & DLQ Overflow.
-  - RB-SLO-NEW: SLO Violation cho Auth, Shipping, Search.
-  - RB-SYNTHETIC-01: Synthetic Journey Failing (Outside-in troubleshooting).
-  - RB-CORRELATION-01: Debug User-Specific & Saga Issues (Multi-ID tracing).
-  - RB-BUSINESS-01: Payment Provider Degraded & Revenue Drop.
+4. Grafana Dashboard "Synthetic Journeys": Hiển thị Success Rate và P95 Duration của các luồng "Critical Purchase" và "Search" từ góc độ người dùng thực tế (outside-in).
+5. Alert: `SyntheticJourneyFailing` (Báo động khi luồng E2E lõi fail 2 lần liên tiếp, bất kể server-side metrics có đang xanh hay không).
 
-Verify:
-  - Trace một Saga từ Order -> Payment -> Shipping trên Tempo, thấy full chain `saga_id` và state transitions.
-  - Inject latency vào Auth Service -> AuthLoginLatencyFastBurn alert fires trong < 2 phút.
-  - Stop Payment Service -> Synthetic Journey alert fires (dù server-side health checks vẫn có thể pass).
-  - Query Loki bằng `{user_id="user-123"} | saga_id!=""` để cross-correlate user actions với backend sagas.
-  - Dashboard Business KPIs cập nhật real-time revenue và cart abandonment rate khi chạy Traffic Generator.
-```
+#### D. Multi-ID Log Correlation
+**Application:**
+1. Chuẩn hóa logging context: Đảm bảo mọi services đều enrich logs với `user_id`, `session_id`, `order_id` (bên cạnh `trace_id`, `span_id` mặc định của OTel).
+
+**Infrastructure:**  
+
+2. Grafana Alloy / Loki Pipeline: Cấu hình pipeline extract các correlation IDs này từ JSON logs (nhưng KHÔNG đưa vào Loki labels để tránh cardinality explosion, chỉ dùng cho LogQL line filters).
+3. Grafana Datasource Config (Derived Fields):
+   - Cấu hình regex để biến `saga_id`, `user_id`, `order_id` trong Log panel thành các hyperlink.
+   - Click vào `trace_id` -> Jump to Tempo.
+   - Click vào `order_id` -> Jump to Business KPI dashboard với filter sẵn.
+
+#### E. Business Metrics Instrumentation
+**Application:**
+1. Instrument OTel Custom Metrics gắn liền với business KPIs:
+   - Order Service: `revenue_dollars` (Histogram).
+   - Payment Service: `payment_success_total` (Counter, group by provider).
+   - Search Service: `search_to_purchase_total` (Counter, track qua session_id).
+   - API Gateway: `cart_additions_total` vs `cart_checkouts_total`.
+
+**Observability:**  
+
+2. Grafana Dashboard "Business KPIs":
+   - Panel: Real-time Revenue per Hour.
+   - Panel: Payment Success Rate by Provider (Stripe vs PayPal).
+   - Panel: Cart Abandonment Rate.
+   - Panel: Search Conversion Funnel.
+3. Business Alerts (Optional): `RevenueDropped`, `HighCartAbandonment`, `PaymentProviderDegraded`.
+
+**Runbook Deliverables:**
+- RB-SAGA-04: Saga High Failure Rate & DLQ Overflow.
+- RB-SLO-NEW: SLO Violation cho Auth, Shipping, Search.
+- RB-SYNTHETIC-01: Synthetic Journey Failing (Outside-in troubleshooting).
+- RB-CORRELATION-01: Debug User-Specific & Saga Issues (Multi-ID tracing).
+- RB-BUSINESS-01: Payment Provider Degraded & Revenue Drop.
+
+**Verify:**
+- Trace một Saga từ Order -> Payment -> Shipping trên Tempo, thấy full chain `saga_id` và state transitions.
+- Inject latency vào Auth Service -> AuthLoginLatencyFastBurn alert fires trong < 2 phút.
+- Stop Payment Service -> Synthetic Journey alert fires (dù server-side health checks vẫn có thể pass).
+- Query Loki bằng `{user_id="user-123"} | saga_id!=""` để cross-correlate user actions với backend sagas.
+- Dashboard Business KPIs cập nhật real-time revenue và cart abandonment rate khi chạy Traffic Generator.
 
 ### Phase 5: Integration + Chaos Testing + SLO + DR Drill
 
