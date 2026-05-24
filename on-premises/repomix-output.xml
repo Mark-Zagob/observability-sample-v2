@@ -28,6 +28,8 @@ The content is organized as follows:
   between different files in the repository.
 - Be aware that this file may contain sensitive information. Handle it with
   the same level of security as you would the original repository.
+
+- Pay special attention to the Repository Instruction. These contain important context and guidelines specific to this project.
 </usage_guidelines>
 
 <notes>
@@ -181,6 +183,7 @@ EXPANSION_PLAN.md
 INCIDENT_RUNBOOK.md
 INCIDENT_SIMULATION_GUIDE.md
 README.md
+repomix-instruction.md
 repomix.config.json
 </directory_structure>
 
@@ -20444,6 +20447,889 @@ This section contains the contents of the repository's files.
 155: - [../terraform/devops-question-m1-iac-core.md](../terraform/devops-question-m1-iac-core.md) — DevOps interview cho Terraform/AWS
 </file>
 
+<file path="repomix-instruction.md">
+  1: # Project Instructions for AI
+  2: 
+  3: ## 1. Project Context & Philosophy
+  4: 
+  5: **Tên dự án:** Observability Lab — Production-Grade E-commerce Microservices  
+  6: **Loại dự án:** Lab/Training environment với tiêu chuẩn production-grade  
+  7: **Mục đích chính:**
+  8: - Thực hành triển khai observability trong kiến trúc Microservices với team size khác nhau (solo → 10+ người)
+  9: - Demo các patterns production-grade: distributed tracing, custom metrics, SLO/SLI, incident management
+ 10: - Nghiên cứu event-driven architecture với Kafka
+ 11: - Luyện tập incident response với runbook, simulation guide, và post-mortem
+ 12: 
+ 13: **Triết lý:**
+ 14: - Đây KHÔNG phải toy project — mọi aspect đều hướng đến production-grade
+ 15: - Docker Compose được sử dụng như production orchestrator (không phải demo tool)
+ 16: - Tất cả concepts (TLS, secrets, network segmentation, backup, CI, graceful shutdown) đều production-grade
+ 17: - Chỉ khác Kubernetes ở deployment tooling, không khác ở operational practices
+ 18: 
+ 19: **Ngôn ngữ trả lời:** Tiếng Việt
+ 20: 
+ 21: ## 2. Repository Structure
+ 22: 
+ 23: ```
+ 24: on-premises/
+ 25: ├── applications-vm/                    # Business logic + Data layer (60GB RAM)
+ 26: │   ├── applications/                   # Source code microservices
+ 27: │   │   ├── api-gateway/               # BFF pattern, rate limiting, JWT verification
+ 28: │   │   ├── order-service/             # Order processing, Kafka producer, cache-aside
+ 29: │   │   ├── payment-service/           # Payment processing with simulated latency/errors
+ 30: │   │   ├── notification-worker/       # Kafka consumer, idempotent processing
+ 31: │   │   ├── inventory-worker/          # Kafka consumer, stock management, auto-restock
+ 32: │   │   ├── traffic-gen/               # Load testing tool with scenario templates
+ 33: │   │   ├── web-ui/                    # Nginx SPA with reverse proxy
+ 34: │   │   └── shared/                    # Shared modules (db_utils, otel_setup, logging, health, errors, kafka_utils)
+ 35: │   ├── agents/                        # Monitoring agents (Alloy for log collection)
+ 36: │   └── docker-compose.yml             # Orchestration cho applications + infrastructure
+ 37: │
+ 38: ├── observability-vm/                   # Monitoring stack (32GB RAM)
+ 39: │   ├── phase1-metrics/                # Prometheus + Grafana + Node Exporter + cAdvisor + Alertmanager + Blackbox
+ 40: │   ├── phase2-logging/                # Loki + Alloy
+ 41: │   ├── phase3-tracing/                # Tempo + OTel Collector
+ 42: │   ├── storage/                       # MinIO (S3-compatible) cho Loki chunks + Tempo blocks
+ 43: │   └── scripts/                       # Utility scripts (annotate.sh, deploy.sh)
+ 44: │
+ 45: ├── post-mortems/                       # Blameless post-mortem templates và examples
+ 46: │   ├── 00-TEMPLATE.md                 # Template chuẩn cho post-mortem
+ 47: │   └── 01-GOLDEN-EXAMPLE-DB-Saturation.md  # Ví dụ mẫu
+ 48: │
+ 49: ├── ARCHITECTURE.md                     # Kiến trúc chi tiết, data flows, DB schema
+ 50: ├── INCIDENT_RUNBOOK.md                 # Runbook xử lý 24 loại alert
+ 51: ├── INCIDENT_SIMULATION_GUIDE.md        # 12 experiments giả lập incident
+ 52: ├── BREAK_TEST_RECOVERY.md              # 28 exercises break/test/recovery
+ 53: ├── EXPANSION_PLAN.md                   # Kế hoạch mở rộng lên 10 services
+ 54: ├── devops-question.md                  # 45 câu hỏi phỏng vấn (Junior-Mid)
+ 55: └── devops-question-senior.md           # 31 câu hỏi phỏng vấn (Senior)
+ 56: ```
+ 57: 
+ 58: ## 3. Tech Stack Overview
+ 59: 
+ 60: ### Core Technologies
+ 61: - **Language:** Python 3.12 (Flask), Node.js (Express cho web-ui)
+ 62: - **Database:** PostgreSQL 16 (persistence, connection pooling)
+ 63: - **Cache:** Redis 7 (cache-aside pattern, TTL 60s)
+ 64: - **Message Broker:** Apache Kafka 3.7 (KRaft mode, no ZooKeeper)
+ 65: - **Web Server:** Gunicorn (gthread workers), Nginx (reverse proxy)
+ 66: 
+ 67: ### Observability Stack
+ 68: - **SDK:** OpenTelemetry Python SDK 1.33.*
+ 69: - **Instrumentations:**
+ 70:   - Flask (auto)
+ 71:   - Requests (auto - HTTP client)
+ 72:   - Psycopg2 (auto - PostgreSQL)
+ 73:   - Redis (auto)
+ 74:   - Logging (auto - structured JSON)
+ 75: - **Collector:** OTel Collector 0.120.0 (tail-based sampling, spanmetrics connector)
+ 76: - **Exporter:** OTLP over gRPC (:4317) và HTTP (:4318)
+ 77: - **Backends:**
+ 78:   - Prometheus v3.10.0 (metrics, recording rules, alerting rules)
+ 79:   - Loki 3.3.2 (logs, LogQL)
+ 80:   - Tempo 2.7.0 (traces, TraceQL)
+ 81:   - Grafana 12.3.3 (dashboards, correlation)
+ 82:   - Alertmanager v0.28.1 (alert routing → Telegram)
+ 83:   - Blackbox Exporter v0.25.0 (active health probing)
+ 84: 
+ 85: ### Infrastructure
+ 86: - **Containerization:** Docker (multi-stage builds, security hardened)
+ 87: - **Orchestration:** Docker Compose (external networks, health checks, depends_on with conditions)
+ 88: - **Storage:** MinIO (S3-compatible) cho Loki/Tempo long-term storage
+ 89: - **Monitoring Agents:** Grafana Alloy (log collection từ Docker + host)
+ 90: 
+ 91: ## 4. Services Overview
+ 92: 
+ 93: ### 4.1 API Gateway (port 5000)
+ 94: **Chức năng:**
+ 95: - BFF (Backend for Frontend) pattern
+ 96: - Routes requests đến backend services
+ 97: - Error propagation với RFC 7807 format
+ 98: - Health checks: `/health/live`, `/health/ready`
+ 99: 
+100: **Custom Metrics:**
+101: - `api_gateway_requests_total` (counter) - grouped by endpoint, status
+102: - `api_gateway_request_duration_seconds` (histogram)
+103: 
+104: ### 4.2 Order Service (port 5001)
+105: **Chức năng:**
+106: - Xử lý đơn hàng với PostgreSQL persistence
+107: - Cache-aside pattern với Redis (product catalog, TTL 60s)
+108: - Publish events sang Kafka: `order.created`, `order.payment_completed`, `order.payment_failed`, `stock.depleted`
+109: - Gọi HTTP sang Payment Service để thanh toán
+110: - Health checks với dependency validation (DB, Redis)
+111: 
+112: **Custom Metrics:**
+113: - `orders_created_total` (counter) - grouped by status
+114: - `order_processing_duration_seconds` (histogram)
+115: - `db_query_duration_seconds` (histogram)
+116: - `db_connection_pool_active` (up-down counter)
+117: - `db_connection_pool_max` (observable gauge)
+118: - `cache_operations_total` (counter) - grouped by operation, result
+119: - `cache_operation_duration_seconds` (histogram)
+120: - `kafka_messages_produced_total` (counter)
+121: - `inventory_checks_total` (counter) - grouped by result
+122: 
+123: ### 4.3 Payment Service (port 5002)
+124: **Chức năng:**
+125: - Xử lý thanh toán giả lập (simulate)
+126: - Random delays để demo slow gateway (20% chance)
+127: - Random failures (10% chance)
+128: - Support 3 providers: stripe, paypal, square
+129: - Stateless (không có DB riêng)
+130: 
+131: **Custom Metrics:**
+132: - `payments_total` (counter) - grouped by status, provider
+133: - `payment_amount_dollars` (histogram)
+134: - `payment_gateway_duration_seconds` (histogram)
+135: 
+136: ### 4.4 Notification Worker (port 5004)
+137: **Chức năng:**
+138: - Kafka consumer từ topic `order.events`
+139: - Consumer group: `notification-workers`
+140: - Idempotent processing qua `processed_events` table
+141: - Gửi notifications (simulate) và persist vào DB
+142: - Graceful shutdown với SIGTERM handler
+143: 
+144: **Custom Metrics:**
+145: - `notifications_sent_total` (counter) - grouped by type
+146: - `notification_processing_duration_seconds` (histogram)
+147: - `kafka_events_consumed_total` (counter) - grouped by event_type
+148: 
+149: ### 4.5 Inventory Worker (port 5005)
+150: **Chức năng:**
+151: - Kafka consumer từ topic `order.events`
+152: - Consumer group: `inventory-workers`
+153: - Idempotent processing qua `processed_events` table
+154: - Pessimistic locking (SELECT FOR UPDATE) cho stock updates
+155: - Audit trail qua `inventory_log` table
+156: - Auto-restock khi stock < threshold (default: 10)
+157: - Graceful shutdown với SIGTERM handler
+158: 
+159: **Custom Metrics:**
+160: - `inventory_updates_total` (counter) - grouped by action
+161: - `inventory_processing_duration_seconds` (histogram)
+162: - `kafka_events_consumed_total` (counter) - grouped by event_type
+163: - `inventory_errors_total` (counter)
+164: - `inventory_restock_total` (counter)
+165: 
+166: ### 4.6 Traffic Generator (port 5003)
+167: **Chức năng:**
+168: - Load testing tool với REST API control
+169: - Scenario templates: normal, flash_sale, browse_heavy, health_check, event_driven
+170: - Configurable rate (req/s) và duration
+171: - Prometheus metrics endpoint: `/metrics`
+172: 
+173: **Custom Metrics:**
+174: - `traffic_gen_running` (gauge)
+175: - `traffic_gen_requests_total` (counter) - grouped by result
+176: 
+177: ### 4.7 Web UI (port 8580)
+178: **Chức năng:**
+179: - Nginx SPA (Single Page Application)
+180: - Reverse proxy đến các services (tránh CORS)
+181: - Dashboard hiển thị orders, products, load testing, events
+182: - Health check: `/health/live`
+183: 
+184: ## 5. Common Patterns & Conventions
+185: 
+186: ### 5.1 Tracing Pattern
+187: Mọi operation quan trọng đều được wrap trong span:
+188: ```python
+189: with tracer.start_as_current_span("operation_name") as span:
+190:     span.set_attribute("key", value)
+191:     span.set_attribute("order.id", order_id)
+192:     # business logic
+193: ```
+194: 
+195: **Rules:**
+196: - Span name phải rõ ràng, mô tả operation (không dùng generic names)
+197: - Luôn set attributes cho context (order_id, product_id, status)
+198: - Mark error spans: `span.set_attribute("error", True)`
+199: - Sử dụng auto-instrumentation cho DB, Redis, HTTP clients
+200: 
+201: ### 5.2 Metrics Pattern
+202: **Counter:** dùng `.add(1, {"label": "value"})`
+203: ```python
+204: orders_counter.add(1, {"status": "completed", "product_id": str(product_id)})
+205: ```
+206: 
+207: **Histogram:** dùng `.record(value, {"label": "value"})`
+208: ```python
+209: order_duration.record(duration, {"status": "completed"})
+210: ```
+211: 
+212: **Labels bắt buộc:**
+213: - Luôn kèm theo context (order_id, status, provider, event_type)
+214: - KHÔNG dùng high-cardinality labels (user_id, request_id, trace_id)
+215: - Convert numbers to strings cho labels: `str(product_id)`
+216: 
+217: ### 5.3 Logging Pattern
+218: **Structured JSON logging** với python-json-logger:
+219: ```python
+220: logger.info("Event description", extra={
+221:     "order_id": order_id,
+222:     "amount": total_amount,
+223:     "trace_id": trace_id  # auto-injected by OTel
+224: })
+225: ```
+226: 
+227: **Rules:**
+228: - Luôn dùng `extra={}` dict để thêm context
+229: - KHÔNG dùng f-string trong log message (dùng structured fields)
+230: - Log levels: DEBUG (dev only), INFO (normal operations), WARNING (degraded), ERROR (failures)
+231: - Auto-injected fields: timestamp, level, trace_id, span_id
+232: 
+233: ### 5.4 Error Response Pattern (RFC 7807)
+234: Dùng helper `problem_response()` từ `shared.errors`:
+235: ```python
+236: return problem_response(
+237:     status_code=404,
+238:     title="Product Not Found",
+239:     detail=f"Product with id {product_id} does not exist",
+240:     instance="/process",
+241:     extra={"order_id": order_id, "product_id": product_id}
+242: )
+243: ```
+244: 
+245: **Response format:**
+246: ```json
+247: {
+248:     "type": "about:blank",
+249:     "title": "Product Not Found",
+250:     "status": 404,
+251:     "detail": "Product with id 999 does not exist",
+252:     "instance": "/process",
+253:     "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+254:     "order_id": "abc123",
+255:     "product_id": 999
+256: }
+257: ```
+258: 
+259: ### 5.5 Health Checks
+260: Mỗi service đều có 2 endpoints chuẩn Kubernetes/ECS:
+261: ```python
+262: health_bp = create_health_blueprint("order-service", checks={
+263:     "db": lambda: db.check_health(),
+264:     "cache": lambda: cache.check_health(),
+265: })
+266: app.register_blueprint(health_bp)
+267: ```
+268: 
+269: **Endpoints:**
+270: - `GET /health/live` - Liveness probe (process alive)
+271: - `GET /health/ready` - Readiness probe (dependencies healthy)
+272: - `GET /health` - Alias của readiness (backward compatibility)
+273: 
+274: **Rules:**
+275: - Liveness: luôn trả 200 nếu process đang chạy
+276: - Readiness: check tất cả dependencies (DB, Redis, Kafka)
+277: - Trả 503 nếu bất kỳ dependency nào unhealthy
+278: 
+279: ### 5.6 Kafka Event Pattern
+280: **Producer:**
+281: ```python
+282: def publish_event(event_type, order_id, data):
+283:     event = {
+284:         "event_type": event_type,
+285:         "event_id": str(uuid.uuid4()),
+286:         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+287:         "order_id": order_id,
+288:         "data": data,
+289:     }
+290:     
+291:     # Inject trace context vào headers
+292:     headers = {}
+293:     inject(headers)
+294:     kafka_headers = [(k, v.encode("utf-8") if isinstance(v, str) else v)
+295:                      for k, v in headers.items()]
+296:     
+297:     producer.produce(
+298:         topic=KAFKA_TOPIC,
+299:         key=order_id.encode("utf-8"),
+300:         value=json.dumps(event).encode("utf-8"),
+301:         headers=kafka_headers,
+302:         callback=kafka_delivery_callback,
+303:     )
+304: ```
+305: 
+306: **Consumer:**
+307: ```python
+308: # Extract trace context từ headers
+309: ctx = extract_trace_context(msg.headers())
+310: token = None
+311: if ctx:
+312:     token = otel_context.attach(ctx)
+313: 
+314: try:
+315:     with tracer.start_as_current_span("kafka.consume") as span:
+316:         # Idempotency check
+317:         if is_event_processed(event_id):
+318:             continue
+319:         
+320:         # Process event
+321:         process_event(event)
+322:         
+323:         # Mark as processed
+324:         mark_event_processed(event_id, event_type)
+325: finally:
+326:     if token:
+327:         otel_context.detach(token)
+328: ```
+329: 
+330: **Rules:**
+331: - Luôn inject/extract trace context qua Kafka headers (W3C traceparent)
+332: - Idempotent processing: check `processed_events` table trước khi process
+333: - Use composite key: `(event_id, processed_by)` để tránh duplicate
+334: - Graceful shutdown: commit offsets trước khi exit
+335: 
+336: ### 5.7 Database Pattern
+337: **Connection Pool:**
+338: ```python
+339: db = DatabasePool(DATABASE_URL, minconn=2, maxconn=10,
+340:                   pool_active_counter=db_pool_active,
+341:                   query_duration_histogram=db_query_duration)
+342: ```
+343: 
+344: **Query với metrics:**
+345: ```python
+346: rows = db.execute(
+347:     "SELECT * FROM products WHERE id = %s",
+348:     (product_id,)
+349: )
+350: ```
+351: 
+352: **Pessimistic Locking:**
+353: ```python
+354: with conn.cursor() as cur:
+355:     cur.execute("SELECT stock FROM products WHERE id = %s FOR UPDATE", (product_id,))
+356:     row = cur.fetchone()
+357:     # Update stock
+358:     cur.execute("UPDATE products SET stock = %s WHERE id = %s", (new_stock, product_id))
+359:     conn.commit()
+360: ```
+361: 
+362: **Rules:**
+363: - Luôn dùng parameterized queries (tránh SQL injection)
+364: - Use connection pooling (SimpleConnectionPool hoặc ThreadedConnectionPool)
+365: - Track connection pool metrics (active, max)
+366: - Track query duration metrics
+367: - Log slow queries (> 100ms)
+368: 
+369: ### 5.8 Cache Pattern (Cache-Aside)
+370: ```python
+371: # Try cache first
+372: products = cache.get("product:catalog")
+373: 
+374: if products is not None:
+375:     span.set_attribute("cache.hit", True)
+376:     return jsonify({"products": products, "source": "cache"})
+377: 
+378: # Cache miss → query DB
+379: span.set_attribute("cache.hit", False)
+380: rows = db.execute("SELECT * FROM products")
+381: products = [dict(row) for row in rows]
+382: 
+383: # Set cache
+384: cache.set("product:catalog", products)
+385: 
+386: return jsonify({"products": products, "source": "database"})
+387: ```
+388: 
+389: **Rules:**
+390: - Always check cache trước khi query DB
+391: - Set cache sau khi query DB (với TTL)
+392: - Invalidate cache khi data thay đổi
+393: - Track cache hit/miss metrics
+394: 
+395: ## 6. Observability Stack
+396: 
+397: ### 6.1 Telemetry Pipeline
+398: ```
+399: All Services ──OTLP gRPC──► OTel Collector ──► Prometheus (metrics)
+400:                                             ──► Tempo (traces)
+401:                                             ──► Loki (logs)
+402:                                             ──► Grafana (dashboards)
+403: 
+404: Blackbox Exporter ──probe /health/live──► Application Services
+405: Prometheus ──scrape──► Blackbox Exporter (probe results)
+406: ```
+407: 
+408: ### 6.2 OTel Collector Configuration
+409: **Receivers:**
+410: - OTLP gRPC (:4317)
+411: - OTLP HTTP (:4318)
+412: 
+413: **Processors:**
+414: - batch (timeout: 5s, send_batch_size: 1000)
+415: - resource (add deployment.environment)
+416: - filter/health (drop health check spans)
+417: - tail_sampling (decision_wait: 10s, num_traces: 50000)
+418: 
+419: **Tail Sampling Policies:**
+420: 1. `keep-errors`: 100% traces với status_code = ERROR
+421: 2. `keep-slow-requests`: 100% traces với duration > 500ms
+422: 3. `random-sample`: 10% traces bình thường
+423: 
+424: **Connectors:**
+425: - spanmetrics: auto-generate RED metrics từ traces
+426:   - Histogram buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s]
+427:   - Dimensions: http.method, http.status_code, http.route
+428: 
+429: **Exporters:**
+430: - Prometheus (:8889) - app metrics (manual)
+431: - Prometheus/spanmetrics (:8890) - auto RED metrics
+432: - Tempo (OTLP gRPC)
+433: - Debug (stdout)
+434: 
+435: ### 6.3 Prometheus Configuration
+436: **Scrape Targets:**
+437: - prometheus:9090 (self-monitoring)
+438: - node-exporter:9100 (host metrics)
+439: - cadvisor:8080 (container metrics)
+440: - alertmanager:9093
+441: - otel-collector:8889 (app metrics)
+442: - otel-collector:8890 (span metrics)
+443: - 192.168.100.57:9100 (remote node-exporter)
+444: - 192.168.100.57:8080 (remote cadvisor)
+445: - 192.168.100.57:5003 (traffic-gen)
+446: - 192.168.100.57:9308 (kafka-exporter)
+447: - Blackbox Exporter (active probing)
+448: 
+449: **Recording Rules:**
+450: - SLI recording rules (availability, latency compliance)
+451: - Service-level aggregations (request rate, error rate, latency)
+452: - Infrastructure aggregations (CPU, memory usage)
+453: 
+454: **Alert Rules:**
+455: - Infrastructure: TargetDown, HighCpuUsage, HighMemoryUsage, HighDiskUsage
+456: - Predictive: DiskWillFillIn4Hours, MemoryWillExhaustIn2Hours
+457: - SLO Burn Rate: APIGatewayFastBurn, PaymentFastBurn, LatencyFastBurn (MWMBR pattern)
+458: - Kafka: KafkaConsumerLagHigh, KafkaConsumerLagCritical, KafkaConsumerGroupDown
+459: - Application: HighErrorRate, HighLatencyP95, ServiceNoTraces
+460: - Health Check: ServiceHealthCheckFailed
+461: 
+462: ### 6.4 SLO/SLI Definitions
+463: **API Gateway:**
+464: - Availability SLO: 99.5% (non-5xx requests)
+465: - Latency SLO: 95% requests < 500ms
+466: 
+467: **Payment Service:**
+468: - Success Rate SLO: 99.0%
+469: 
+470: **MWMBR Alert Thresholds:**
+471: - Fast burn (critical): 14.4x trong 5m + 1h windows → 2% budget consumed trong 1h
+472: - Slow burn (warning): 3x trong 30m + 6h windows → 5% budget consumed trong 6h
+473: 
+474: **Traffic Guards:**
+475: - Tất cả SLO alerts PHẢI có điều kiện: `rate(total_requests[5m]) > 0.1`
+476: - Ngăn phantom alerts khi không có traffic
+477: 
+478: ### 6.5 Loki Configuration
+479: **Storage:** MinIO (S3-compatible), bucket `loki`
+480: **Retention:** 7 days (168h)
+481: **Schema:** TSDB (v13), 24h index period
+482: 
+483: **Alloy Pipeline:**
+484: 1. Discovery (Docker containers + host logs)
+485: 2. Drop health check logs
+486: 3. Parse JSON (extract level, msg, trace_id, span_id)
+487: 4. Parse logfmt (fallback)
+488: 5. Normalize log level (lowercase, warning → warn)
+489: 6. Add labels (detected_level, source, vm)
+490: 7. Drop debug logs (optional)
+491: 8. Push to Loki
+492: 
+493: ### 6.6 Tempo Configuration
+494: **Storage:** MinIO (S3-compatible), bucket `tempo`
+495: **Retention:** 7 days (168h)
+496: **Metrics Generator:**
+497: - Span metrics (RED)
+498: - Service graphs
+499: - Remote write to Prometheus
+500: 
+501: ### 6.7 Grafana Dashboards
+502: **Alerting:**
+503: - alerting-overview: Active alerts, severity, timeline
+504: 
+505: **Application:**
+506: - unified-overview: Service health at a glance (RPS, Error Rate, Latency)
+507: - app-performance: RED metrics per service
+508: - slo-overview: SLO targets, burn rate, error budget
+509: - kafka-overview: Topic throughput, consumer lag
+510: - db-performance: Query duration, connection pool
+511: - cache-performance: Hit rate, latency
+512: 
+513: **Infrastructure:**
+514: - node-exporter: Host metrics (CPU, Memory, Disk, Network)
+515: - docker-containers: Container resource usage
+516: - prometheus-self: Prometheus health
+517: 
+518: **Logging:**
+519: - docker-logs: Container logs
+520: - host-logs: System logs
+521: 
+522: **Tracing:**
+523: - tracing-overview: RED metrics from spans, service map
+524: - trace-investigation: TraceQL queries
+525: 
+526: ### 6.8 Alertmanager Configuration
+527: **Routing:**
+528: - Default: telegram-alerts
+529: - Watchdog: webhook-alerts (continue: false)
+530: - Critical: telegram-alerts (group_wait: 10s, repeat: 1h, continue: true)
+531: - Warning: telegram-alerts (group_wait: 1m, repeat: 4h, continue: true)
+532: - Catch-all: webhook-alerts
+533: 
+534: **Inhibition:**
+535: - Critical suppresses warning trên cùng instance
+536: 
+537: ## 7. Rules for AI
+538: 
+539: ### 7.1 Khi Review Code
+540: **Ưu tiên kiểm tra:**
+541: 1. **Observability completeness:**
+542:    - Span có được đặt tên rõ ràng không?
+543:    - Attributes có đầy đủ context không? (order_id, status, etc.)
+544:    - Metrics có labels phù hợp không? (không high-cardinality)
+545:    - Error handling có log đủ thông tin không?
+546:    - Trace context có được propagate qua Kafka không?
+547: 
+548: 2. **Reliability patterns:**
+549:    - Idempotent processing cho Kafka consumers?
+550:    - Graceful shutdown handler cho workers?
+551:    - Health checks với dependency validation?
+552:    - Error responses theo RFC 7807?
+553:    - Connection pooling cho DB?
+554:    - Cache-aside pattern cho read-heavy operations?
+555: 
+556: 3. **Security:**
+557:    - Parameterized queries (tránh SQL injection)?
+558:    - Không hardcode secrets trong code?
+559:    - Input validation?
+560: 
+561: 4. **Performance:**
+562:    - Resource leaks (DB connections, Kafka producers)?
+563:    - N+1 query problems?
+564:    - Missing indexes?
+565:    - Cache invalidation đúng cách?
+566: 
+567: ### 7.2 Khi Refactor
+568: **Rules:**
+569: - Giữ nguyên observability patterns đã có
+570: - KHÔNG xóa bỏ auto-instrumentation
+571: - Tuân thủ naming convention hiện tại (snake_case cho functions, PascalCase cho classes)
+572: - Khi thêm feature mới: PHẢI thêm metrics và spans tương ứng
+573: - Khi thay đổi DB schema: PHẢI update init.sql và migration plan
+574: - Khi thay đổi Kafka topics: PHẢI update producers và consumers
+575: - Maintain backward compatibility cho API endpoints
+576: 
+577: ### 7.3 Khi Debug
+578: **Workflow:**
+579: 1. **Check Alerting Overview** → Xác định alert nào đang firing
+580: 2. **Check Unified Overview** → Service nào bị ảnh hưởng?
+581: 3. **Check App Performance** → RED metrics chi tiết
+582: 4. **Check Tracing** → Tìm slow traces hoặc error traces
+583: 5. **Check DB/Cache/Kafka** → Bottleneck ở đâu?
+584: 6. **Check Logs (Loki)** → Error messages, stack traces
+585: 
+586: **Common issues:**
+587: - **High latency:** Check DB connection pool, slow queries, cache miss rate
+588: - **High error rate:** Check downstream services, DB connectivity, Kafka producer errors
+589: - **Consumer lag:** Check worker health, processing duration, produce rate
+590: - **Phantom alerts:** Check traffic guard conditions, stale metrics
+591: 
+592: ### 7.4 Khi Thêm Service Mới
+593: **Checklist:**
+594: - [ ] Import và setup: `shared/logging_config`, `shared/otel_setup`, `shared/health`, `shared/errors`
+595: - [ ] Implement health checks với `/health/live` và `/health/ready`
+596: - [ ] Add custom metrics cho operations chính (counters, histograms)
+597: - [ ] Wrap operations trong spans với meaningful names và attributes
+598: - [ ] Use structured JSON logging với `extra={}` dict
+599: - [ ] Implement graceful shutdown handler (SIGTERM)
+600: - [ ] Dockerfile multi-stage (builder + runtime)
+601: - [ ] Security hardening: non-root user, read-only filesystem, cap_drop
+602: - [ ] Health check trong Dockerfile
+603: - [ ] Add service vào docker-compose.yml với depends_on conditions
+604: - [ ] Add service vào Blackbox Exporter targets
+605: - [ ] Add service vào Grafana dashboards
+606: - [ ] Document service trong ARCHITECTURE.md
+607: 
+608: ### 7.5 Khi Thêm Alert Mới
+609: **Checklist:**
+610: - [ ] Alert có meaningful name không?
+611: - [ ] Severity phù hợp (critical/warning)?
+612: - [ ] `for` duration hợp lý (tránh false positives)?
+613: - [ ] Annotations có summary và description rõ ràng?
+614: - [ ] Alert có traffic guard để tránh phantom alerts không?
+615: - [ ] Alert có được add vào Grafana dashboard không?
+616: - [ ] Alert có được document trong INCIDENT_RUNBOOK.md không?
+617: 
+618: ### 7.6 Những Điều KHÔNG NÊN Làm
+619: - ❌ KHÔNG hardcode credentials trong production code (dùng environment variables)
+620: - ❌ KHÔNG xóa bỏ OpenTelemetry instrumentation
+621: - ❌ KHÔNG log sensitive data (password, tokens, PII)
+622: - ❌ KHÔNG dùng `print()` - chỉ dùng logger
+623: - ❌ KHÔNG swallow exceptions mà không log
+624: - ❌ KHÔNG dùng high-cardinality labels trong metrics (user_id, request_id)
+625: - ❌ KHÔNG dùng f-string trong log messages (dùng structured fields)
+626: - ❌ KHÔNG bỏ qua idempotency check trong Kafka consumers
+627: - ❌ KHÔNG bỏ qua graceful shutdown handler trong workers
+628: - ❌ KHÔNG tạo alert mà không có traffic guard (cho low-traffic services)
+629: 
+630: ### 7.7 Khi Tham Khảo Tài Liệu Lab
+631: Repo có bộ tài liệu học tập production-grade. Khi trả lời câu hỏi về:
+632: - **Incident response:** Tham khảo `INCIDENT_RUNBOOK.md` (24 alerts với triage steps)
+633: - **Dashboard reading:** Tham khảo `INCIDENT_SIMULATION_GUIDE.md` (12 experiments với Incident Flow)
+634: - **Component internals:** Tham khảo `BREAK_TEST_RECOVERY.md` (28 exercises Break/Test/Recovery)
+635: - **Post-mortem writing:** Tham khảo `post-mortems/00-TEMPLATE.md` và `01-GOLDEN-EXAMPLE-DB-Saturation.md`
+636: - **Expansion planning:** Tham khảo `EXPANSION_PLAN.md` (kế hoạch 6→10 services với Saga, CQRS, Circuit Breaker)
+637: - **Interview prep:** Tham khảo `devops-question.md` (Junior-Mid) và `devops-question-senior.md` (Senior)
+638: 
+639: ### 7.8 Production-Grade Mindset
+640: Khi đưa ra giải pháp, LUÔN cân nhắc:
+641: 1. **Team size:** Giải pháp này khả thi cho team 2 người không? 10 người không?
+642: 2. **Blast radius:** Nếu giải pháp fail, ảnh hưởng bao nhiêu services?
+643: 3. **Rollback plan:** Có thể revert trong < 5 phút không?
+644: 4. **Observability:** Sau khi deploy, làm sao biết nó hoạt động đúng?
+645: 5. **Operational burden:** Giải pháp này thêm bao nhiêu toil cho on-call engineer?
+646: 
+647: ## 8. Testing Conventions
+648: 
+649: ### Unit Tests
+650: **Framework:** pytest
+651: **Location:** `test_app.py` trong mỗi service directory
+652: 
+653: **Mocking:**
+654: ```python
+655: @pytest.fixture
+656: def client():
+657:     with patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"), \
+658:          patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"):
+659:         import importlib
+660:         import app as app_module
+661:         importlib.reload(app_module)
+662:         
+663:         app_module.app.config['TESTING'] = True
+664:         with app_module.app.test_client() as test_client:
+665:             yield test_client, app_module
+666: ```
+667: 
+668: **Naming:**
+669: - Test files: `test_*.py`
+670: - Test functions: `test_should_[expected]_when_[condition]` hoặc `test_[feature]_[scenario]`
+671: 
+672: **Coverage:**
+673: - Health endpoints
+674: - Happy path cho main operations
+675: - Error handling (downstream failures, DB errors, etc.)
+676: - Edge cases (missing data, invalid input)
+677: 
+678: ### Integration Tests
+679: **Framework:** testcontainers (nếu cần)
+680: **Scope:**
+681: - DB operations với real PostgreSQL
+682: - Redis operations với real Redis
+683: - Kafka produce/consume với real Kafka
+684: 
+685: ### Load Testing
+686: **Tool:** Traffic Generator service (port 5003)
+687: **Scenarios:**
+688: - normal: Balanced user activity
+689: - flash_sale: High-volume ordering
+690: - browse_heavy: Mostly browsing
+691: - event_driven: Orders + verify Kafka processing
+692: 
+693: **API:**
+694: ```bash
+695: # Start traffic
+696: curl -X POST http://localhost:5003/start \
+697:   -H "Content-Type: application/json" \
+698:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+699: 
+700: # Stop traffic
+701: curl -X POST http://localhost:5003/stop
+702: 
+703: # Check status
+704: curl http://localhost:5003/status
+705: ```
+706: 
+707: ## 9. Deployment & Operations
+708: 
+709: ### Development
+710: ```bash
+711: # Start applications VM
+712: cd applications-vm
+713: docker compose up -d
+714: 
+715: # Start observability VM
+716: cd observability-vm/phase1-metrics
+717: docker compose up -d
+718: 
+719: cd ../phase2-logging
+720: docker compose up -d
+721: 
+722: cd ../phase3-tracing
+723: docker compose up -d
+724: ```
+725: 
+726: ### Production Considerations
+727: **Gunicorn Configuration:**
+728: ```bash
+729: gunicorn \
+730:   --workers 2 \
+731:   --threads 8 \
+732:   --worker-class gthread \
+733:   --bind 0.0.0.0:5001 \
+734:   --access-logfile - \
+735:   --timeout 30 \
+736:   --worker-tmp-dir /dev/shm \
+737:   app:app
+738: ```
+739: 
+740: **Resource Limits:**
+741: ```yaml
+742: deploy:
+743:   resources:
+744:     limits:
+745:       cpus: '1.0'
+746:       memory: 512M
+747:     reservations:
+748:       cpus: '0.25'
+749:       memory: 128M
+750: ```
+751: 
+752: **Security Hardening:**
+753: ```yaml
+754: read_only: true
+755: tmpfs:
+756:   - /tmp
+757: cap_drop:
+758:   - ALL
+759: security_opt:
+760:   - no-new-privileges:true
+761: ```
+762: 
+763: ### Monitoring & Alerting
+764: **Dashboards to check:**
+765: 1. Alerting Overview - Active alerts
+766: 2. Unified Overview - Service health
+767: 3. App Performance - RED metrics
+768: 4. SLO Overview - Burn rate, error budget
+769: 5. Infrastructure - Resource usage
+770: 
+771: **Alert Response:**
+772: - Follow INCIDENT_RUNBOOK.md for each alert type
+773: - Use INCIDENT_SIMULATION_GUIDE.md for practice
+774: - Write post-mortem using post-mortems/00-TEMPLATE.md
+775: 
+776: ### Backup & Restore
+777: **PostgreSQL:**
+778: ```bash
+779: # Backup
+780: docker exec postgres pg_dump -U app -d orders > backup.sql
+781: 
+782: # Restore
+783: docker exec -i postgres psql -U app -d orders < backup.sql
+784: ```
+785: 
+786: **Kafka:**
+787: - Topic data: Retention policy (default: 7 days)
+788: - Consumer offsets: Stored in `__consumer_offsets` topic
+789: 
+790: **Grafana:**
+791: - Dashboards: Stored in `grafana/dashboards/` (as code)
+792: - Datasources: Stored in `grafana/provisioning/datasources/`
+793: 
+794: ### Log Rotation
+795: ```yaml
+796: logging:
+797:   driver: json-file
+798:   options:
+799:     max-size: "10m"
+800:     max-file: "3"
+801: ```
+802: 
+803: ## 10. Expansion Plan (Future Services)
+804: 
+805: **Planned Services:**
+806: 1. **Auth Service (port 5006)** - JWT/RBAC, auth_db (isolated)
+807: 2. **Shipping Service (port 5007)** - Shipping management, shipping_db (isolated)
+808: 3. **Shipping Worker (port 5008)** - Saga orchestrator, DLQ handling
+809: 4. **Search Service (port 5009)** - OpenSearch integration, CQRS pattern
+810: 
+811: **New Patterns:**
+812: - Saga Orchestration (distributed transactions)
+813: - Circuit Breaker (failure isolation)
+814: - Rate Limiting (Redis-based)
+815: - TLS Termination (HTTPS)
+816: - Secrets Management (Docker secrets)
+817: - Network Segmentation (Docker networks per tier)
+818: 
+819: **Database Strategy:**
+820: - Hybrid approach: 1 PostgreSQL instance, multiple databases
+821: - app_db: Order, Payment, Inventory, Notification (shared)
+822: - auth_db: Auth Service (isolated for security)
+823: - shipping_db: Shipping Service + Worker (isolated for lifecycle)
+824: - OpenSearch: Search Service (separate engine)
+825: 
+826: Xem chi tiết trong EXPANSION_PLAN.md
+827: 
+828: ## 11. Questions to Ask Before Making Changes
+829: 
+830: Trước khi đề xuất thay đổi lớn, hãy hỏi:
+831: 
+832: 1. **Observability Impact:**
+833:    - Thay đổi này có ảnh hưởng đến metrics/logs/traces không?
+834:    - Có cần thêm metrics/spans mới không?
+835:    - Có cần update dashboards không?
+836:    - Có cần thêm alert rules không?
+837: 
+838: 2. **Reliability Impact:**
+839:    - Có ảnh hưởng đến idempotency không?
+840:    - Có cần thêm circuit breaker không?
+841:    - Có ảnh hưởng đến graceful shutdown không?
+842:    - Có cần update health checks không?
+843: 
+844: 3. **Backward Compatibility:**
+845:    - API endpoints có thay đổi không?
+846:    - Kafka message format có thay đổi không?
+847:    - DB schema có thay đổi không?
+848:    - Consumers có cần update không?
+849: 
+850: 4. **Performance Impact:**
+851:    - Có ảnh hưởng đến latency không?
+852:    - Có cần thêm caching không?
+853:    - Có ảnh hưởng đến DB connection pool không?
+854:    - Có cần optimize queries không?
+855: 
+856: 5. **Operational Impact:**
+857:    - Có cần update runbook không?
+858:    - Có cần update simulation guide không?
+859:    - Có cần thêm chaos experiments không?
+860:    - Có ảnh hưởng đến backup/restore không?
+861: 
+862: ## 12. References
+863: 
+864: **Internal Documentation:**
+865: - ARCHITECTURE.md - Kiến trúc chi tiết
+866: - INCIDENT_RUNBOOK.md - Runbook xử lý 24 loại alert
+867: - INCIDENT_SIMULATION_GUIDE.md - 12 experiments giả lập incident
+868: - BREAK_TEST_RECOVERY.md - 28 exercises break/test/recovery
+869: - EXPANSION_PLAN.md - Kế hoạch mở rộng lên 10 services
+870: - devops-question.md - 45 câu hỏi phỏng vấn (Junior-Mid)
+871: - devops-question-senior.md - 31 câu hỏi phỏng vấn (Senior)
+872: - post-mortems/ - Blameless post-mortem templates
+873: 
+874: **External References:**
+875: - OpenTelemetry Documentation: https://opentelemetry.io/docs/
+876: - Prometheus Documentation: https://prometheus.io/docs/
+877: - Grafana Documentation: https://grafana.com/docs/
+878: - Kafka Documentation: https://kafka.apache.org/documentation/
+879: - SRE Book: https://sre.google/sre-book/table-of-contents/
+880: - RFC 7807 (Problem Details): https://datatracker.ietf.org/doc/html/rfc7807
+</file>
+
 <file path="repomix.config.json">
  1: {
  2:   "$schema": "https://repomix.com/schemas/latest/schema.json",
@@ -20455,48 +21341,71 @@ This section contains the contents of the repository's files.
  8:     "style": "xml",
  9:     "parsableStyle": false,
 10:     "compress": false,
-11:     "fileSummary": true,
-12:     "directoryStructure": true,
-13:     "files": true,
-14:     "removeComments": false,
-15:     "removeEmptyLines": false,
-16:     "topFilesLength": 20,
-17:     "showLineNumbers": true,
-18:     "includeEmptyDirectories": false,
-19:     "truncateBase64": true,
-20:     "tokenCountTree": 50000,
-21:     "git": {
-22:       "sortByChanges": true,
-23:       "sortByChangesMaxCommits": 50,
-24:       "includeDiffs": false,
-25:       "includeLogs": true,
-26:       "includeLogsCount": 20
-27:     }
-28:   },
-29:   "include": ["**/*"],
-30:   "ignore": {
-31:     "useGitignore": true,
-32:     "useDefaultPatterns": true,
-33:     "customPatterns": [      "*.log",
-34:       "*.tmp",
-35:       "coverage/",
-36:       "__tests__/",
-37:       "*.test.ts",
-38:       "*.spec.ts"]
-39:   },
-40:   "security": {
-41:     "enableSecurityCheck": true
-42:   },
-43:   "tokenCount": {
-44:     "encoding": "o200k_base"
-45:   }
-46: }
+11:     "instructionFilePath": "repomix-instruction.md",
+12:     "fileSummary": true,
+13:     "directoryStructure": true,
+14:     "files": true,
+15:     "removeComments": false,
+16:     "removeEmptyLines": false,
+17:     "topFilesLength": 20,
+18:     "showLineNumbers": true,
+19:     "includeEmptyDirectories": false,
+20:     "truncateBase64": true,
+21:     "tokenCountTree": 50000,
+22:     "git": {
+23:       "sortByChanges": true,
+24:       "sortByChangesMaxCommits": 50,
+25:       "includeDiffs": false,
+26:       "includeLogs": true,
+27:       "includeLogsCount": 20
+28:     }
+29:   },
+30:   "include": ["**/*"],
+31:   "ignore": {
+32:     "useGitignore": true,
+33:     "useDefaultPatterns": true,
+34:     "customPatterns": [      "*.log",
+35:       "*.tmp",
+36:       "coverage/",
+37:       "__tests__/",
+38:       "*.test.ts",
+39:       "*.spec.ts"]
+40:   },
+41:   "security": {
+42:     "enableSecurityCheck": true
+43:   },
+44:   "tokenCount": {
+45:     "encoding": "o200k_base"
+46:   }
+47: }
 </file>
 
 </files>
 
 
 <git_logs>
+<git_log_commit>
+<date>2026-05-24 01:07:12 +0000</date>
+<message>bypass security check for repomix</message>
+<files>
+on-premises/.repomixignore
+on-premises/applications-vm/applications/docker-compose.yml
+on-premises/applications-vm/applications/inventory-worker/app.py
+on-premises/applications-vm/applications/notification-worker/app.py
+on-premises/applications-vm/applications/order-service/app.py
+on-premises/applications-vm/applications/order-service/test_app.py
+on-premises/applications-vm/applications/sample-app/.dockerignore
+on-premises/applications-vm/applications/sample-app/Dockerfile
+on-premises/applications-vm/applications/sample-app/api_gateway.py
+on-premises/applications-vm/applications/sample-app/docker-compose.yml
+on-premises/applications-vm/applications/sample-app/order_service.py
+on-premises/applications-vm/applications/sample-app/payment_service.py
+on-premises/applications-vm/applications/sample-app/requirements.txt
+on-premises/applications-vm/applications/sample-app/traffic_gen.py
+on-premises/repomix-output.xml
+on-premises/repomix.config.json
+</files>
+</git_log_commit>
 <git_log_commit>
 <date>2026-05-23 08:19:20 +0000</date>
 <message>modify promql</message>
@@ -20649,13 +21558,887 @@ on-premises/devops-question-senior.md
 on-premises/devops-question.md
 </files>
 </git_log_commit>
-<git_log_commit>
-<date>2026-05-19 03:29:18 +0000</date>
-<message>bugfix(monitoring) - add rate panels - fix phantom alert</message>
-<files>
-on-premises/OBSERVABILITY_LEARNING_GUIDE.md
-on-premises/observability-vm/phase1-metrics/grafana/dashboards/Application/app-performance.json
-on-premises/observability-vm/phase1-metrics/prometheus/alert_rules.yml
-</files>
-</git_log_commit>
 </git_logs>
+
+<instruction>
+# Project Instructions for AI
+
+## 1. Project Context & Philosophy
+
+**Tên dự án:** Observability Lab — Production-Grade E-commerce Microservices  
+**Loại dự án:** Lab/Training environment với tiêu chuẩn production-grade  
+**Mục đích chính:**
+- Thực hành triển khai observability trong kiến trúc Microservices với team size khác nhau (solo → 10+ người)
+- Demo các patterns production-grade: distributed tracing, custom metrics, SLO/SLI, incident management
+- Nghiên cứu event-driven architecture với Kafka
+- Luyện tập incident response với runbook, simulation guide, và post-mortem
+
+**Triết lý:**
+- Đây KHÔNG phải toy project — mọi aspect đều hướng đến production-grade
+- Docker Compose được sử dụng như production orchestrator (không phải demo tool)
+- Tất cả concepts (TLS, secrets, network segmentation, backup, CI, graceful shutdown) đều production-grade
+- Chỉ khác Kubernetes ở deployment tooling, không khác ở operational practices
+
+**Ngôn ngữ trả lời:** Tiếng Việt
+
+## 2. Repository Structure
+
+```
+on-premises/
+├── applications-vm/                    # Business logic + Data layer (60GB RAM)
+│   ├── applications/                   # Source code microservices
+│   │   ├── api-gateway/               # BFF pattern, rate limiting, JWT verification
+│   │   ├── order-service/             # Order processing, Kafka producer, cache-aside
+│   │   ├── payment-service/           # Payment processing with simulated latency/errors
+│   │   ├── notification-worker/       # Kafka consumer, idempotent processing
+│   │   ├── inventory-worker/          # Kafka consumer, stock management, auto-restock
+│   │   ├── traffic-gen/               # Load testing tool with scenario templates
+│   │   ├── web-ui/                    # Nginx SPA with reverse proxy
+│   │   └── shared/                    # Shared modules (db_utils, otel_setup, logging, health, errors, kafka_utils)
+│   ├── agents/                        # Monitoring agents (Alloy for log collection)
+│   └── docker-compose.yml             # Orchestration cho applications + infrastructure
+│
+├── observability-vm/                   # Monitoring stack (32GB RAM)
+│   ├── phase1-metrics/                # Prometheus + Grafana + Node Exporter + cAdvisor + Alertmanager + Blackbox
+│   ├── phase2-logging/                # Loki + Alloy
+│   ├── phase3-tracing/                # Tempo + OTel Collector
+│   ├── storage/                       # MinIO (S3-compatible) cho Loki chunks + Tempo blocks
+│   └── scripts/                       # Utility scripts (annotate.sh, deploy.sh)
+│
+├── post-mortems/                       # Blameless post-mortem templates và examples
+│   ├── 00-TEMPLATE.md                 # Template chuẩn cho post-mortem
+│   └── 01-GOLDEN-EXAMPLE-DB-Saturation.md  # Ví dụ mẫu
+│
+├── ARCHITECTURE.md                     # Kiến trúc chi tiết, data flows, DB schema
+├── INCIDENT_RUNBOOK.md                 # Runbook xử lý 24 loại alert
+├── INCIDENT_SIMULATION_GUIDE.md        # 12 experiments giả lập incident
+├── BREAK_TEST_RECOVERY.md              # 28 exercises break/test/recovery
+├── EXPANSION_PLAN.md                   # Kế hoạch mở rộng lên 10 services
+├── devops-question.md                  # 45 câu hỏi phỏng vấn (Junior-Mid)
+└── devops-question-senior.md           # 31 câu hỏi phỏng vấn (Senior)
+```
+
+## 3. Tech Stack Overview
+
+### Core Technologies
+- **Language:** Python 3.12 (Flask), Node.js (Express cho web-ui)
+- **Database:** PostgreSQL 16 (persistence, connection pooling)
+- **Cache:** Redis 7 (cache-aside pattern, TTL 60s)
+- **Message Broker:** Apache Kafka 3.7 (KRaft mode, no ZooKeeper)
+- **Web Server:** Gunicorn (gthread workers), Nginx (reverse proxy)
+
+### Observability Stack
+- **SDK:** OpenTelemetry Python SDK 1.33.*
+- **Instrumentations:**
+  - Flask (auto)
+  - Requests (auto - HTTP client)
+  - Psycopg2 (auto - PostgreSQL)
+  - Redis (auto)
+  - Logging (auto - structured JSON)
+- **Collector:** OTel Collector 0.120.0 (tail-based sampling, spanmetrics connector)
+- **Exporter:** OTLP over gRPC (:4317) và HTTP (:4318)
+- **Backends:**
+  - Prometheus v3.10.0 (metrics, recording rules, alerting rules)
+  - Loki 3.3.2 (logs, LogQL)
+  - Tempo 2.7.0 (traces, TraceQL)
+  - Grafana 12.3.3 (dashboards, correlation)
+  - Alertmanager v0.28.1 (alert routing → Telegram)
+  - Blackbox Exporter v0.25.0 (active health probing)
+
+### Infrastructure
+- **Containerization:** Docker (multi-stage builds, security hardened)
+- **Orchestration:** Docker Compose (external networks, health checks, depends_on with conditions)
+- **Storage:** MinIO (S3-compatible) cho Loki/Tempo long-term storage
+- **Monitoring Agents:** Grafana Alloy (log collection từ Docker + host)
+
+## 4. Services Overview
+
+### 4.1 API Gateway (port 5000)
+**Chức năng:**
+- BFF (Backend for Frontend) pattern
+- Routes requests đến backend services
+- Error propagation với RFC 7807 format
+- Health checks: `/health/live`, `/health/ready`
+
+**Custom Metrics:**
+- `api_gateway_requests_total` (counter) - grouped by endpoint, status
+- `api_gateway_request_duration_seconds` (histogram)
+
+### 4.2 Order Service (port 5001)
+**Chức năng:**
+- Xử lý đơn hàng với PostgreSQL persistence
+- Cache-aside pattern với Redis (product catalog, TTL 60s)
+- Publish events sang Kafka: `order.created`, `order.payment_completed`, `order.payment_failed`, `stock.depleted`
+- Gọi HTTP sang Payment Service để thanh toán
+- Health checks với dependency validation (DB, Redis)
+
+**Custom Metrics:**
+- `orders_created_total` (counter) - grouped by status
+- `order_processing_duration_seconds` (histogram)
+- `db_query_duration_seconds` (histogram)
+- `db_connection_pool_active` (up-down counter)
+- `db_connection_pool_max` (observable gauge)
+- `cache_operations_total` (counter) - grouped by operation, result
+- `cache_operation_duration_seconds` (histogram)
+- `kafka_messages_produced_total` (counter)
+- `inventory_checks_total` (counter) - grouped by result
+
+### 4.3 Payment Service (port 5002)
+**Chức năng:**
+- Xử lý thanh toán giả lập (simulate)
+- Random delays để demo slow gateway (20% chance)
+- Random failures (10% chance)
+- Support 3 providers: stripe, paypal, square
+- Stateless (không có DB riêng)
+
+**Custom Metrics:**
+- `payments_total` (counter) - grouped by status, provider
+- `payment_amount_dollars` (histogram)
+- `payment_gateway_duration_seconds` (histogram)
+
+### 4.4 Notification Worker (port 5004)
+**Chức năng:**
+- Kafka consumer từ topic `order.events`
+- Consumer group: `notification-workers`
+- Idempotent processing qua `processed_events` table
+- Gửi notifications (simulate) và persist vào DB
+- Graceful shutdown với SIGTERM handler
+
+**Custom Metrics:**
+- `notifications_sent_total` (counter) - grouped by type
+- `notification_processing_duration_seconds` (histogram)
+- `kafka_events_consumed_total` (counter) - grouped by event_type
+
+### 4.5 Inventory Worker (port 5005)
+**Chức năng:**
+- Kafka consumer từ topic `order.events`
+- Consumer group: `inventory-workers`
+- Idempotent processing qua `processed_events` table
+- Pessimistic locking (SELECT FOR UPDATE) cho stock updates
+- Audit trail qua `inventory_log` table
+- Auto-restock khi stock < threshold (default: 10)
+- Graceful shutdown với SIGTERM handler
+
+**Custom Metrics:**
+- `inventory_updates_total` (counter) - grouped by action
+- `inventory_processing_duration_seconds` (histogram)
+- `kafka_events_consumed_total` (counter) - grouped by event_type
+- `inventory_errors_total` (counter)
+- `inventory_restock_total` (counter)
+
+### 4.6 Traffic Generator (port 5003)
+**Chức năng:**
+- Load testing tool với REST API control
+- Scenario templates: normal, flash_sale, browse_heavy, health_check, event_driven
+- Configurable rate (req/s) và duration
+- Prometheus metrics endpoint: `/metrics`
+
+**Custom Metrics:**
+- `traffic_gen_running` (gauge)
+- `traffic_gen_requests_total` (counter) - grouped by result
+
+### 4.7 Web UI (port 8580)
+**Chức năng:**
+- Nginx SPA (Single Page Application)
+- Reverse proxy đến các services (tránh CORS)
+- Dashboard hiển thị orders, products, load testing, events
+- Health check: `/health/live`
+
+## 5. Common Patterns & Conventions
+
+### 5.1 Tracing Pattern
+Mọi operation quan trọng đều được wrap trong span:
+```python
+with tracer.start_as_current_span("operation_name") as span:
+    span.set_attribute("key", value)
+    span.set_attribute("order.id", order_id)
+    # business logic
+```
+
+**Rules:**
+- Span name phải rõ ràng, mô tả operation (không dùng generic names)
+- Luôn set attributes cho context (order_id, product_id, status)
+- Mark error spans: `span.set_attribute("error", True)`
+- Sử dụng auto-instrumentation cho DB, Redis, HTTP clients
+
+### 5.2 Metrics Pattern
+**Counter:** dùng `.add(1, {"label": "value"})`
+```python
+orders_counter.add(1, {"status": "completed", "product_id": str(product_id)})
+```
+
+**Histogram:** dùng `.record(value, {"label": "value"})`
+```python
+order_duration.record(duration, {"status": "completed"})
+```
+
+**Labels bắt buộc:**
+- Luôn kèm theo context (order_id, status, provider, event_type)
+- KHÔNG dùng high-cardinality labels (user_id, request_id, trace_id)
+- Convert numbers to strings cho labels: `str(product_id)`
+
+### 5.3 Logging Pattern
+**Structured JSON logging** với python-json-logger:
+```python
+logger.info("Event description", extra={
+    "order_id": order_id,
+    "amount": total_amount,
+    "trace_id": trace_id  # auto-injected by OTel
+})
+```
+
+**Rules:**
+- Luôn dùng `extra={}` dict để thêm context
+- KHÔNG dùng f-string trong log message (dùng structured fields)
+- Log levels: DEBUG (dev only), INFO (normal operations), WARNING (degraded), ERROR (failures)
+- Auto-injected fields: timestamp, level, trace_id, span_id
+
+### 5.4 Error Response Pattern (RFC 7807)
+Dùng helper `problem_response()` từ `shared.errors`:
+```python
+return problem_response(
+    status_code=404,
+    title="Product Not Found",
+    detail=f"Product with id {product_id} does not exist",
+    instance="/process",
+    extra={"order_id": order_id, "product_id": product_id}
+)
+```
+
+**Response format:**
+```json
+{
+    "type": "about:blank",
+    "title": "Product Not Found",
+    "status": 404,
+    "detail": "Product with id 999 does not exist",
+    "instance": "/process",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "order_id": "abc123",
+    "product_id": 999
+}
+```
+
+### 5.5 Health Checks
+Mỗi service đều có 2 endpoints chuẩn Kubernetes/ECS:
+```python
+health_bp = create_health_blueprint("order-service", checks={
+    "db": lambda: db.check_health(),
+    "cache": lambda: cache.check_health(),
+})
+app.register_blueprint(health_bp)
+```
+
+**Endpoints:**
+- `GET /health/live` - Liveness probe (process alive)
+- `GET /health/ready` - Readiness probe (dependencies healthy)
+- `GET /health` - Alias của readiness (backward compatibility)
+
+**Rules:**
+- Liveness: luôn trả 200 nếu process đang chạy
+- Readiness: check tất cả dependencies (DB, Redis, Kafka)
+- Trả 503 nếu bất kỳ dependency nào unhealthy
+
+### 5.6 Kafka Event Pattern
+**Producer:**
+```python
+def publish_event(event_type, order_id, data):
+    event = {
+        "event_type": event_type,
+        "event_id": str(uuid.uuid4()),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "order_id": order_id,
+        "data": data,
+    }
+    
+    # Inject trace context vào headers
+    headers = {}
+    inject(headers)
+    kafka_headers = [(k, v.encode("utf-8") if isinstance(v, str) else v)
+                     for k, v in headers.items()]
+    
+    producer.produce(
+        topic=KAFKA_TOPIC,
+        key=order_id.encode("utf-8"),
+        value=json.dumps(event).encode("utf-8"),
+        headers=kafka_headers,
+        callback=kafka_delivery_callback,
+    )
+```
+
+**Consumer:**
+```python
+# Extract trace context từ headers
+ctx = extract_trace_context(msg.headers())
+token = None
+if ctx:
+    token = otel_context.attach(ctx)
+
+try:
+    with tracer.start_as_current_span("kafka.consume") as span:
+        # Idempotency check
+        if is_event_processed(event_id):
+            continue
+        
+        # Process event
+        process_event(event)
+        
+        # Mark as processed
+        mark_event_processed(event_id, event_type)
+finally:
+    if token:
+        otel_context.detach(token)
+```
+
+**Rules:**
+- Luôn inject/extract trace context qua Kafka headers (W3C traceparent)
+- Idempotent processing: check `processed_events` table trước khi process
+- Use composite key: `(event_id, processed_by)` để tránh duplicate
+- Graceful shutdown: commit offsets trước khi exit
+
+### 5.7 Database Pattern
+**Connection Pool:**
+```python
+db = DatabasePool(DATABASE_URL, minconn=2, maxconn=10,
+                  pool_active_counter=db_pool_active,
+                  query_duration_histogram=db_query_duration)
+```
+
+**Query với metrics:**
+```python
+rows = db.execute(
+    "SELECT * FROM products WHERE id = %s",
+    (product_id,)
+)
+```
+
+**Pessimistic Locking:**
+```python
+with conn.cursor() as cur:
+    cur.execute("SELECT stock FROM products WHERE id = %s FOR UPDATE", (product_id,))
+    row = cur.fetchone()
+    # Update stock
+    cur.execute("UPDATE products SET stock = %s WHERE id = %s", (new_stock, product_id))
+    conn.commit()
+```
+
+**Rules:**
+- Luôn dùng parameterized queries (tránh SQL injection)
+- Use connection pooling (SimpleConnectionPool hoặc ThreadedConnectionPool)
+- Track connection pool metrics (active, max)
+- Track query duration metrics
+- Log slow queries (> 100ms)
+
+### 5.8 Cache Pattern (Cache-Aside)
+```python
+# Try cache first
+products = cache.get("product:catalog")
+
+if products is not None:
+    span.set_attribute("cache.hit", True)
+    return jsonify({"products": products, "source": "cache"})
+
+# Cache miss → query DB
+span.set_attribute("cache.hit", False)
+rows = db.execute("SELECT * FROM products")
+products = [dict(row) for row in rows]
+
+# Set cache
+cache.set("product:catalog", products)
+
+return jsonify({"products": products, "source": "database"})
+```
+
+**Rules:**
+- Always check cache trước khi query DB
+- Set cache sau khi query DB (với TTL)
+- Invalidate cache khi data thay đổi
+- Track cache hit/miss metrics
+
+## 6. Observability Stack
+
+### 6.1 Telemetry Pipeline
+```
+All Services ──OTLP gRPC──► OTel Collector ──► Prometheus (metrics)
+                                            ──► Tempo (traces)
+                                            ──► Loki (logs)
+                                            ──► Grafana (dashboards)
+
+Blackbox Exporter ──probe /health/live──► Application Services
+Prometheus ──scrape──► Blackbox Exporter (probe results)
+```
+
+### 6.2 OTel Collector Configuration
+**Receivers:**
+- OTLP gRPC (:4317)
+- OTLP HTTP (:4318)
+
+**Processors:**
+- batch (timeout: 5s, send_batch_size: 1000)
+- resource (add deployment.environment)
+- filter/health (drop health check spans)
+- tail_sampling (decision_wait: 10s, num_traces: 50000)
+
+**Tail Sampling Policies:**
+1. `keep-errors`: 100% traces với status_code = ERROR
+2. `keep-slow-requests`: 100% traces với duration > 500ms
+3. `random-sample`: 10% traces bình thường
+
+**Connectors:**
+- spanmetrics: auto-generate RED metrics từ traces
+  - Histogram buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s]
+  - Dimensions: http.method, http.status_code, http.route
+
+**Exporters:**
+- Prometheus (:8889) - app metrics (manual)
+- Prometheus/spanmetrics (:8890) - auto RED metrics
+- Tempo (OTLP gRPC)
+- Debug (stdout)
+
+### 6.3 Prometheus Configuration
+**Scrape Targets:**
+- prometheus:9090 (self-monitoring)
+- node-exporter:9100 (host metrics)
+- cadvisor:8080 (container metrics)
+- alertmanager:9093
+- otel-collector:8889 (app metrics)
+- otel-collector:8890 (span metrics)
+- 192.168.100.57:9100 (remote node-exporter)
+- 192.168.100.57:8080 (remote cadvisor)
+- 192.168.100.57:5003 (traffic-gen)
+- 192.168.100.57:9308 (kafka-exporter)
+- Blackbox Exporter (active probing)
+
+**Recording Rules:**
+- SLI recording rules (availability, latency compliance)
+- Service-level aggregations (request rate, error rate, latency)
+- Infrastructure aggregations (CPU, memory usage)
+
+**Alert Rules:**
+- Infrastructure: TargetDown, HighCpuUsage, HighMemoryUsage, HighDiskUsage
+- Predictive: DiskWillFillIn4Hours, MemoryWillExhaustIn2Hours
+- SLO Burn Rate: APIGatewayFastBurn, PaymentFastBurn, LatencyFastBurn (MWMBR pattern)
+- Kafka: KafkaConsumerLagHigh, KafkaConsumerLagCritical, KafkaConsumerGroupDown
+- Application: HighErrorRate, HighLatencyP95, ServiceNoTraces
+- Health Check: ServiceHealthCheckFailed
+
+### 6.4 SLO/SLI Definitions
+**API Gateway:**
+- Availability SLO: 99.5% (non-5xx requests)
+- Latency SLO: 95% requests < 500ms
+
+**Payment Service:**
+- Success Rate SLO: 99.0%
+
+**MWMBR Alert Thresholds:**
+- Fast burn (critical): 14.4x trong 5m + 1h windows → 2% budget consumed trong 1h
+- Slow burn (warning): 3x trong 30m + 6h windows → 5% budget consumed trong 6h
+
+**Traffic Guards:**
+- Tất cả SLO alerts PHẢI có điều kiện: `rate(total_requests[5m]) > 0.1`
+- Ngăn phantom alerts khi không có traffic
+
+### 6.5 Loki Configuration
+**Storage:** MinIO (S3-compatible), bucket `loki`
+**Retention:** 7 days (168h)
+**Schema:** TSDB (v13), 24h index period
+
+**Alloy Pipeline:**
+1. Discovery (Docker containers + host logs)
+2. Drop health check logs
+3. Parse JSON (extract level, msg, trace_id, span_id)
+4. Parse logfmt (fallback)
+5. Normalize log level (lowercase, warning → warn)
+6. Add labels (detected_level, source, vm)
+7. Drop debug logs (optional)
+8. Push to Loki
+
+### 6.6 Tempo Configuration
+**Storage:** MinIO (S3-compatible), bucket `tempo`
+**Retention:** 7 days (168h)
+**Metrics Generator:**
+- Span metrics (RED)
+- Service graphs
+- Remote write to Prometheus
+
+### 6.7 Grafana Dashboards
+**Alerting:**
+- alerting-overview: Active alerts, severity, timeline
+
+**Application:**
+- unified-overview: Service health at a glance (RPS, Error Rate, Latency)
+- app-performance: RED metrics per service
+- slo-overview: SLO targets, burn rate, error budget
+- kafka-overview: Topic throughput, consumer lag
+- db-performance: Query duration, connection pool
+- cache-performance: Hit rate, latency
+
+**Infrastructure:**
+- node-exporter: Host metrics (CPU, Memory, Disk, Network)
+- docker-containers: Container resource usage
+- prometheus-self: Prometheus health
+
+**Logging:**
+- docker-logs: Container logs
+- host-logs: System logs
+
+**Tracing:**
+- tracing-overview: RED metrics from spans, service map
+- trace-investigation: TraceQL queries
+
+### 6.8 Alertmanager Configuration
+**Routing:**
+- Default: telegram-alerts
+- Watchdog: webhook-alerts (continue: false)
+- Critical: telegram-alerts (group_wait: 10s, repeat: 1h, continue: true)
+- Warning: telegram-alerts (group_wait: 1m, repeat: 4h, continue: true)
+- Catch-all: webhook-alerts
+
+**Inhibition:**
+- Critical suppresses warning trên cùng instance
+
+## 7. Rules for AI
+
+### 7.1 Khi Review Code
+**Ưu tiên kiểm tra:**
+1. **Observability completeness:**
+   - Span có được đặt tên rõ ràng không?
+   - Attributes có đầy đủ context không? (order_id, status, etc.)
+   - Metrics có labels phù hợp không? (không high-cardinality)
+   - Error handling có log đủ thông tin không?
+   - Trace context có được propagate qua Kafka không?
+
+2. **Reliability patterns:**
+   - Idempotent processing cho Kafka consumers?
+   - Graceful shutdown handler cho workers?
+   - Health checks với dependency validation?
+   - Error responses theo RFC 7807?
+   - Connection pooling cho DB?
+   - Cache-aside pattern cho read-heavy operations?
+
+3. **Security:**
+   - Parameterized queries (tránh SQL injection)?
+   - Không hardcode secrets trong code?
+   - Input validation?
+
+4. **Performance:**
+   - Resource leaks (DB connections, Kafka producers)?
+   - N+1 query problems?
+   - Missing indexes?
+   - Cache invalidation đúng cách?
+
+### 7.2 Khi Refactor
+**Rules:**
+- Giữ nguyên observability patterns đã có
+- KHÔNG xóa bỏ auto-instrumentation
+- Tuân thủ naming convention hiện tại (snake_case cho functions, PascalCase cho classes)
+- Khi thêm feature mới: PHẢI thêm metrics và spans tương ứng
+- Khi thay đổi DB schema: PHẢI update init.sql và migration plan
+- Khi thay đổi Kafka topics: PHẢI update producers và consumers
+- Maintain backward compatibility cho API endpoints
+
+### 7.3 Khi Debug
+**Workflow:**
+1. **Check Alerting Overview** → Xác định alert nào đang firing
+2. **Check Unified Overview** → Service nào bị ảnh hưởng?
+3. **Check App Performance** → RED metrics chi tiết
+4. **Check Tracing** → Tìm slow traces hoặc error traces
+5. **Check DB/Cache/Kafka** → Bottleneck ở đâu?
+6. **Check Logs (Loki)** → Error messages, stack traces
+
+**Common issues:**
+- **High latency:** Check DB connection pool, slow queries, cache miss rate
+- **High error rate:** Check downstream services, DB connectivity, Kafka producer errors
+- **Consumer lag:** Check worker health, processing duration, produce rate
+- **Phantom alerts:** Check traffic guard conditions, stale metrics
+
+### 7.4 Khi Thêm Service Mới
+**Checklist:**
+- [ ] Import và setup: `shared/logging_config`, `shared/otel_setup`, `shared/health`, `shared/errors`
+- [ ] Implement health checks với `/health/live` và `/health/ready`
+- [ ] Add custom metrics cho operations chính (counters, histograms)
+- [ ] Wrap operations trong spans với meaningful names và attributes
+- [ ] Use structured JSON logging với `extra={}` dict
+- [ ] Implement graceful shutdown handler (SIGTERM)
+- [ ] Dockerfile multi-stage (builder + runtime)
+- [ ] Security hardening: non-root user, read-only filesystem, cap_drop
+- [ ] Health check trong Dockerfile
+- [ ] Add service vào docker-compose.yml với depends_on conditions
+- [ ] Add service vào Blackbox Exporter targets
+- [ ] Add service vào Grafana dashboards
+- [ ] Document service trong ARCHITECTURE.md
+
+### 7.5 Khi Thêm Alert Mới
+**Checklist:**
+- [ ] Alert có meaningful name không?
+- [ ] Severity phù hợp (critical/warning)?
+- [ ] `for` duration hợp lý (tránh false positives)?
+- [ ] Annotations có summary và description rõ ràng?
+- [ ] Alert có traffic guard để tránh phantom alerts không?
+- [ ] Alert có được add vào Grafana dashboard không?
+- [ ] Alert có được document trong INCIDENT_RUNBOOK.md không?
+
+### 7.6 Những Điều KHÔNG NÊN Làm
+- ❌ KHÔNG hardcode credentials trong production code (dùng environment variables)
+- ❌ KHÔNG xóa bỏ OpenTelemetry instrumentation
+- ❌ KHÔNG log sensitive data (password, tokens, PII)
+- ❌ KHÔNG dùng `print()` - chỉ dùng logger
+- ❌ KHÔNG swallow exceptions mà không log
+- ❌ KHÔNG dùng high-cardinality labels trong metrics (user_id, request_id)
+- ❌ KHÔNG dùng f-string trong log messages (dùng structured fields)
+- ❌ KHÔNG bỏ qua idempotency check trong Kafka consumers
+- ❌ KHÔNG bỏ qua graceful shutdown handler trong workers
+- ❌ KHÔNG tạo alert mà không có traffic guard (cho low-traffic services)
+
+### 7.7 Khi Tham Khảo Tài Liệu Lab
+Repo có bộ tài liệu học tập production-grade. Khi trả lời câu hỏi về:
+- **Incident response:** Tham khảo `INCIDENT_RUNBOOK.md` (24 alerts với triage steps)
+- **Dashboard reading:** Tham khảo `INCIDENT_SIMULATION_GUIDE.md` (12 experiments với Incident Flow)
+- **Component internals:** Tham khảo `BREAK_TEST_RECOVERY.md` (28 exercises Break/Test/Recovery)
+- **Post-mortem writing:** Tham khảo `post-mortems/00-TEMPLATE.md` và `01-GOLDEN-EXAMPLE-DB-Saturation.md`
+- **Expansion planning:** Tham khảo `EXPANSION_PLAN.md` (kế hoạch 6→10 services với Saga, CQRS, Circuit Breaker)
+- **Interview prep:** Tham khảo `devops-question.md` (Junior-Mid) và `devops-question-senior.md` (Senior)
+
+### 7.8 Production-Grade Mindset
+Khi đưa ra giải pháp, LUÔN cân nhắc:
+1. **Team size:** Giải pháp này khả thi cho team 2 người không? 10 người không?
+2. **Blast radius:** Nếu giải pháp fail, ảnh hưởng bao nhiêu services?
+3. **Rollback plan:** Có thể revert trong < 5 phút không?
+4. **Observability:** Sau khi deploy, làm sao biết nó hoạt động đúng?
+5. **Operational burden:** Giải pháp này thêm bao nhiêu toil cho on-call engineer?
+
+## 8. Testing Conventions
+
+### Unit Tests
+**Framework:** pytest
+**Location:** `test_app.py` trong mỗi service directory
+
+**Mocking:**
+```python
+@pytest.fixture
+def client():
+    with patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"), \
+         patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"):
+        import importlib
+        import app as app_module
+        importlib.reload(app_module)
+        
+        app_module.app.config['TESTING'] = True
+        with app_module.app.test_client() as test_client:
+            yield test_client, app_module
+```
+
+**Naming:**
+- Test files: `test_*.py`
+- Test functions: `test_should_[expected]_when_[condition]` hoặc `test_[feature]_[scenario]`
+
+**Coverage:**
+- Health endpoints
+- Happy path cho main operations
+- Error handling (downstream failures, DB errors, etc.)
+- Edge cases (missing data, invalid input)
+
+### Integration Tests
+**Framework:** testcontainers (nếu cần)
+**Scope:**
+- DB operations với real PostgreSQL
+- Redis operations với real Redis
+- Kafka produce/consume với real Kafka
+
+### Load Testing
+**Tool:** Traffic Generator service (port 5003)
+**Scenarios:**
+- normal: Balanced user activity
+- flash_sale: High-volume ordering
+- browse_heavy: Mostly browsing
+- event_driven: Orders + verify Kafka processing
+
+**API:**
+```bash
+# Start traffic
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+
+# Stop traffic
+curl -X POST http://localhost:5003/stop
+
+# Check status
+curl http://localhost:5003/status
+```
+
+## 9. Deployment & Operations
+
+### Development
+```bash
+# Start applications VM
+cd applications-vm
+docker compose up -d
+
+# Start observability VM
+cd observability-vm/phase1-metrics
+docker compose up -d
+
+cd ../phase2-logging
+docker compose up -d
+
+cd ../phase3-tracing
+docker compose up -d
+```
+
+### Production Considerations
+**Gunicorn Configuration:**
+```bash
+gunicorn \
+  --workers 2 \
+  --threads 8 \
+  --worker-class gthread \
+  --bind 0.0.0.0:5001 \
+  --access-logfile - \
+  --timeout 30 \
+  --worker-tmp-dir /dev/shm \
+  app:app
+```
+
+**Resource Limits:**
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '1.0'
+      memory: 512M
+    reservations:
+      cpus: '0.25'
+      memory: 128M
+```
+
+**Security Hardening:**
+```yaml
+read_only: true
+tmpfs:
+  - /tmp
+cap_drop:
+  - ALL
+security_opt:
+  - no-new-privileges:true
+```
+
+### Monitoring & Alerting
+**Dashboards to check:**
+1. Alerting Overview - Active alerts
+2. Unified Overview - Service health
+3. App Performance - RED metrics
+4. SLO Overview - Burn rate, error budget
+5. Infrastructure - Resource usage
+
+**Alert Response:**
+- Follow INCIDENT_RUNBOOK.md for each alert type
+- Use INCIDENT_SIMULATION_GUIDE.md for practice
+- Write post-mortem using post-mortems/00-TEMPLATE.md
+
+### Backup & Restore
+**PostgreSQL:**
+```bash
+# Backup
+docker exec postgres pg_dump -U app -d orders > backup.sql
+
+# Restore
+docker exec -i postgres psql -U app -d orders < backup.sql
+```
+
+**Kafka:**
+- Topic data: Retention policy (default: 7 days)
+- Consumer offsets: Stored in `__consumer_offsets` topic
+
+**Grafana:**
+- Dashboards: Stored in `grafana/dashboards/` (as code)
+- Datasources: Stored in `grafana/provisioning/datasources/`
+
+### Log Rotation
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+## 10. Expansion Plan (Future Services)
+
+**Planned Services:**
+1. **Auth Service (port 5006)** - JWT/RBAC, auth_db (isolated)
+2. **Shipping Service (port 5007)** - Shipping management, shipping_db (isolated)
+3. **Shipping Worker (port 5008)** - Saga orchestrator, DLQ handling
+4. **Search Service (port 5009)** - OpenSearch integration, CQRS pattern
+
+**New Patterns:**
+- Saga Orchestration (distributed transactions)
+- Circuit Breaker (failure isolation)
+- Rate Limiting (Redis-based)
+- TLS Termination (HTTPS)
+- Secrets Management (Docker secrets)
+- Network Segmentation (Docker networks per tier)
+
+**Database Strategy:**
+- Hybrid approach: 1 PostgreSQL instance, multiple databases
+- app_db: Order, Payment, Inventory, Notification (shared)
+- auth_db: Auth Service (isolated for security)
+- shipping_db: Shipping Service + Worker (isolated for lifecycle)
+- OpenSearch: Search Service (separate engine)
+
+Xem chi tiết trong EXPANSION_PLAN.md
+
+## 11. Questions to Ask Before Making Changes
+
+Trước khi đề xuất thay đổi lớn, hãy hỏi:
+
+1. **Observability Impact:**
+   - Thay đổi này có ảnh hưởng đến metrics/logs/traces không?
+   - Có cần thêm metrics/spans mới không?
+   - Có cần update dashboards không?
+   - Có cần thêm alert rules không?
+
+2. **Reliability Impact:**
+   - Có ảnh hưởng đến idempotency không?
+   - Có cần thêm circuit breaker không?
+   - Có ảnh hưởng đến graceful shutdown không?
+   - Có cần update health checks không?
+
+3. **Backward Compatibility:**
+   - API endpoints có thay đổi không?
+   - Kafka message format có thay đổi không?
+   - DB schema có thay đổi không?
+   - Consumers có cần update không?
+
+4. **Performance Impact:**
+   - Có ảnh hưởng đến latency không?
+   - Có cần thêm caching không?
+   - Có ảnh hưởng đến DB connection pool không?
+   - Có cần optimize queries không?
+
+5. **Operational Impact:**
+   - Có cần update runbook không?
+   - Có cần update simulation guide không?
+   - Có cần thêm chaos experiments không?
+   - Có ảnh hưởng đến backup/restore không?
+
+## 12. References
+
+**Internal Documentation:**
+- ARCHITECTURE.md - Kiến trúc chi tiết
+- INCIDENT_RUNBOOK.md - Runbook xử lý 24 loại alert
+- INCIDENT_SIMULATION_GUIDE.md - 12 experiments giả lập incident
+- BREAK_TEST_RECOVERY.md - 28 exercises break/test/recovery
+- EXPANSION_PLAN.md - Kế hoạch mở rộng lên 10 services
+- devops-question.md - 45 câu hỏi phỏng vấn (Junior-Mid)
+- devops-question-senior.md - 31 câu hỏi phỏng vấn (Senior)
+- post-mortems/ - Blameless post-mortem templates
+
+**External References:**
+- OpenTelemetry Documentation: https://opentelemetry.io/docs/
+- Prometheus Documentation: https://prometheus.io/docs/
+- Grafana Documentation: https://grafana.com/docs/
+- Kafka Documentation: https://kafka.apache.org/documentation/
+- SRE Book: https://sre.google/sre-book/table-of-contents/
+- RFC 7807 (Problem Details): https://datatracker.ietf.org/doc/html/rfc7807
+</instruction>
