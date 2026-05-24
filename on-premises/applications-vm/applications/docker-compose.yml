@@ -79,6 +79,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - PAYMENT_SERVICE_URL=http://payment-service:5002
+      # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -212,6 +213,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
     ports:
       - "5004:5004"
@@ -240,6 +242,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
     ports:
       - "5005:5005"

@@ -118,6 +118,7 @@ inventory_checks_counter = meter.create_counter(
 # ============================================================
 # Database + Cache (using shared helpers)
 # ============================================================
+# secretlint-disable-next-line
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 

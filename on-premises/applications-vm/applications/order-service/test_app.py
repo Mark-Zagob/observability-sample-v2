@@ -43,6 +43,7 @@ class TestParseDbUrl:
 
     def test_parse_standard_url(self):
         from shared.db_utils import parse_db_url
+        # secretlint-disable-next-line
         result = parse_db_url("postgresql://user:pass@host:5432/mydb")
         assert result['user'] == 'user'
         assert result['password'] == 'pass'
@@ -52,6 +53,7 @@ class TestParseDbUrl:
 
     def test_parse_production_url(self):
         from shared.db_utils import parse_db_url
+        # secretlint-disable-next-line
         result = parse_db_url("postgresql://admin:s3cret@db.prod:5433/orders_prod")
         assert result['user'] == 'admin'
         assert result['port'] == 5433

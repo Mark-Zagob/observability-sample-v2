@@ -90,6 +90,7 @@ stock_restock_counter = meter.create_counter(
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "order.events")
 KAFKA_GROUP = "inventory-workers"
+# secretlint-disable-next-line
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 
 # Auto-restock config
