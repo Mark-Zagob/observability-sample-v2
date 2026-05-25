@@ -254,7 +254,8 @@ Sau incident, dùng **5 Whys** để tìm systemic gap:
 > ⚠️ **Cảnh báo:** Tất cả thực hành trên lab environment. Không bao giờ chạy chaos experiments trên production mà không có safety controls.
 > 
 > 💡 **Lưu ý khi thực hành:** Trong quá trình chạy mỗi Experiment, hãy mở một file text và thực hành ghi **Incident Log (real-time)** theo template ở [Mục 0.3](#03-incident-log-format--ghi-real-time). Đừng chỉ tập trung fix, hãy tập ghi lại *decision-making process* của bạn.
-
+> 
+> 🔍 **Trước khi chạy bất kỳ experiment nào:** Hãy mở các dashboard một lượt và đối chiếu với bảng "Bước 3" ở trên để chắc chắn bạn thấy đúng panel và đúng tên. Các panel có thể có nhiều metrics bên trong (như "Consumer Group Lag" hiển thị nhiều consumer groups) — hãy ghi chú đầy đủ các series để so sánh sau này.
 ## Nguyên tắc thực hành
 - **Steady state trước** → xác định baseline metrics trước khi inject failure
 - **Blast radius nhỏ** → bắt đầu với impact nhỏ nhất
@@ -274,22 +275,114 @@ curl -X POST http://localhost:5003/start \
   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
 ```
 
-**Bước 3:** Trong khi traffic chạy, mở từng dashboard và ghi lại giá trị:
+**Bước 3:** Trong khi traffic chạy, mở từng dashboard và ghi lại giá trị
 
-| Dashboard | Metric | Đọc ở panel nào | Baseline tham khảo |
-|-----------|--------|-----------------|-------------------|
-| Unified Overview | RPS per service | Service Health | api-gateway ~2 req/s |
-| Unified Overview | Error rate | Service Health | < 1% |
-| Unified Overview | P95 latency | Service Health | 300-600ms |
-| App Performance | P50 / P95 / P99 | Duration panels | P50 ~200ms, P99 ~800ms |
-| DB Performance | Connection pool active | Pool panel | 1-3/10 |
-| DB Performance | Avg query duration | Query panel | 1-10ms |
-| Cache Performance | Hit rate | Hit Rate panel | > 80% |
-| Cache Performance | Latency | Latency panel | < 5ms |
-| Kafka Overview | Consumer lag | Lag panel | 0-5 |
-| Infrastructure | CPU usage | Node Exporter | < 30% |
-| Infrastructure | Memory usage | Node Exporter | < 60% |
-| Alerting | Active alerts | Alert count | Chỉ Watchdog |
+> 💡 **Lưu ý:** Tên trong cột "Panel trên Dashboard" là **tên chính xác** hiển thị trên Grafana. 
+> Dùng Ctrl+F (hoặc Command+F) trên dashboard để tìm nhanh.
+> 
+> Với các dashboard có **template variable `vm`** (góc trên bên trái), chọn theo hướng dẫn:
+> - **Applications VM** → chọn `vm = app`
+> - **Observability VM** → chọn `vm = observability`
+> - **Cả hai** → chọn `vm = All`
+
+### Application Metrics
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Unified Overview** | `API Gateway — RPS` | req/s | ~2 req/s |
+| **Unified Overview** | `Payment Error Rate` | % | < 1% |
+| **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 300-600ms |
+| **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~200ms, P95 ~400ms, P99 ~800ms |
+| **App Performance** | `Rate — Request Rate` (Order Service section) | req/s by status | — |
+| **App Performance** | `Errors — Error Rate` (Order Service section) | % | < 1% |
+
+### Database & Cache
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **DB Performance** | `DB Connection Pool Activity` | Active / Max connections | 1-3 / 10 |
+| **DB Performance** | `Avg Query Duration` | SELECT duration (ms) | 1-10ms |
+| **DB Performance** | `DB Connection Pool Utilization (%)` | % | < 30% |
+| **Cache Performance** | `Cache Hit Ratio (%)` *(gauge)* | Hit Ratio | > 80% |
+| **Cache Performance** | `Cache Operation Latency (p95)` *(timeseries)* | GET / SET latency | < 5ms |
+| **Cache Performance** | `Cache Operations per Second` | ops/s by operation & result | — |
+
+### Kafka & Event Pipeline
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Kafka Overview** | `Messages In (per second)` | order.events produce rate | ~2 msg/s |
+| **Kafka Overview** | `Consumer Group Lag` *(timeseries — tổng lag per group)* | notification-workers lag, inventory-workers lag | 0-5 messages |
+| **Kafka Overview** | `Consumer Group Lag by Partition` *(timeseries — chi tiết per partition)* | Max lag per partition | 0-2 messages |
+| **Kafka Overview** | `Under-Replicated Partitions` | Count | 0 |
+
+### Infrastructure — Applications VM (192.168.100.57) ⚠️ Ưu tiên
+
+> **Chọn template variable `vm = app`** trước khi đọc các panel dưới đây.
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Node Exporter - Host Monitoring** | `CPU Usage` *(gauge)* | CPU % | < 30% |
+| **Node Exporter - Host Monitoring** | `Memory Usage` *(gauge)* | Memory % | < 60% |
+| **Node Exporter - Host Monitoring** | `Disk Usage (/)` *(gauge)* | Disk % | < 50% |
+| **Docker Containers** | `Container CPU Usage` *(timeseries)* | order-service, api-gateway CPU % | < 20% |
+| **Docker Containers** | `Container Memory Usage` *(timeseries)* | order-service Memory | < 200MB |
+
+### Infrastructure — Observability VM (192.168.100.55) 📊 Reference
+
+> **Chọn template variable `vm = observability`** trước khi đọc các panel dưới đây.
+> 
+> Chỉ cần ghi chú khi chạy load test nặng (nhiều metrics/logs/traces được generate). 
+> Nếu observability VM quá tải → metrics/logs có thể bị delay hoặc mất.
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Node Exporter - Host Monitoring** | `CPU Usage` *(gauge)* | CPU % | < 30% |
+| **Node Exporter - Host Monitoring** | `Memory Usage` *(gauge)* | Memory % | < 60% |
+| **Node Exporter - Host Monitoring** | `Disk Usage (/)` *(gauge)* | Disk % | < 50% |
+
+### Alerting Status
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Alerting Overview** | `🔥 Firing Alerts` *(stat)* | Count | 0 (chỉ Watchdog) |
+| **Alerting Overview** | `🚨 Critical` *(stat)* | Count | 0 |
+| **Alerting Overview** | `⚠️ Warning` *(stat)* | Count | 0 |
+| **Alerting Overview** | `⏳ Pending` *(stat)* | Count | 0 |
+
+### Mẹo ghi baseline nhanh
+
+1. **Dùng Grafana Annotation** (Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject failure → giúp so sánh trước/sau dễ hơn.
+
+2. **Chụp screenshot** các dashboard quan trọng (Unified Overview, App Performance) để đối chiếu khi incident xảy ra.
+
+3. **Format ghi chú mẫu:**
+   ```markdown
+   ## Baseline — [YYYY-MM-DD HH:MM]
+   Traffic: scenario=normal, rate=2 req/s, duration=60s
+   
+   ### Application
+   - API Gateway RPS: 2.1 req/s (panel: "API Gateway — RPS" @ Unified Overview)
+   - Error Rate: 0.3% (panel: "Payment Error Rate" @ Unified Overview)
+   - P95 Latency: 450ms (panel: "Duration — Latency" @ App Performance)
+   
+   ### Database & Cache
+   - Connection Pool: 2/10 active (panel: "DB Connection Pool Activity" @ DB Performance)
+   - Avg SELECT: 3ms (panel: "Avg Query Duration" @ DB Performance)
+   - Cache Hit Ratio: 85% (panel: "Cache Hit Ratio (%)" @ Cache Performance)
+   - Cache GET P95: 2ms (panel: "Cache Operation Latency (p95)" @ Cache Performance)
+   
+   ### Kafka (vm=app)
+   - notification-workers lag: 0 (panel: "Consumer Group Lag" @ Kafka Overview)
+   - inventory-workers lag: 1 (panel: "Consumer Group Lag" @ Kafka Overview)
+   
+   ### Infrastructure (vm=app)
+   - CPU: 18% (panel: "CPU Usage" @ Node Exporter)
+   - Memory: 52% (panel: "Memory Usage" @ Node Exporter)
+   - Disk: 35% (panel: "Disk Usage (/)" @ Node Exporter)
+   
+   ### Alerts
+   - Firing: 0 (chỉ Watchdog) (panel: "🔥 Firing Alerts" @ Alerting Overview)
 
 **Bước 4:** Ghi timestamp bắt đầu inject failure (dùng cho tính MTTD sau).
 
