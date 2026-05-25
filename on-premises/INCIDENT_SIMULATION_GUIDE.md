@@ -391,53 +391,177 @@ curl -X POST http://localhost:5003/start \
 ---
 
 ## 🧪 Experiment 1: Service Down (Health Check Failed)
-📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_)
+📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_) • [RB-24 ServiceHealthCheckFailed](INCIDENT_RUNBOOK.md#-rb-24-servicehealthcheckfailed)
 
-**Giả thuyết:** Khi order-service bị stop, Blackbox Exporter sẽ detect health check failure → `ServiceHealthCheckFailed` alert critical trong 1 phút, không phụ thuộc vào traffic.
+**Giả thuyết:** Khi order-service bị stop, hệ thống sẽ detect qua 2 lớp monitoring:
+1. **Lớp 1 - Active Probing (KHÔNG cần traffic):** Blackbox Exporter probe `/health/live` mỗi 15s → `ServiceHealthCheckFailed` firing sau ~1 phút
+2. **Lớp 2 - Span Metrics (CẦN traffic):** Không có traces từ service → `ServiceNoTraces_OrderService` firing sau ~5 phút (nếu traffic-gen đang chạy)
 
-**Production context:** Trong production, service down detection dùng active probing (Blackbox Exporter probe `/health/live` mỗi 15s) thay vì dựa vào span metrics → vì span metrics cần traffic để hoạt động.
+**Production context:** 
+- Trong production, service down detection dùng **active probing** (Blackbox Exporter) thay vì dựa vào span metrics → vì span metrics cần traffic để hoạt động
+- Đây là lý do tại sao cần cả 2 lớp monitoring: Lớp 1 detect service down 24/7 (kể cả lúc 3 AM không có user), Lớp 2 detect performance issues khi có traffic
+
+### Workflow thực hiện (3 phases)
+
+**Phase 1: Baseline (tạo steady state)**
+```bash
+# Chạy traffic nhẹ để tạo baseline metrics
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+```
+# Đợi 10-15s để traffic ổn định
+# Mở Unified Overview → ghi nhận RPS baseline (~2 req/s)
+# Mở App Performance → ghi nhận P95 latency baseline (~400ms)
+
+**Phase 2: Inject Failure (TRONG KHI traffic đang chạy)**
 
 **Inject:**
 ```bash
-# Trên applications VM
+# Sau khi baseline ổn định, stop order-service
 docker stop order-service
+# Traffic-gen vẫn tiếp tục chạy (duration=60s)
+# Nhưng tất cả requests đến order-service sẽ fail
+```
+
+**Phase 3: Observe & Recovery**
+
+```bash
+# Quan sát các dashboards (xem chi tiết bên dưới)
+# Sau khi traffic-gen kết thúc hoặc muốn test recovery:
+docker start order-service
+
+# Chạy traffic mới để verify recovery
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 30}'
 ```
 
 **Dashboard reading path:**
 ```
-Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
-  → Instance: http://192.168.100.57:5001/health/live
-    → Unified Overview → Order Service RPS giảm/mất (nếu có traffic)
-      → App Performance → Order Service section: no data
-        → Kafka Overview → produce rate giảm (không publish events mới)
+Phase 2 (ngay sau khi stop):
+  Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
+    → Instance: http://192.168.100.57:5001/health/live
+    → Fired sau ~1 phút (cấu hình `for: 1m`)
+    
+  Unified Overview → Order Service RPS drop về 0 (vì traffic-gen vẫn đang chạy)
+    → API Gateway error rate tăng (502 Bad Gateway khi gọi order-service)
+    → Các service khác (Payment, Notification, Inventory) vẫn hoạt động
+    
+  App Performance → Order Service section: no data (không có traces mới)
+    → API Gateway section: error rate tăng, duration có thể tăng (timeout)
+    
+  Kafka Overview → produce rate giảm về 0 (order-service không publish events mới)
+    → consumer lag KHÔNG tăng (vì không có event mới để consume)
+
+Sau ~5 phút (nếu traffic-gen vẫn chạy):
+  Alerting Overview → ServiceNoTraces_OrderService firing (severity: critical)
+    → Lý do: traffic_gen_running == 1 VÀ không có traces từ order-service trong 3 phút
+    → Alert rule có traffic guard: chỉ fire khi CÓ traffic
 ```
 
-**Quan sát kỳ vọng:**
-- 🔴 **Alerting:** `ServiceHealthCheckFailed` firing sau ~1 phút (cấu hình `for: 1m`)
-- 🔴 **Alerting:** Nếu traffic-gen đang chạy → `ServiceNoTraces_OrderService` cũng firing sau ~5 phút
-- 🟡 **Unified:** Order Service RPS drop (nếu có traffic), các service khác vẫn hoạt động
-- 🟡 **App Performance:** Order section trắng, Notification vẫn xử lý events cũ
-- 🟡 **Kafka:** Produce rate = 0, consumer lag không tăng (không có event mới)
+**Quan sát kỳ vọng:**  
+**🔴 Alerting (2 alerts sẽ firing):**
+
+- `ServiceHealthCheckFailed` - firing sau ~1 phút (Blackbox Exporter probe fail)
+- `ServiceNoTraces_OrderService` - firing sau ~5 phút (nếu traffic-gen đang chạy)
+  - Alert rule: `absent_over_time(traces[3m]) and traffic_gen_running == 1`
+  - Nếu KHÔNG có traffic → alert này KHÔNG fire (chỉ có `ServiceHealthCheckFailed`)  
+**🟡 Unified Overview:**
+
+- Order Service RPS = 0 (service down, không xử lý requests)
+- API Gateway error rate tăng (502 khi cố gọi order-service)
+- Payment Service RPS giảm (vì không có orders mới để thanh toán)
+- Notification/Inventory Workers vẫn xử lý events cũ trong Kafka
+
+**🟡 App Performance:**
+
+- Order Service section: trắng (no data)
+- API Gateway: error rate tăng, có thể thấy 502 errors
+- Payment Service: RPS giảm theo
+
+**🟡 Kafka Overview:**
+
+- Produce rate = 0 (order-service không publish events)
+- Consumer lag KHÔNG tăng (không có event mới)
+- Notification/Inventory workers vẫn chạy nhưng không có gì để consume
+
+**🟢 Docker Containers:**
+
+- `order-service`: Exited (stopped)
+- Các containers khác: Running
 
 **Lưu ý:** `TargetDown` (up == 0) không firing trong experiment này vì Prometheus không scrape order-service trực tiếp → metrics đi qua OTel Collector (vẫn healthy). Đây là lý do cần Blackbox Exporter.
 
-### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+> ⚠️ **Lưu ý quan trọng**
+
+**Tại sao KHÔNG chạy lại traffic sau khi stop order-service?**
+
+- Traffic-gen đã được start ở Phase 1 với `duration=60s`
+- Trong 60s đó, traffic-gen tiếp tục gửi requests → order-service fail → tạo error rate 100%
+- Điều này cho thấy blast radius: order-service down → API Gateway errors → user impact
+- Nếu chạy lại traffic sau khi stop → bạn chỉ test "Error Handling" chứ không test "Service Down Detection"
+
+**Phân biệt 2 lớp monitoring:**
+
+| Lớp | Công cụ | Cần traffic? | Detect gì? | Khi nào dùng? |
+|-----|---------|-------------|-----------|--------------|
+| Lớp 1 | Blackbox Exporter | ❌ KHÔNG | Service có sống không? | 24/7, kể cả 3 AM |
+| Lớp 2 | Span Metrics (Tempo) | ✅ CÓ | Service có hoạt động đúng không? | Khi có user traffic |
+
+**Bài học:**
+
+- Lớp 1 (active probing) phát hiện service down ngay lập tức, không phụ thuộc traffic
+- Lớp 2 (span metrics) phát hiện error rate, latency issues nhưng cần traffic
+- Production cần cả 2: Lớp 1 cho availability monitoring, Lớp 2 cho performance monitoring
+- Nếu chỉ có Lớp 2 → blind spot lúc 3 AM không có traffic → không biết service đã crash
+
+---
+
+## 🎯 Kỳ vọng & Câu hỏi kiểm tra
+
 Sau khi chạy experiment này, bạn phải trả lời được:
 
-- [ ] **Down vs Slow:** Service down hiển thị thế nào trên dashboard? (no data, RPS = 0). Khác gì service slow? (data vẫn có, nhưng duration cao)
-- [ ] **Blast radius:** order-service chết → service nào vẫn hoạt động bình thường? Tại sao payment-service không bị ảnh hưởng?
-- [ ] **2 lớp monitoring:** Tại sao `TargetDown` không firing mà `ServiceHealthCheckFailed` lại firing? Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được?
-- [ ] **Ứng dụng production:** Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? (Gợi ý: xem RB-24)
-- [ ] **SEV Assessment:** Dựa trên 5 câu impact assessment, bạn phân loại incident này là SEV mấy? Có escalation theo Escalation Matrix không? (Gợi ý: xem Context Matrix trong Part 4)
+1. **Down vs Slow:** Service down hiển thị thế nào trên dashboard? (RPS = 0, no traces, health check fail). Khác gì service slow? (RPS vẫn có, traces vẫn có, nhưng duration cao)
+
+2. **Blast radius:** `order-service` chết → service nào vẫn hoạt động bình thường? Tại sao `payment-service` không bị ảnh hưởng trực tiếp?
+   - *Gợi ý: payment-service chỉ được gọi SAU KHI order-service xử lý xong*
+
+3. **2 lớp monitoring:**
+   - Tại sao `ServiceHealthCheckFailed` firing mà `ServiceNoTraces_OrderService` có thể KHÔNG firing? *(Gợi ý: traffic guard condition)*
+   - Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được service down?
+   - Trong production, bạn cần cả 2 lớp hay chỉ 1? Tại sao?
+
+4. **Alert timing:**
+   - `ServiceHealthCheckFailed` firing sau bao lâu? Tại sao không firing ngay lập tức? *(Gợi ý: `for: 1m` trong alert rule)*
+   - `ServiceNoTraces_OrderService` firing sau bao lâu? Tại sao lâu hơn? *(Gợi ý: `absent_over_time[3m]` + `for: 2m`)*
+
+5. **Ứng dụng production:**
+   - Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? *(Gợi ý: xem RB-24)*
+   - Nếu chỉ có `ServiceNoTraces` alert (không có `ServiceHealthCheckFailed`) → có thể là vấn đề gì khác ngoài service down? *(Gợi ý: OTel Collector issue, network issue)*
+
+6. **SEV Assessment:** Dựa trên 5 câu impact assessment, bạn phân loại incident này là SEV mấy?
+   - Context A: 3 AM, không có traffic → SEV mấy?
+   - Context B: Flash sale, traffic cao → SEV mấy?
+   - Có escalation theo Escalation Matrix không?
 
 **Rollback:**
 ```bash
 docker start order-service
+
+# Verify recovery:
+# 1. Chờ 30s để service start hoàn toàn
+# 2. Check Alerting Overview → alerts chuyển RESOLVED
+# 3. Chạy traffic mới để verify RPS hồi phục
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 30}'
 ```
 
-**Bài học:** Phân biệt 2 lớp monitoring:
-- **Lớp 1 – Service có sống không?** → Blackbox Exporter (active probing, không cần traffic)
-- **Lớp 2 – Service có hoạt động đúng không?** → Span metrics (error rate, latency, cần traffic)
+**Bài học:**
+1. **2 lớp monitoring bổ sung nhau:** Active probing (Blackbox) cho availability 24/7, Span metrics cho performance khi có traffic
+2. **Traffic guard quan trọng:** `ServiceNoTraces` chỉ fire khi CÓ traffic → tránh phantom alerts lúc không có user
+3. **Blast radius analysis:** Service down không chỉ ảnh hưởng service đó mà còn cascade đến upstream (API Gateway errors) và downstream (workers không có events)
 
 ---
 
