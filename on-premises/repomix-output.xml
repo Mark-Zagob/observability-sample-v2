@@ -8010,7 +8010,7 @@ This section contains the contents of the repository's files.
  52:           "legendFormat": "Active Connections"
  53:         },
  54:         {
- 55:           "expr": "db_connection_pool_max{job=\"app-metrics\"}",
+ 55:           "expr": "db_connection_pool_max_ratio{job=\"app-metrics\"}",
  56:           "legendFormat": "Max Pool Size"
  57:         }
  58:       ]
@@ -8114,7 +8114,7 @@ This section contains the contents of the repository's files.
 156:       },
 157:       "targets": [
 158:         {
-159:           "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max{job=\"app-metrics\"}",
+159:           "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max_ratio{job=\"app-metrics\"}",
 160:           "legendFormat": "Pool Utilization",
 161:           "refId": "A"
 162:         }
@@ -19502,866 +19502,959 @@ This section contains the contents of the repository's files.
  254: > ⚠️ **Cảnh báo:** Tất cả thực hành trên lab environment. Không bao giờ chạy chaos experiments trên production mà không có safety controls.
  255: > 
  256: > 💡 **Lưu ý khi thực hành:** Trong quá trình chạy mỗi Experiment, hãy mở một file text và thực hành ghi **Incident Log (real-time)** theo template ở [Mục 0.3](#03-incident-log-format--ghi-real-time). Đừng chỉ tập trung fix, hãy tập ghi lại *decision-making process* của bạn.
- 257: 
- 258: ## Nguyên tắc thực hành
- 259: - **Steady state trước** → xác định baseline metrics trước khi inject failure
- 260: - **Blast radius nhỏ** → bắt đầu với impact nhỏ nhất
- 261: - **Rollback < 30s** → luôn có cách revert nhanh
- 262: - **Một biến số** → chỉ thay đổi 1 thứ mỗi lần
- 263: - **Ghi lại bài học** → mỗi experiment phải có learning summary
- 264: 
- 265: ## Cách đo Baseline (bắt buộc trước mỗi Experiment)
- 266: **Tại sao:** Không có baseline = không biết metrics thay đổi bao nhiêu. "P95 = 3s" vô nghĩa nếu không biết bình thường là 400ms hay 2s.
- 267: 
- 268: **Bước 1:** Đảm bảo hệ thống stable → không có alert firing, không có traffic-gen đang chạy.
- 269: 
- 270: **Bước 2:** Chạy traffic nhẹ để tạo baseline data:
- 271: ```bash
- 272: curl -X POST http://localhost:5003/start \
- 273:   -H "Content-Type: application/json" \
- 274:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
- 275: ```
- 276: 
- 277: **Bước 3:** Trong khi traffic chạy, mở từng dashboard và ghi lại giá trị:
- 278: 
- 279: | Dashboard | Metric | Đọc ở panel nào | Baseline tham khảo |
- 280: |-----------|--------|-----------------|-------------------|
- 281: | Unified Overview | RPS per service | Service Health | api-gateway ~2 req/s |
- 282: | Unified Overview | Error rate | Service Health | < 1% |
- 283: | Unified Overview | P95 latency | Service Health | 300-600ms |
- 284: | App Performance | P50 / P95 / P99 | Duration panels | P50 ~200ms, P99 ~800ms |
- 285: | DB Performance | Connection pool active | Pool panel | 1-3/10 |
- 286: | DB Performance | Avg query duration | Query panel | 1-10ms |
- 287: | Cache Performance | Hit rate | Hit Rate panel | > 80% |
- 288: | Cache Performance | Latency | Latency panel | < 5ms |
- 289: | Kafka Overview | Consumer lag | Lag panel | 0-5 |
- 290: | Infrastructure | CPU usage | Node Exporter | < 30% |
- 291: | Infrastructure | Memory usage | Node Exporter | < 60% |
- 292: | Alerting | Active alerts | Alert count | Chỉ Watchdog |
- 293: 
- 294: **Bước 4:** Ghi timestamp bắt đầu inject failure (dùng cho tính MTTD sau).
- 295: 
- 296: **Mẹo:** Dùng Grafana annotation (nhấn Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject → giúp so sánh trước/sau dễ hơn.
- 297: 
- 298: ---
- 299: 
- 300: ## 🧪 Experiment 1: Service Down (Health Check Failed)
- 301: 📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_)
- 302: 
- 303: **Giả thuyết:** Khi order-service bị stop, Blackbox Exporter sẽ detect health check failure → `ServiceHealthCheckFailed` alert critical trong 1 phút, không phụ thuộc vào traffic.
- 304: 
- 305: **Production context:** Trong production, service down detection dùng active probing (Blackbox Exporter probe `/health/live` mỗi 15s) thay vì dựa vào span metrics → vì span metrics cần traffic để hoạt động.
- 306: 
- 307: **Inject:**
- 308: ```bash
- 309: # Trên applications VM
- 310: docker stop order-service
- 311: ```
- 312: 
- 313: **Dashboard reading path:**
- 314: ```
- 315: Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
- 316:   → Instance: http://192.168.100.57:5001/health/live
- 317:     → Unified Overview → Order Service RPS giảm/mất (nếu có traffic)
- 318:       → App Performance → Order Service section: no data
- 319:         → Kafka Overview → produce rate giảm (không publish events mới)
- 320: ```
- 321: 
- 322: **Quan sát kỳ vọng:**
- 323: - 🔴 **Alerting:** `ServiceHealthCheckFailed` firing sau ~1 phút (cấu hình `for: 1m`)
- 324: - 🔴 **Alerting:** Nếu traffic-gen đang chạy → `ServiceNoTraces_OrderService` cũng firing sau ~5 phút
- 325: - 🟡 **Unified:** Order Service RPS drop (nếu có traffic), các service khác vẫn hoạt động
- 326: - 🟡 **App Performance:** Order section trắng, Notification vẫn xử lý events cũ
- 327: - 🟡 **Kafka:** Produce rate = 0, consumer lag không tăng (không có event mới)
- 328: 
- 329: **Lưu ý:** `TargetDown` (up == 0) không firing trong experiment này vì Prometheus không scrape order-service trực tiếp → metrics đi qua OTel Collector (vẫn healthy). Đây là lý do cần Blackbox Exporter.
+ 257: > 
+ 258: > 🔍 **Trước khi chạy bất kỳ experiment nào:** Hãy mở các dashboard một lượt và đối chiếu với bảng "Bước 3" ở trên để chắc chắn bạn thấy đúng panel và đúng tên. Các panel có thể có nhiều metrics bên trong (như "Consumer Group Lag" hiển thị nhiều consumer groups) — hãy ghi chú đầy đủ các series để so sánh sau này.
+ 259: ## Nguyên tắc thực hành
+ 260: - **Steady state trước** → xác định baseline metrics trước khi inject failure
+ 261: - **Blast radius nhỏ** → bắt đầu với impact nhỏ nhất
+ 262: - **Rollback < 30s** → luôn có cách revert nhanh
+ 263: - **Một biến số** → chỉ thay đổi 1 thứ mỗi lần
+ 264: - **Ghi lại bài học** → mỗi experiment phải có learning summary
+ 265: 
+ 266: ## Cách đo Baseline (bắt buộc trước mỗi Experiment)
+ 267: **Tại sao:** Không có baseline = không biết metrics thay đổi bao nhiêu. "P95 = 3s" vô nghĩa nếu không biết bình thường là 400ms hay 2s.
+ 268: 
+ 269: **Bước 1:** Đảm bảo hệ thống stable → không có alert firing, không có traffic-gen đang chạy.
+ 270: 
+ 271: **Bước 2:** Chạy traffic nhẹ để tạo baseline data:
+ 272: ```bash
+ 273: curl -X POST http://localhost:5003/start \
+ 274:   -H "Content-Type: application/json" \
+ 275:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+ 276: ```
+ 277: 
+ 278: **Bước 3:** Trong khi traffic chạy, mở từng dashboard và ghi lại giá trị
+ 279: 
+ 280: > 💡 **Lưu ý:** Tên trong cột "Panel trên Dashboard" là **tên chính xác** hiển thị trên Grafana. 
+ 281: > Dùng Ctrl+F (hoặc Command+F) trên dashboard để tìm nhanh.
+ 282: > 
+ 283: > Với các dashboard có **template variable `vm`** (góc trên bên trái), chọn theo hướng dẫn:
+ 284: > - **Applications VM** → chọn `vm = app`
+ 285: > - **Observability VM** → chọn `vm = observability`
+ 286: > - **Cả hai** → chọn `vm = All`
+ 287: 
+ 288: ### Application Metrics
+ 289: 
+ 290: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 291: |-----------|--------------------------------------|----------------|-------------------|
+ 292: | **Unified Overview** | `API Gateway — RPS` | req/s | ~2 req/s |
+ 293: | **Unified Overview** | `Payment Error Rate` | % | < 1% |
+ 294: | **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 300-600ms |
+ 295: | **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~200ms, P95 ~400ms, P99 ~800ms |
+ 296: | **App Performance** | `Rate — Request Rate` (Order Service section) | req/s by status | — |
+ 297: | **App Performance** | `Errors — Error Rate` (Order Service section) | % | < 1% |
+ 298: 
+ 299: ### Database & Cache
+ 300: 
+ 301: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 302: |-----------|--------------------------------------|----------------|-------------------|
+ 303: | **DB Performance** | `DB Connection Pool Activity` | Active / Max connections | 1-3 / 10 |
+ 304: | **DB Performance** | `Avg Query Duration` | SELECT duration (ms) | 1-10ms |
+ 305: | **DB Performance** | `DB Connection Pool Utilization (%)` | % | < 30% |
+ 306: | **Cache Performance** | `Cache Hit Ratio (%)` *(gauge)* | Hit Ratio | > 80% |
+ 307: | **Cache Performance** | `Cache Operation Latency (p95)` *(timeseries)* | GET / SET latency | < 5ms |
+ 308: | **Cache Performance** | `Cache Operations per Second` | ops/s by operation & result | — |
+ 309: 
+ 310: ### Kafka & Event Pipeline
+ 311: 
+ 312: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 313: |-----------|--------------------------------------|----------------|-------------------|
+ 314: | **Kafka Overview** | `Messages In (per second)` | order.events produce rate | ~2 msg/s |
+ 315: | **Kafka Overview** | `Consumer Group Lag` *(timeseries — tổng lag per group)* | notification-workers lag, inventory-workers lag | 0-5 messages |
+ 316: | **Kafka Overview** | `Consumer Group Lag by Partition` *(timeseries — chi tiết per partition)* | Max lag per partition | 0-2 messages |
+ 317: | **Kafka Overview** | `Under-Replicated Partitions` | Count | 0 |
+ 318: 
+ 319: ### Infrastructure — Applications VM (192.168.100.57) ⚠️ Ưu tiên
+ 320: 
+ 321: > **Chọn template variable `vm = app`** trước khi đọc các panel dưới đây.
+ 322: 
+ 323: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 324: |-----------|--------------------------------------|----------------|-------------------|
+ 325: | **Node Exporter - Host Monitoring** | `CPU Usage` *(gauge)* | CPU % | < 30% |
+ 326: | **Node Exporter - Host Monitoring** | `Memory Usage` *(gauge)* | Memory % | < 60% |
+ 327: | **Node Exporter - Host Monitoring** | `Disk Usage (/)` *(gauge)* | Disk % | < 50% |
+ 328: | **Docker Containers** | `Container CPU Usage` *(timeseries)* | order-service, api-gateway CPU % | < 20% |
+ 329: | **Docker Containers** | `Container Memory Usage` *(timeseries)* | order-service Memory | < 200MB |
  330: 
- 331: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 332: Sau khi chạy experiment này, bạn phải trả lời được:
- 333: 
- 334: - [ ] **Down vs Slow:** Service down hiển thị thế nào trên dashboard? (no data, RPS = 0). Khác gì service slow? (data vẫn có, nhưng duration cao)
- 335: - [ ] **Blast radius:** order-service chết → service nào vẫn hoạt động bình thường? Tại sao payment-service không bị ảnh hưởng?
- 336: - [ ] **2 lớp monitoring:** Tại sao `TargetDown` không firing mà `ServiceHealthCheckFailed` lại firing? Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được?
- 337: - [ ] **Ứng dụng production:** Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? (Gợi ý: xem RB-24)
- 338: - [ ] **SEV Assessment:** Dựa trên 5 câu impact assessment, bạn phân loại incident này là SEV mấy? Có escalation theo Escalation Matrix không? (Gợi ý: xem Context Matrix trong Part 4)
- 339: 
- 340: **Rollback:**
- 341: ```bash
- 342: docker start order-service
- 343: ```
- 344: 
- 345: **Bài học:** Phân biệt 2 lớp monitoring:
- 346: - **Lớp 1 – Service có sống không?** → Blackbox Exporter (active probing, không cần traffic)
- 347: - **Lớp 2 – Service có hoạt động đúng không?** → Span metrics (error rate, latency, cần traffic)
- 348: 
- 349: ---
- 350: 
- 351: ## 🧪 Experiment 2: Database Saturation (High Latency)
- 352: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) • [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) • [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
- 353: 
- 354: **Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, connection pool sẽ bị exhaust, error rate sẽ tăng theo sau.
- 355: 
- 356: > ⚠️ **QUAN TRỌNG:** Experiment này cần 3 terminal chạy song song. Table lock chỉ gây contention khi có traffic đang cố query table `products`. Nếu chạy lock mà không có traffic → dashboard sẽ không có data.
- 357: >
- 358: > **Tại sao cần rate cao?** API Gateway và Order Service chạy gthread workers (2 workers × 8 threads = 16 concurrent requests). DB connection pool max = 10. Với rate đủ cao, 16 threads cùng cố lấy connection → pool 10/10 đầy → 6 threads còn lại phải queue chờ `getconn()` → latency stacking → timeout → errors cascade.
- 359: >
- 360: > Với rate thấp (5 req/s), requests tuần tự nên pool chỉ nhích lên 1-2 → không thể hiện được saturation.
- 361: 
- 362: **Inject (3 terminals song song):**
- 363: 
- 364: ```bash
- 365: # Terminal 1: Flush product cache để request phải query DB ngay lập tức
- 366: # (Nếu cache warm, browse requests sẽ hit cache → bypass DB → không thấy contention)
- 367: docker exec redis redis-cli DEL "product:catalog"
- 368: 
- 369: # Terminal 2: Tạo table lock trong 90s (command này sẽ block 90 giây)
- 370: docker exec postgres psql -U app -d orders -c "
- 371:   BEGIN;
- 372:   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
- 373:   SELECT pg_sleep(90);
- 374:   COMMIT;
- 375: "
- 376: 
- 377: # Terminal 3: ĐỒNG THỜI → tạo traffic rate cao để gây contention
- 378: # Rate 20 = ~20 req/s, trong đó ~70% gọi /products (browse_heavy + browse_then_buy)
- 379: # → ~14 concurrent DB queries bị block → pool 10/10 exhaust
- 380: curl -X POST http://localhost:5003/start \
- 381:   -H "Content-Type: application/json" \
- 382:   -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
- 383: ```
- 384: 
- 385: **Timing:** lock=90s, traffic=120s → bạn sẽ thấy 3 phases trên dashboard:
- 386: - **Phase contention (0-90s):** pool đầy, latency spike, errors cascade
- 387: - **Phase recovery (90-120s):** lock release → pool giảm, latency trở lại, backlog xử lý
- 388: - **Phase steady (sau 120s):** traffic stop → metrics stabilize
- 389: 
- 390: **Cache-aside interaction:** Order Service dùng Redis cache (TTL=60s) cho product catalog. Nếu cache warm → browse requests trả về từ cache, không query DB → không bị ảnh hưởng bởi lock. Bước flush cache ở Terminal 1 đảm bảo request đầu tiên phải query DB → block → các requests sau cũng phải query DB (vì cache chưa được set lại) → tạo contention thực sự.
- 391: 
- 392: **Dashboard reading path:**
- 393: ```
- 394: App Performance → P95/P99 duration spike → Order Service (từ ~400ms lên 5-30s)
- 395:   → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
- 396:     → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
- 397:       → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
- 398:         → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
- 399:           → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
- 400: ```
- 401: 
- 402: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 403: Sau khi chạy experiment này, bạn phải trả lời được:
- 404: 
- 405: - [ ] **USE method:** DB saturation thể hiện ở metric nào? (connection pool utilization, query duration). Đây là U, S, hay E trong USE?
- 406: - [ ] **Pool exhaustion:** Tại sao pool active tăng lên 8-10 thay vì chỉ 1-2? (vì gthread cho phép 8 threads/worker xử lý concurrent → 8 threads cùng lấy connection → pool đầy). Với sync workers (1 request/worker), pool chỉ bao giờ lên tối đa = số workers → đây là kiến thức quan trọng khi sizing connection pool.
- 407: - [ ] **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
- 408: - [ ] **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → connection queue → timeout → error)
- 409: - [ ] **Cache interaction:** Nếu KHÔNG flush cache trước khi lock, experiment sẽ khác thế nào? (browse requests hit cache → không bị ảnh hưởng → pool không đầy). Đây là lý do cache-aside pattern giúp giảm blast radius của DB issues.
- 410: - [ ] **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" → bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
- 411: - [ ] **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
- 412: - [ ] **SEV Assessment:** Với traffic `browse_heavy` rate 20 req/s, bạn phân SEV mấy? Nếu experiment này xảy ra lúc 3 AM với 0 traffic thì SEV thay đổi thế nào? (Đây là bài học quan trọng nhất về SEV — xem Context Matrix)
- 413: 
- 414: **Rollback:** Lock tự release sau 90s, hoặc kill session:
- 415: ```bash
- 416: docker exec postgres psql -U app -d orders -c "
- 417:   SELECT pg_terminate_backend(pid) FROM pg_stat_activity
- 418:   WHERE state = 'active' AND query LIKE '%pg_sleep%';
- 419: "
- 420: ```
+ 331: ### Infrastructure — Observability VM (192.168.100.55) 📊 Reference
+ 332: 
+ 333: > **Chọn template variable `vm = observability`** trước khi đọc các panel dưới đây.
+ 334: > 
+ 335: > Chỉ cần ghi chú khi chạy load test nặng (nhiều metrics/logs/traces được generate). 
+ 336: > Nếu observability VM quá tải → metrics/logs có thể bị delay hoặc mất.
+ 337: 
+ 338: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 339: |-----------|--------------------------------------|----------------|-------------------|
+ 340: | **Node Exporter - Host Monitoring** | `CPU Usage` *(gauge)* | CPU % | < 30% |
+ 341: | **Node Exporter - Host Monitoring** | `Memory Usage` *(gauge)* | Memory % | < 60% |
+ 342: | **Node Exporter - Host Monitoring** | `Disk Usage (/)` *(gauge)* | Disk % | < 50% |
+ 343: 
+ 344: ### Alerting Status
+ 345: 
+ 346: | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+ 347: |-----------|--------------------------------------|----------------|-------------------|
+ 348: | **Alerting Overview** | `🔥 Firing Alerts` *(stat)* | Count | 0 (chỉ Watchdog) |
+ 349: | **Alerting Overview** | `🚨 Critical` *(stat)* | Count | 0 |
+ 350: | **Alerting Overview** | `⚠️ Warning` *(stat)* | Count | 0 |
+ 351: | **Alerting Overview** | `⏳ Pending` *(stat)* | Count | 0 |
+ 352: 
+ 353: ### Mẹo ghi baseline nhanh
+ 354: 
+ 355: 1. **Dùng Grafana Annotation** (Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject failure → giúp so sánh trước/sau dễ hơn.
+ 356: 
+ 357: 2. **Chụp screenshot** các dashboard quan trọng (Unified Overview, App Performance) để đối chiếu khi incident xảy ra.
+ 358: 
+ 359: 3. **Format ghi chú mẫu:**
+ 360:    ```markdown
+ 361:    ## Baseline — [YYYY-MM-DD HH:MM]
+ 362:    Traffic: scenario=normal, rate=2 req/s, duration=60s
+ 363:    
+ 364:    ### Application
+ 365:    - API Gateway RPS: 2.1 req/s (panel: "API Gateway — RPS" @ Unified Overview)
+ 366:    - Error Rate: 0.3% (panel: "Payment Error Rate" @ Unified Overview)
+ 367:    - P95 Latency: 450ms (panel: "Duration — Latency" @ App Performance)
+ 368:    
+ 369:    ### Database & Cache
+ 370:    - Connection Pool: 2/10 active (panel: "DB Connection Pool Activity" @ DB Performance)
+ 371:    - Avg SELECT: 3ms (panel: "Avg Query Duration" @ DB Performance)
+ 372:    - Cache Hit Ratio: 85% (panel: "Cache Hit Ratio (%)" @ Cache Performance)
+ 373:    - Cache GET P95: 2ms (panel: "Cache Operation Latency (p95)" @ Cache Performance)
+ 374:    
+ 375:    ### Kafka (vm=app)
+ 376:    - notification-workers lag: 0 (panel: "Consumer Group Lag" @ Kafka Overview)
+ 377:    - inventory-workers lag: 1 (panel: "Consumer Group Lag" @ Kafka Overview)
+ 378:    
+ 379:    ### Infrastructure (vm=app)
+ 380:    - CPU: 18% (panel: "CPU Usage" @ Node Exporter)
+ 381:    - Memory: 52% (panel: "Memory Usage" @ Node Exporter)
+ 382:    - Disk: 35% (panel: "Disk Usage (/)" @ Node Exporter)
+ 383:    
+ 384:    ### Alerts
+ 385:    - Firing: 0 (chỉ Watchdog) (panel: "🔥 Firing Alerts" @ Alerting Overview)
+ 386: 
+ 387: **Bước 4:** Ghi timestamp bắt đầu inject failure (dùng cho tính MTTD sau).
+ 388: 
+ 389: **Mẹo:** Dùng Grafana annotation (nhấn Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject → giúp so sánh trước/sau dễ hơn.
+ 390: 
+ 391: ---
+ 392: 
+ 393: ## 🧪 Experiment 1: Service Down (Health Check Failed)
+ 394: 📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-23 ServiceNoTraces](INCIDENT_RUNBOOK.md#-rb-23-servicenotraces_)
+ 395: 
+ 396: **Giả thuyết:** Khi order-service bị stop, Blackbox Exporter sẽ detect health check failure → `ServiceHealthCheckFailed` alert critical trong 1 phút, không phụ thuộc vào traffic.
+ 397: 
+ 398: **Production context:** Trong production, service down detection dùng active probing (Blackbox Exporter probe `/health/live` mỗi 15s) thay vì dựa vào span metrics → vì span metrics cần traffic để hoạt động.
+ 399: 
+ 400: **Inject:**
+ 401: ```bash
+ 402: # Trên applications VM
+ 403: docker stop order-service
+ 404: ```
+ 405: 
+ 406: **Dashboard reading path:**
+ 407: ```
+ 408: Alerting Overview → ServiceHealthCheckFailed firing (severity: critical)
+ 409:   → Instance: http://192.168.100.57:5001/health/live
+ 410:     → Unified Overview → Order Service RPS giảm/mất (nếu có traffic)
+ 411:       → App Performance → Order Service section: no data
+ 412:         → Kafka Overview → produce rate giảm (không publish events mới)
+ 413: ```
+ 414: 
+ 415: **Quan sát kỳ vọng:**
+ 416: - 🔴 **Alerting:** `ServiceHealthCheckFailed` firing sau ~1 phút (cấu hình `for: 1m`)
+ 417: - 🔴 **Alerting:** Nếu traffic-gen đang chạy → `ServiceNoTraces_OrderService` cũng firing sau ~5 phút
+ 418: - 🟡 **Unified:** Order Service RPS drop (nếu có traffic), các service khác vẫn hoạt động
+ 419: - 🟡 **App Performance:** Order section trắng, Notification vẫn xử lý events cũ
+ 420: - 🟡 **Kafka:** Produce rate = 0, consumer lag không tăng (không có event mới)
  421: 
- 422: ---
+ 422: **Lưu ý:** `TargetDown` (up == 0) không firing trong experiment này vì Prometheus không scrape order-service trực tiếp → metrics đi qua OTel Collector (vẫn healthy). Đây là lý do cần Blackbox Exporter.
  423: 
- 424: ## 🧪 Experiment 3: Kafka Consumer Lag (Notification Worker Slow)
- 425: 📖 **Runbook:** [RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
+ 424: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 425: Sau khi chạy experiment này, bạn phải trả lời được:
  426: 
- 427: **Giả thuyết:** Khi notification-worker bị freeze, Kafka consumer lag sẽ tăng, Alerting sẽ báo KafkaConsumerLagHigh.
- 428: 
- 429: **Inject:**
- 430: ```bash
- 431: # Pause notification-worker (SIGSTOP → freeze process)
- 432: docker pause notification-worker
- 433: 
- 434: # Chạy load test để tạo events (Flash Sale hoặc Browse Heavy trên UI)
- 435: ```
- 436: 
- 437: **Dashboard reading path:**
- 438: ```
- 439: Kafka Overview → Consumer lag tăng liên tục cho notification-workers group
- 440:   → Alerting → KafkaConsumerLagHigh firing (lag > 100 trong 5m)
- 441:     → App Performance → Notification Worker: tất cả panel = stale/no new data
- 442:       → Unified Overview → Notification Worker error rate có thể tăng
- 443: ```
- 444: 
- 445: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 446: Sau khi chạy experiment này, bạn phải trả lời được:
- 447: 
- 448: - [ ] **Leading indicator:** Consumer lag bắt đầu tăng bao lâu trước khi user thấy ảnh hưởng? Tại sao gọi nó là "leading"?
- 449: - [ ] **Pause vs Stop:** `docker pause` khác `docker stop` thế nào trên dashboard? (pause: container vẫn "running" nhưng frozen, không có restart count)
- 450: - [ ] **Catch-up behavior:** Sau khi unpause, lag giảm ngay hay giảm dần? Tại sao? Mất bao lâu để về 0?
- 451: - [ ] **Ứng dụng production:** Notification bị delay 5 phút → khách hàng chưa bị ảnh hưởng trực tiếp nhưng SLA email notification là 2 phút. Bạn cần page on-call hay tạo ticket?
- 452: - [ ] **SEV Assessment:** Notification bị delay nhưng user chưa thấy ảnh hưởng trực tiếp → bạn phân SEV mấy? Khi nào cần escalate lên Team Lead?
- 453: 
- 454: **Rollback:**
- 455: ```bash
- 456: docker unpause notification-worker
- 457: # Notification worker sẽ catch up → quan sát lag giảm dần
- 458: ```
- 459: 
- 460: **Bài học:** Consumer lag là **leading indicator** → nó tăng TRƯỚC khi user thấy ảnh hưởng. Đây là lý do monitor lag quan trọng.
+ 427: - [ ] **Down vs Slow:** Service down hiển thị thế nào trên dashboard? (no data, RPS = 0). Khác gì service slow? (data vẫn có, nhưng duration cao)
+ 428: - [ ] **Blast radius:** order-service chết → service nào vẫn hoạt động bình thường? Tại sao payment-service không bị ảnh hưởng?
+ 429: - [ ] **2 lớp monitoring:** Tại sao `TargetDown` không firing mà `ServiceHealthCheckFailed` lại firing? Nếu 3 giờ sáng không có traffic, lớp monitoring nào detect được?
+ 430: - [ ] **Ứng dụng production:** Nếu bạn là on-call engineer nhận alert `ServiceHealthCheckFailed` lúc 2 giờ sáng, 3 bước đầu tiên bạn làm là gì? (Gợi ý: xem RB-24)
+ 431: - [ ] **SEV Assessment:** Dựa trên 5 câu impact assessment, bạn phân loại incident này là SEV mấy? Có escalation theo Escalation Matrix không? (Gợi ý: xem Context Matrix trong Part 4)
+ 432: 
+ 433: **Rollback:**
+ 434: ```bash
+ 435: docker start order-service
+ 436: ```
+ 437: 
+ 438: **Bài học:** Phân biệt 2 lớp monitoring:
+ 439: - **Lớp 1 – Service có sống không?** → Blackbox Exporter (active probing, không cần traffic)
+ 440: - **Lớp 2 – Service có hoạt động đúng không?** → Span metrics (error rate, latency, cần traffic)
+ 441: 
+ 442: ---
+ 443: 
+ 444: ## 🧪 Experiment 2: Database Saturation (High Latency)
+ 445: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) • [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) • [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
+ 446: 
+ 447: **Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, connection pool sẽ bị exhaust, error rate sẽ tăng theo sau.
+ 448: 
+ 449: > ⚠️ **QUAN TRỌNG:** Experiment này cần 3 terminal chạy song song. Table lock chỉ gây contention khi có traffic đang cố query table `products`. Nếu chạy lock mà không có traffic → dashboard sẽ không có data.
+ 450: >
+ 451: > **Tại sao cần rate cao?** API Gateway và Order Service chạy gthread workers (2 workers × 8 threads = 16 concurrent requests). DB connection pool max = 10. Với rate đủ cao, 16 threads cùng cố lấy connection → pool 10/10 đầy → 6 threads còn lại phải queue chờ `getconn()` → latency stacking → timeout → errors cascade.
+ 452: >
+ 453: > Với rate thấp (5 req/s), requests tuần tự nên pool chỉ nhích lên 1-2 → không thể hiện được saturation.
+ 454: 
+ 455: **Inject (3 terminals song song):**
+ 456: 
+ 457: ```bash
+ 458: # Terminal 1: Flush product cache để request phải query DB ngay lập tức
+ 459: # (Nếu cache warm, browse requests sẽ hit cache → bypass DB → không thấy contention)
+ 460: docker exec redis redis-cli DEL "product:catalog"
  461: 
- 462: ---
- 463: 
- 464: ## 🧪 Experiment 4: Cascading Failure (Payment Service Down)
- 465: 📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-10 PaymentFastBurn](INCIDENT_RUNBOOK.md#-rb-10-paymentfastburn) • [RB-08 APIGatewayFastBurn](INCIDENT_RUNBOOK.md#-rb-08-apigatewayfastburn)
- 466: 
- 467: **Giả thuyết:** Khi payment-service down, order-service sẽ báo payment_error, notification-worker vẫn nhận events nhưng với status khác.
- 468: 
- 469: **Inject:**
- 470: ```bash
- 471: docker stop payment-service
- 472: # Tạo vài orders qua UI
- 473: ```
- 474: 
- 475: **Dashboard reading path:**
+ 462: # Terminal 2: Tạo table lock trong 90s (command này sẽ block 90 giây)
+ 463: docker exec postgres psql -U app -d orders -c "
+ 464:   BEGIN;
+ 465:   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
+ 466:   SELECT pg_sleep(90);
+ 467:   COMMIT;
+ 468: "
+ 469: 
+ 470: # Terminal 3: ĐỒNG THỜI → tạo traffic rate cao để gây contention
+ 471: # Rate 20 = ~20 req/s, trong đó ~70% gọi /products (browse_heavy + browse_then_buy)
+ 472: # → ~14 concurrent DB queries bị block → pool 10/10 exhaust
+ 473: curl -X POST http://localhost:5003/start \
+ 474:   -H "Content-Type: application/json" \
+ 475:   -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
  476: ```
- 477: Unified Overview → Payment Service RPS = 0
- 478:   → App Performance → Order Service: orders_total{status="payment_error"} tăng
- 479:     → App Performance → Payment section: no data
- 480:       → Notification Worker: vẫn nhận events (order.created vẫn publish)
- 481:         → Kafka Overview → produce rate vẫn có, consume rate vẫn có
- 482:           → Tracing → trace chain bị đứt → payment span (error)
- 483: ```
+ 477: 
+ 478: **Timing:** lock=90s, traffic=120s → bạn sẽ thấy 3 phases trên dashboard:
+ 479: - **Phase contention (0-90s):** pool đầy, latency spike, errors cascade
+ 480: - **Phase recovery (90-120s):** lock release → pool giảm, latency trở lại, backlog xử lý
+ 481: - **Phase steady (sau 120s):** traffic stop → metrics stabilize
+ 482: 
+ 483: **Cache-aside interaction:** Order Service dùng Redis cache (TTL=60s) cho product catalog. Nếu cache warm → browse requests trả về từ cache, không query DB → không bị ảnh hưởng bởi lock. Bước flush cache ở Terminal 1 đảm bảo request đầu tiên phải query DB → block → các requests sau cũng phải query DB (vì cache chưa được set lại) → tạo contention thực sự.
  484: 
- 485: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 486: Sau khi chạy experiment này, bạn phải trả lời được:
- 487: 
- 488: - [ ] **Cascade pattern:** Payment chết → order-service phản ứng thế nào? Crash theo hay trả error rồi tiếp tục? Đây gọi là gì? (graceful degradation)
- 489: - [ ] **Trace chain:** Mở 1 trace lúc payment down → span payment bị error → nhưng order-service span status là gì? (error hay ok?)
- 490: - [ ] **Kafka behavior:** produce rate thay đổi thế nào? Tại sao notification-worker vẫn hoạt động dù payment chết?
- 491: - [ ] **SLO impact:** Burn rate của API Gateway vs Payment → cái nào tăng nhanh hơn? Tại sao?
- 492: - [ ] **Ứng dụng production:** Payment gateway (Stripe/VNPay) bị sự cố → bạn nên stop nhận order mới hay vẫn nhận và retry sau?
- 493: - [ ] **SEV Assessment:** Payment failure = revenue impact trực tiếp → Theo 5 câu impact assessment, bạn có cần notify Finance + PM ngay không? SEV mấy?
+ 485: **Dashboard reading path:**
+ 486: ```
+ 487: App Performance → P95/P99 duration spike → Order Service (từ ~400ms lên 5-30s)
+ 488:   → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
+ 489:     → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
+ 490:       → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
+ 491:         → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
+ 492:           → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
+ 493: ```
  494: 
- 495: **Bài học:** Cascading failure pattern → upstream service (order) ghi nhận lỗi nhưng không crash. Downstream (notification) vẫn hoạt động. Đây là graceful degradation.
- 496: 
- 497: **Rollback:**
- 498: ```bash
- 499: docker start payment-service
- 500: ```
- 501: 
- 502: ---
- 503: 
- 504: ## 🧪 Experiment 5: SLO Burn Rate Deep Dive (Learning Exercise)
- 505: 📖 **Runbook:** [RB-08→13 (tất cả SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
+ 495: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 496: Sau khi chạy experiment này, bạn phải trả lời được:
+ 497: 
+ 498: - [ ] **USE method:** DB saturation thể hiện ở metric nào? (connection pool utilization, query duration). Đây là U, S, hay E trong USE?
+ 499: - [ ] **Pool exhaustion:** Tại sao pool active tăng lên 8-10 thay vì chỉ 1-2? (vì gthread cho phép 8 threads/worker xử lý concurrent → 8 threads cùng lấy connection → pool đầy). Với sync workers (1 request/worker), pool chỉ bao giờ lên tối đa = số workers → đây là kiến thức quan trọng khi sizing connection pool.
+ 500: - [ ] **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
+ 501: - [ ] **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → connection queue → timeout → error)
+ 502: - [ ] **Cache interaction:** Nếu KHÔNG flush cache trước khi lock, experiment sẽ khác thế nào? (browse requests hit cache → không bị ảnh hưởng → pool không đầy). Đây là lý do cache-aside pattern giúp giảm blast radius của DB issues.
+ 503: - [ ] **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" → bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
+ 504: - [ ] **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
+ 505: - [ ] **SEV Assessment:** Với traffic `browse_heavy` rate 20 req/s, bạn phân SEV mấy? Nếu experiment này xảy ra lúc 3 AM với 0 traffic thì SEV thay đổi thế nào? (Đây là bài học quan trọng nhất về SEV — xem Context Matrix)
  506: 
- 507: **Loại:** Learning exercise → không inject failure mới. Sử dụng data từ Experiment 2 và 4.
- 508: 
- 509: **Mục tiêu:** Hiểu sâu burn rate math, đọc burn rate dashboard, và biết cách phản ứng theo team size.
- 510: 
- 511: ### 5.1 — Theory: Error Budget & Burn Rate
- 512: 
- 513: **Bước 1: Tính Error Budget**
+ 507: **Rollback:** Lock tự release sau 90s, hoặc kill session:
+ 508: ```bash
+ 509: docker exec postgres psql -U app -d orders -c "
+ 510:   SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+ 511:   WHERE state = 'active' AND query LIKE '%pg_sleep%';
+ 512: "
+ 513: ```
  514: 
- 515: Hệ thống có 3 SLO. Tính error budget cho mỗi SLO:
+ 515: ---
  516: 
- 517: | SLO | Target | Error Budget (30 ngày) |
- 518: |-----|--------|------------------------|
- 519: | API Gateway Availability | 99.5% | 0.5% × 30d × 24h × 60m = **216 phút** |
- 520: | Payment Success Rate | 99.0% | 1.0% × 30d × 24h × 60m = **432 phút** |
- 521: | API Gateway Latency | 95% requests < 500ms | 5% × 30d × 24h × 60m = **2160 phút** |
- 522: 
- 523: **Nhận xét:** Latency SLO có budget lớn hơn nhiều (5% vs 0.5%). Đây là thiết kế có chủ ý → latency degradation thường ít nghiêm trọng hơn complete failure.
- 524: 
- 525: **Bước 2: Hiểu Burn Rate**
+ 517: ## 🧪 Experiment 3: Kafka Consumer Lag (Notification Worker Slow)
+ 518: 📖 **Runbook:** [RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
+ 519: 
+ 520: **Giả thuyết:** Khi notification-worker bị freeze, Kafka consumer lag sẽ tăng, Alerting sẽ báo KafkaConsumerLagHigh.
+ 521: 
+ 522: **Inject:**
+ 523: ```bash
+ 524: # Pause notification-worker (SIGSTOP → freeze process)
+ 525: docker pause notification-worker
  526: 
- 527: ```
- 528: Burn Rate = error_rate_thực_tế / error_rate_cho_phép
+ 527: # Chạy load test để tạo events (Flash Sale hoặc Browse Heavy trên UI)
+ 528: ```
  529: 
- 530:   1x  = đốt đều, hết budget đúng cuối tháng (bình thường)
- 531:   3x  = đốt gấp 3, hết budget sau 10 ngày
- 532:   14.4x = đốt cực nhanh, hết budget sau ~2 ngày
- 533: ```
- 534: 
- 535: **Bước 3: Tại sao 14.4x và 3x?**
- 536: 
- 537: Con số này được tính ngược từ yêu cầu phát hiện:
- 538: 
- 539: | Severity | Mục tiêu phát hiện | Budget tiêu trước khi phát hiện | Burn Rate |
- 540: |----------|-------------------|-------------------------------|-----------|
- 541: | Critical (page) | Trong 1 giờ | 2% budget | 14.4x |
- 542: | Warning (ticket) | Trong 6 giờ | 5% budget | 3x |
- 543: 
- 544: **Bước 4: Tại sao Multi-Window?**
- 545: 
- 546: Yêu cầu cả 2 windows vượt ngưỡng mới alert:
- 547: - **Window ngắn (5m/30m):** xác nhận "đang xảy ra ngay bây giờ"
- 548: - **Window dài (1h/6h):** xác nhận "không phải spike thoáng qua"
- 549: 
- 550: | Alert | Window ngắn | Window dài | Cả 2 vượt? | Kết quả |
- 551: |-------|-------------|------------|------------|---------|
- 552: | Spike 1 phút rồi hết | 5m > 14.4x ✓ | 1h < 14.4x ✗ | Không | Không alert ✓ |
- 553: | Service sập 15 phút | 5m > 14.4x ✓ | 1h > 14.4x ✓ | Có | PAGE! 🔴 |
- 554: | Chậm nhẹ 6 giờ | 30m > 3x ✓ | 6h > 3x ✓ | Có | Ticket 🟡 |
- 555: 
- 556: ### 5.2 — Thực hành: Đọc Burn Rate Dashboard
- 557: 
- 558: **Prerequisite:** Chạy Experiment 2 (DB Saturation) hoặc Experiment 4 (Cascading Failure) trước.
+ 530: **Dashboard reading path:**
+ 531: ```
+ 532: Kafka Overview → Consumer lag tăng liên tục cho notification-workers group
+ 533:   → Alerting → KafkaConsumerLagHigh firing (lag > 100 trong 5m)
+ 534:     → App Performance → Notification Worker: tất cả panel = stale/no new data
+ 535:       → Unified Overview → Notification Worker error rate có thể tăng
+ 536: ```
+ 537: 
+ 538: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 539: Sau khi chạy experiment này, bạn phải trả lời được:
+ 540: 
+ 541: - [ ] **Leading indicator:** Consumer lag bắt đầu tăng bao lâu trước khi user thấy ảnh hưởng? Tại sao gọi nó là "leading"?
+ 542: - [ ] **Pause vs Stop:** `docker pause` khác `docker stop` thế nào trên dashboard? (pause: container vẫn "running" nhưng frozen, không có restart count)
+ 543: - [ ] **Catch-up behavior:** Sau khi unpause, lag giảm ngay hay giảm dần? Tại sao? Mất bao lâu để về 0?
+ 544: - [ ] **Ứng dụng production:** Notification bị delay 5 phút → khách hàng chưa bị ảnh hưởng trực tiếp nhưng SLA email notification là 2 phút. Bạn cần page on-call hay tạo ticket?
+ 545: - [ ] **SEV Assessment:** Notification bị delay nhưng user chưa thấy ảnh hưởng trực tiếp → bạn phân SEV mấy? Khi nào cần escalate lên Team Lead?
+ 546: 
+ 547: **Rollback:**
+ 548: ```bash
+ 549: docker unpause notification-worker
+ 550: # Notification worker sẽ catch up → quan sát lag giảm dần
+ 551: ```
+ 552: 
+ 553: **Bài học:** Consumer lag là **leading indicator** → nó tăng TRƯỚC khi user thấy ảnh hưởng. Đây là lý do monitor lag quan trọng.
+ 554: 
+ 555: ---
+ 556: 
+ 557: ## 🧪 Experiment 4: Cascading Failure (Payment Service Down)
+ 558: 📖 **Runbook:** [RB-01 TargetDown](INCIDENT_RUNBOOK.md#-rb-01-targetdown) • [RB-10 PaymentFastBurn](INCIDENT_RUNBOOK.md#-rb-10-paymentfastburn) • [RB-08 APIGatewayFastBurn](INCIDENT_RUNBOOK.md#-rb-08-apigatewayfastburn)
  559: 
- 560: Sau khi inject xong, mở **SLO Overview** dashboard và trả lời:
+ 560: **Giả thuyết:** Khi payment-service down, order-service sẽ báo payment_error, notification-worker vẫn nhận events nhưng với status khác.
  561: 
- 562: - [ ] Gauge "API Gateway Availability" hiển thị bao nhiêu? So với SLO target 99.5%?
- 563: - [ ] Burn Rate chart: line "Fast (5m)" có vượt đường đỏ 14.4x không?
- 564: - [ ] Burn Rate chart: line "Fast (1h)" có vượt 14.4x không? (nếu chưa → multi-window đang bảo vệ bạn khỏi false alert)
- 565: - [ ] Error Budget gauge giảm bao nhiêu? Tính thử công thức: `error_rate × thời_gian_lỗi / 216 phút`
- 566: - [ ] Latency Compliance panel: giá trị bao nhiêu? So với SLO target 95%?
- 567: - [ ] Latency Burn Rate: có khác biệt gì so với Availability Burn Rate không?
- 568: - [ ] **SEV Assessment:** Fast burn (14.4x) = critical alert → Nhưng nếu xảy ra lúc 3 AM không traffic (phantom alert) thì SEV thực sự là gì?
- 569: 
- 570: **Bài học quan trọng:** Trong Experiment 4 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể bình thường → vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần cả 2 loại SLO.
- 571: 
- 572: ### 5.3 — Tính toán thực tế
- 573: 
- 574: **Bài tập:** Sau khi chạy Experiment 2 được 15 phút với error rate ~10%:
- 575: 
+ 562: **Inject:**
+ 563: ```bash
+ 564: docker stop payment-service
+ 565: # Tạo vài orders qua UI
+ 566: ```
+ 567: 
+ 568: **Dashboard reading path:**
+ 569: ```
+ 570: Unified Overview → Payment Service RPS = 0
+ 571:   → App Performance → Order Service: orders_total{status="payment_error"} tăng
+ 572:     → App Performance → Payment section: no data
+ 573:       → Notification Worker: vẫn nhận events (order.created vẫn publish)
+ 574:         → Kafka Overview → produce rate vẫn có, consume rate vẫn có
+ 575:           → Tracing → trace chain bị đứt → payment span (error)
  576: ```
- 577: Error Budget = 216 phút
- 578: Error rate = 10%
- 579: Thời gian = 15 phút
+ 577: 
+ 578: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 579: Sau khi chạy experiment này, bạn phải trả lời được:
  580: 
- 581: Lưu ý: Error Budget tính theo request-based, không phải time-based!
- 582: Error minutes tiêu thụ = 15 phút × 10% = 1.5 phút
- 583: Budget consumed = 1.5 / 216 × 100 = 0.694%
- 584: 
- 585: Kiểm chứng bằng burn rate:
- 586: Burn rate = 10% / 0.5% = 20x
- 587: Budget consumed = 20 × (15 / 43200) = 0.694% ✓
- 588: ```
+ 581: - [ ] **Cascade pattern:** Payment chết → order-service phản ứng thế nào? Crash theo hay trả error rồi tiếp tục? Đây gọi là gì? (graceful degradation)
+ 582: - [ ] **Trace chain:** Mở 1 trace lúc payment down → span payment bị error → nhưng order-service span status là gì? (error hay ok?)
+ 583: - [ ] **Kafka behavior:** produce rate thay đổi thế nào? Tại sao notification-worker vẫn hoạt động dù payment chết?
+ 584: - [ ] **SLO impact:** Burn rate của API Gateway vs Payment → cái nào tăng nhanh hơn? Tại sao?
+ 585: - [ ] **Ứng dụng production:** Payment gateway (Stripe/VNPay) bị sự cố → bạn nên stop nhận order mới hay vẫn nhận và retry sau?
+ 586: - [ ] **SEV Assessment:** Payment failure = revenue impact trực tiếp → Theo 5 câu impact assessment, bạn có cần notify Finance + PM ngay không? SEV mấy?
+ 587: 
+ 588: **Bài học:** Cascading failure pattern → upstream service (order) ghi nhận lỗi nhưng không crash. Downstream (notification) vẫn hoạt động. Đây là graceful degradation.
  589: 
- 590: **Sai lầm phổ biến:** Tính 15/216 = 6.94% → chỉ đúng khi 100% requests lỗi (hoàn toàn sập). Với 10% error rate, phải nhân với 10%.
- 591: 
- 592: ### 5.4 — Operation Playbook theo Team Size
- 593: 
- 594: Khi Burn Rate Alert firing, ai làm gì?
- 595: 
- 596: **Solo / Startup (1-3 người):**
- 597: ```
- 598: Fast Burn (14.4x) firing:
- 599:   1. Nhận alert qua Telegram/Slack
- 600:   2. Mở SLO Overview → xác nhận burn rate thực sự cao
- 601:   3. Mở App Performance → xác định service nào lỗi
- 602:   4. Fix hoặc rollback
- 603:   5. Viết post-mortem ngắn (3 dòng: gì xảy ra, tại sao, fix gì)
- 604: 
- 605: Slow Burn (3x) firing:
- 606:   1. Tạo task/issue
- 607:   2. Xử lý trong giờ làm việc (không cần phản ứng ngay)
- 608: ```
+ 590: **Rollback:**
+ 591: ```bash
+ 592: docker start payment-service
+ 593: ```
+ 594: 
+ 595: ---
+ 596: 
+ 597: ## 🧪 Experiment 5: SLO Burn Rate Deep Dive (Learning Exercise)
+ 598: 📖 **Runbook:** [RB-08→13 (tất cả SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
+ 599: 
+ 600: **Loại:** Learning exercise → không inject failure mới. Sử dụng data từ Experiment 2 và 4.
+ 601: 
+ 602: **Mục tiêu:** Hiểu sâu burn rate math, đọc burn rate dashboard, và biết cách phản ứng theo team size.
+ 603: 
+ 604: ### 5.1 — Theory: Error Budget & Burn Rate
+ 605: 
+ 606: **Bước 1: Tính Error Budget**
+ 607: 
+ 608: Hệ thống có 3 SLO. Tính error budget cho mỗi SLO:
  609: 
- 610: **Team vừa (5-10 người):**
- 611: ```
- 612: Fast Burn (14.4x) firing:
- 613:   1. On-call engineer nhận page
- 614:   2. Mở SLO Overview → xác nhận severity
- 615:   3. Thông báo team lead nếu burn rate > 14.4x kéo dài > 15 phút
- 616:   4. Mở App Performance → drill down root cause
- 617:   5. Fix hoặc rollback
- 618:   6. Handoff nếu hết shift
- 619:   7. Post-mortem meeting trong 48 giờ
- 620: 
- 621: Slow Burn (3x) firing:
- 622:   1. On-call tạo ticket với priority P2
- 623:   2. Assign cho team phù hợp (backend/infra/platform)
- 624:   3. Review trong standup sáng hôm sau
- 625:   4. Fix trong sprint hiện tại
- 626: 
- 627: Error Budget review (hàng tuần):
- 628:   - Budget < 50% → freeze feature releases, focus reliability
- 629:   - Budget < 25% → engineering manager escalation
- 630: ```
+ 610: | SLO | Target | Error Budget (30 ngày) |
+ 611: |-----|--------|------------------------|
+ 612: | API Gateway Availability | 99.5% | 0.5% × 30d × 24h × 60m = **216 phút** |
+ 613: | Payment Success Rate | 99.0% | 1.0% × 30d × 24h × 60m = **432 phút** |
+ 614: | API Gateway Latency | 95% requests < 500ms | 5% × 30d × 24h × 60m = **2160 phút** |
+ 615: 
+ 616: **Nhận xét:** Latency SLO có budget lớn hơn nhiều (5% vs 0.5%). Đây là thiết kế có chủ ý → latency degradation thường ít nghiêm trọng hơn complete failure.
+ 617: 
+ 618: **Bước 2: Hiểu Burn Rate**
+ 619: 
+ 620: ```
+ 621: Burn Rate = error_rate_thực_tế / error_rate_cho_phép
+ 622: 
+ 623:   1x  = đốt đều, hết budget đúng cuối tháng (bình thường)
+ 624:   3x  = đốt gấp 3, hết budget sau 10 ngày
+ 625:   14.4x = đốt cực nhanh, hết budget sau ~2 ngày
+ 626: ```
+ 627: 
+ 628: **Bước 3: Tại sao 14.4x và 3x?**
+ 629: 
+ 630: Con số này được tính ngược từ yêu cầu phát hiện:
  631: 
- 632: **Team lớn (10+ người, có SRE team riêng):**
- 633: ```
- 634: Fast Burn (14.4x) firing:
- 635:   1. On-call SRE nhận page → ack trong 5 phút
- 636:   2. Mở Incident channel (Slack #incident-YYYY-MM-DD)
- 637:   3. Assign Incident Commander (IC)
- 638:   4. IC coordinates: SRE fix, Comms update status page
- 639:   5. Fix/rollback → monitor 30 phút → resolve
- 640:   6. Blameless post-mortem trong 72 giờ
- 641: 
- 642: Slow Burn (3x) firing:
- 643:   1. Auto-create Jira ticket với context (burn rate, SLO, window)
- 644:   2. Triage trong SRE weekly review
- 645:   3. Assign action items với deadline
- 646: 
- 647: Error Budget policy:
- 648:   - Budget > 50%  → product team tự quyết release
- 649:   - Budget 25-50% → cần SRE approval cho risky changes
- 650:   - Budget < 25%  → release freeze, mandatory reliability sprint
- 651:   - Budget = 0%   → VP Engineering notified, full freeze
- 652: ```
- 653: 
- 654: ### 5.5 — Checklist tự đánh giá
- 655: ```
- 656: ## Sau Experiment 5, tôi có thể:
- 657: - [ ] Tính error budget từ SLO target
- 658: - [ ] Giải thích tại sao 14.4x và 3x (không cần nhớ số, hiểu logic)
- 659: - [ ] Phân biệt Availability burn rate vs Latency burn rate
- 660: - [ ] Đọc burn rate chart: biết khi nào cần page vs ticket
- 661: - [ ] Tính budget consumed từ error rate + thời gian
- 662: - [ ] Giải thích multi-window cho đồng nghiệp (tại sao cần 2 windows)
- 663: ```
+ 632: | Severity | Mục tiêu phát hiện | Budget tiêu trước khi phát hiện | Burn Rate |
+ 633: |----------|-------------------|-------------------------------|-----------|
+ 634: | Critical (page) | Trong 1 giờ | 2% budget | 14.4x |
+ 635: | Warning (ticket) | Trong 6 giờ | 5% budget | 3x |
+ 636: 
+ 637: **Bước 4: Tại sao Multi-Window?**
+ 638: 
+ 639: Yêu cầu cả 2 windows vượt ngưỡng mới alert:
+ 640: - **Window ngắn (5m/30m):** xác nhận "đang xảy ra ngay bây giờ"
+ 641: - **Window dài (1h/6h):** xác nhận "không phải spike thoáng qua"
+ 642: 
+ 643: | Alert | Window ngắn | Window dài | Cả 2 vượt? | Kết quả |
+ 644: |-------|-------------|------------|------------|---------|
+ 645: | Spike 1 phút rồi hết | 5m > 14.4x ✓ | 1h < 14.4x ✗ | Không | Không alert ✓ |
+ 646: | Service sập 15 phút | 5m > 14.4x ✓ | 1h > 14.4x ✓ | Có | PAGE! 🔴 |
+ 647: | Chậm nhẹ 6 giờ | 30m > 3x ✓ | 6h > 3x ✓ | Có | Ticket 🟡 |
+ 648: 
+ 649: ### 5.2 — Thực hành: Đọc Burn Rate Dashboard
+ 650: 
+ 651: **Prerequisite:** Chạy Experiment 2 (DB Saturation) hoặc Experiment 4 (Cascading Failure) trước.
+ 652: 
+ 653: Sau khi inject xong, mở **SLO Overview** dashboard và trả lời:
+ 654: 
+ 655: - [ ] Gauge "API Gateway Availability" hiển thị bao nhiêu? So với SLO target 99.5%?
+ 656: - [ ] Burn Rate chart: line "Fast (5m)" có vượt đường đỏ 14.4x không?
+ 657: - [ ] Burn Rate chart: line "Fast (1h)" có vượt 14.4x không? (nếu chưa → multi-window đang bảo vệ bạn khỏi false alert)
+ 658: - [ ] Error Budget gauge giảm bao nhiêu? Tính thử công thức: `error_rate × thời_gian_lỗi / 216 phút`
+ 659: - [ ] Latency Compliance panel: giá trị bao nhiêu? So với SLO target 95%?
+ 660: - [ ] Latency Burn Rate: có khác biệt gì so với Availability Burn Rate không?
+ 661: - [ ] **SEV Assessment:** Fast burn (14.4x) = critical alert → Nhưng nếu xảy ra lúc 3 AM không traffic (phantom alert) thì SEV thực sự là gì?
+ 662: 
+ 663: **Bài học quan trọng:** Trong Experiment 4 (stop payment), Availability burn rate sẽ spike nhưng Latency burn rate có thể bình thường → vì requests fail nhanh (error ngay, không chậm). Đây là lý do cần cả 2 loại SLO.
  664: 
- 665: **Rollback:** Không cần → exercise này dùng data từ experiments khác.
+ 665: ### 5.3 — Tính toán thực tế
  666: 
- 667: ---
+ 667: **Bài tập:** Sau khi chạy Experiment 2 được 15 phút với error rate ~10%:
  668: 
- 669: ## 🧪 Experiment 6: Stock Depletion Deadlock (Logic Bug)
- 670: 📖 **Runbook:** [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) (alert có thể firing do order errors tăng)
- 671: 
- 672: > Đây chính là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
+ 669: ```
+ 670: Error Budget = 216 phút
+ 671: Error rate = 10%
+ 672: Thời gian = 15 phút
  673: 
- 674: **Giả thuyết:** Khi stock = 0, nếu không có event flow để trigger restock, hệ thống rơi vào deadlock.
- 675: 
- 676: **Inject:**
- 677: ```bash
- 678: docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 0;"
- 679: curl -X POST http://localhost:5001/process
- 680: ```
- 681: 
- 682: **Dashboard reading path:**
- 683: ```
- 684: App Performance → Order Service: inventory_checks{result="out_of_stock"} tăng
- 685:   → Order Service: orders_total{status="out_of_stock"} tăng
- 686:     → Inventory Worker → Auto-Restock Events = no data (deadlock!)
- 687:       → Kafka Overview → produce rate giảm (ít events vì orders fail)
- 688: ```
- 689: 
- 690: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 691: Sau khi chạy experiment này, bạn phải trả lời được:
- 692: 
- 693: - [ ] **3 loại failure:** Phân biệt infrastructure failure (Exp 1), code bug, và design-level failure. Experiment này thuộc loại nào? Tại sao?
- 694: - [ ] **Dashboard limitation:** Dashboard nào cho thấy triệu chứng rõ nhất? Dashboard nào không giúp gì trong trường hợp này? Tại sao?
- 695: - [ ] **Missing event flow:** Vẽ sơ đồ event flow bình thường: `order.created → payment → notification → restock check`. Khi stock = 0, chuỗi bị đứt ở đâu?
- 696: - [ ] **Monitoring gap:** Bạn có thể viết alert rule nào để detect trạng thái deadlock này không? (Gợi ý: `orders_total{status="out_of_stock"} > X` kết hợp `restock_events_total == 0`)
- 697: - [ ] **Ứng dụng production:** Team PM báo "không ai đặt hàng được" nhưng tất cả infrastructure metrics đều xanh → bạn investigate thế nào?
- 698: - [ ] **SEV Assessment:** Catalog issue, không ai đặt hàng được → Đây là SEV mấy? Có cần page VP Eng không hay chỉ Team Lead?
- 699: 
- 700: **Bài học:** Đây là **design-level failure** → không phải infrastructure, không phải code bug, mà là missing event flow. Dashboard cho thấy triệu chứng nhưng root cause nằm ở architecture.
- 701: 
- 702: **Rollback:**
- 703: ```bash
- 704: docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 100;"
- 705: ```
- 706: 
- 707: ---
- 708: 
- 709: ## 🧪 Experiment 7: Memory Pressure (Container Resource Limit)
- 710: 📖 **Runbook:** [RB-03 HighMemoryUsage](INCIDENT_RUNBOOK.md#-rb-03-highmemoryusage) • [RB-06 MemoryWillExhaust](INCIDENT_RUNBOOK.md#-rb-06-memorywillexhaustin2hours) • [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95)
- 711: 
- 712: **Giả thuyết:** Khi container bị giới hạn memory, latency tăng → eventually OOMKilled.
+ 674: Lưu ý: Error Budget tính theo request-based, không phải time-based!
+ 675: Error minutes tiêu thụ = 15 phút × 10% = 1.5 phút
+ 676: Budget consumed = 1.5 / 216 × 100 = 0.694%
+ 677: 
+ 678: Kiểm chứng bằng burn rate:
+ 679: Burn rate = 10% / 0.5% = 20x
+ 680: Budget consumed = 20 × (15 / 43200) = 0.694% ✓
+ 681: ```
+ 682: 
+ 683: **Sai lầm phổ biến:** Tính 15/216 = 6.94% → chỉ đúng khi 100% requests lỗi (hoàn toàn sập). Với 10% error rate, phải nhân với 10%.
+ 684: 
+ 685: ### 5.4 — Operation Playbook theo Team Size
+ 686: 
+ 687: Khi Burn Rate Alert firing, ai làm gì?
+ 688: 
+ 689: **Solo / Startup (1-3 người):**
+ 690: ```
+ 691: Fast Burn (14.4x) firing:
+ 692:   1. Nhận alert qua Telegram/Slack
+ 693:   2. Mở SLO Overview → xác nhận burn rate thực sự cao
+ 694:   3. Mở App Performance → xác định service nào lỗi
+ 695:   4. Fix hoặc rollback
+ 696:   5. Viết post-mortem ngắn (3 dòng: gì xảy ra, tại sao, fix gì)
+ 697: 
+ 698: Slow Burn (3x) firing:
+ 699:   1. Tạo task/issue
+ 700:   2. Xử lý trong giờ làm việc (không cần phản ứng ngay)
+ 701: ```
+ 702: 
+ 703: **Team vừa (5-10 người):**
+ 704: ```
+ 705: Fast Burn (14.4x) firing:
+ 706:   1. On-call engineer nhận page
+ 707:   2. Mở SLO Overview → xác nhận severity
+ 708:   3. Thông báo team lead nếu burn rate > 14.4x kéo dài > 15 phút
+ 709:   4. Mở App Performance → drill down root cause
+ 710:   5. Fix hoặc rollback
+ 711:   6. Handoff nếu hết shift
+ 712:   7. Post-mortem meeting trong 48 giờ
  713: 
- 714: **Inject:**
- 715: ```bash
- 716: docker update --memory=64m --memory-swap=64m order-service
- 717: # Chạy load test nặng
- 718: ```
+ 714: Slow Burn (3x) firing:
+ 715:   1. On-call tạo ticket với priority P2
+ 716:   2. Assign cho team phù hợp (backend/infra/platform)
+ 717:   3. Review trong standup sáng hôm sau
+ 718:   4. Fix trong sprint hiện tại
  719: 
- 720: **Dashboard reading path:**
- 721: ```
- 722: Infrastructure → Docker Containers → memory usage tăng dần limit
- 723:   → App Performance → Order Service P95 tăng (GC pauses)
- 724:     → Alerting → HighMemoryUsage có thể firing
- 725:       → Docker Containers → restart count tăng nếu OOMKilled
+ 720: Error Budget review (hàng tuần):
+ 721:   - Budget < 50% → freeze feature releases, focus reliability
+ 722:   - Budget < 25% → engineering manager escalation
+ 723: ```
+ 724: 
+ 725: **Team lớn (10+ người, có SRE team riêng):**
  726: ```
- 727: 
- 728: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 729: Sau khi chạy experiment này, bạn phải trả lời được:
- 730: 
- 731: - [ ] **USE method:** Memory pressure là U (Utilization), S (Saturation), hay E (Errors)? Khi nào nó chuyển từ Saturation sang Errors? (GC pauses → OOMKilled)
- 732: - [ ] **Predictive alerting:** `predict_linear()` dự đoán memory exhaustion → nó firing bao lâu trước khi OOM thực sự xảy ra? Giá trị này hữu ích thế nào lúc 3 giờ sáng?
- 733: - [ ] **Cascading effect:** Memory pressure ảnh hưởng latency thế nào? Tại sao P95 tăng trước P50? (GC pauses ảnh hưởng tail latency trước)
- 734: - [ ] **Container restart:** OOMKilled container tự restart → metrics có bị mất không? Làm sao phân biệt "service healthy sau restart" vs "service đang flapping"?
- 735: - [ ] **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ → bạn tăng memory limit hay investigate memory leak? Cách quyết định?
- 736: - [ ] **SEV Assessment:** Container bị giới hạn memory, GC pauses → User thấy slow nhưng không error → SEV mấy? Predictive alert có cần page không?
- 737: 
- 738: **Rollback:**
- 739: ```bash
- 740: docker update --memory=0 order-service  # remove limit
- 741: docker restart order-service
- 742: ```
- 743: 
- 744: ---
- 745: 
- 746: ## 🧪 Experiment 8: DNS Cache Stale (Nginx Proxy Issue)
- 747: 📖 **Runbook:** Không có alert tương ứng → đây là networking issue mà monitoring không detect được. Cần manual investigation.
- 748: 
- 749: > Đây cũng là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
- 750: 
- 751: **Giả thuyết:** Khi rebuild container, nginx giữ IP cũ → Connection refused.
- 752: 
- 753: **Inject:**
- 754: ```bash
- 755: # Ghi nhận IP hiện tại
- 756: docker inspect inventory-worker --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+ 727: Fast Burn (14.4x) firing:
+ 728:   1. On-call SRE nhận page → ack trong 5 phút
+ 729:   2. Mở Incident channel (Slack #incident-YYYY-MM-DD)
+ 730:   3. Assign Incident Commander (IC)
+ 731:   4. IC coordinates: SRE fix, Comms update status page
+ 732:   5. Fix/rollback → monitor 30 phút → resolve
+ 733:   6. Blameless post-mortem trong 72 giờ
+ 734: 
+ 735: Slow Burn (3x) firing:
+ 736:   1. Auto-create Jira ticket với context (burn rate, SLO, window)
+ 737:   2. Triage trong SRE weekly review
+ 738:   3. Assign action items với deadline
+ 739: 
+ 740: Error Budget policy:
+ 741:   - Budget > 50%  → product team tự quyết release
+ 742:   - Budget 25-50% → cần SRE approval cho risky changes
+ 743:   - Budget < 25%  → release freeze, mandatory reliability sprint
+ 744:   - Budget = 0%   → VP Engineering notified, full freeze
+ 745: ```
+ 746: 
+ 747: ### 5.5 — Checklist tự đánh giá
+ 748: ```
+ 749: ## Sau Experiment 5, tôi có thể:
+ 750: - [ ] Tính error budget từ SLO target
+ 751: - [ ] Giải thích tại sao 14.4x và 3x (không cần nhớ số, hiểu logic)
+ 752: - [ ] Phân biệt Availability burn rate vs Latency burn rate
+ 753: - [ ] Đọc burn rate chart: biết khi nào cần page vs ticket
+ 754: - [ ] Tính budget consumed từ error rate + thời gian
+ 755: - [ ] Giải thích multi-window cho đồng nghiệp (tại sao cần 2 windows)
+ 756: ```
  757: 
- 758: # Rebuild (sẽ nhận IP mới)
- 759: docker compose up -d --build inventory-worker
- 760: 
- 761: # Kiểm tra IP mới → nếu khác IP cũ → web-ui sẽ báo DOWN
- 762: docker inspect inventory-worker --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
- 763: ```
+ 758: **Rollback:** Không cần → exercise này dùng data từ experiments khác.
+ 759: 
+ 760: ---
+ 761: 
+ 762: ## 🧪 Experiment 6: Stock Depletion Deadlock (Logic Bug)
+ 763: 📖 **Runbook:** [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) (alert có thể firing do order errors tăng)
  764: 
- 765: **Dashboard reading path:**
- 766: ```
- 767: Web UI → Inventory Worker badge = DOWN (red)
- 768:   → Nhưng docker ps → container healthy
- 769:     → web-ui logs → "Connection refused" tới IP cũ
- 770:       → Không phải monitoring issue mà là networking issue
- 771: ```
- 772: 
- 773: **Fix:** `docker restart web-ui` (reload nginx DNS)
+ 765: > Đây chính là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
+ 766: 
+ 767: **Giả thuyết:** Khi stock = 0, nếu không có event flow để trigger restock, hệ thống rơi vào deadlock.
+ 768: 
+ 769: **Inject:**
+ 770: ```bash
+ 771: docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 0;"
+ 772: curl -X POST http://localhost:5001/process
+ 773: ```
  774: 
- 775: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 776: Sau khi chạy experiment này, bạn phải trả lời được:
- 777: 
- 778: - [ ] **Monitoring blind spot:** Tại sao Prometheus/Blackbox Exporter không detect được vấn đề này? (Gợi ý: probe đi thẳng tới service, không qua nginx proxy)
- 779: - [ ] **Misleading dashboard:** Web UI báo DOWN nhưng `docker ps` báo healthy → bạn tin cái nào? Cách cross-reference để xác nhận?
- 780: - [ ] **DNS in Docker:** Container IP thay đổi khi nào? Tại sao nginx cache DNS lại gây vấn đề? Giải pháp production là gì? (resolver, service mesh)
- 781: - [ ] **Incident classification:** Đây là SEV mấy theo incident-runbook-templates? (SEV3-4: service chạy, chỉ 1 proxy path bị ảnh hưởng)
- 782: - [ ] **Ứng dụng production:** Sau deploy mới, 1 trong 5 service báo DOWN trên status page nhưng health check vẫn pass → nguyên nhân có thể là gì ngoài DNS cache?
- 783: - [ ] **SEV Assessment:** Chỉ 1 proxy path bị ảnh hưởng, service thực sự healthy → Theo incident-runbook-templates đây là SEV mấy? Cần page ai?
- 784: 
- 785: **Bài học:** Dashboard có thể **misleading** → service thực sự healthy nhưng proxy layer không reach được. Cần cross-reference với container status.
- 786: 
- 787: ---
- 788: 
- 789: ## 🧪 Experiment 9: Phantom Alert — SLO Burn Rate khi không có Traffic
- 790: 📖 **Runbook:** [RB-08→13 (SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
- 791: 
- 792: > Đây là incident thực tế đã xảy ra trong lab này → `APIGatewayFastBurn` firing lúc nửa đêm dù không có user traffic.
- 793: 
- 794: **Giả thuyết:** Sau khi traffic-gen chạy xong (có errors), SLO burn rate alert sẽ tiếp tục firing dù không còn traffic mới → vì `rate()` không thể "dilute" error rate khi `total = 0`.
- 795: 
- 796: **Inject:**
- 797: ```bash
- 798: # Bước 1: Chạy traffic-gen với scenario có lỗi (ví dụ: stop payment trước)
- 799: docker stop payment-service
- 800: curl -X POST http://localhost:5003/start \
- 801:   -H "Content-Type: application/json" \
- 802:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
- 803: 
- 804: # Bước 2: Chờ traffic-gen chạy xong (60s)
- 805: # Bước 3: Start lại payment-service (fix incident)
- 806: docker start payment-service
- 807: 
- 808: # Bước 4: KHÔNG chạy traffic mới → chỉ chờ và quan sát alert
- 809: ```
- 810: 
- 811: **Dashboard reading path:**
- 812: ```
- 813: Alerting Overview → APIGatewayFastBurn firing (critical)
- 814:   → SLO Overview → Availability gauge < 99.5% (từ data cũ)
- 815:     → Unified Overview → tất cả RPS = 0 (không traffic)
- 816:       → App Performance → error rate "đóng băng" ở giá trị cuối
- 817:         → Tracing → không có trace mới
- 818: ```
- 819: 
- 820: **Quan sát kỳ vọng:**
- 821: - Alert firing dù incident đã được fix (payment-service đã start lại)
- 822: - Dashboard hiển thị error rate từ lần chạy cuối → không tự reset về 0
- 823: - Không có trace mới để investigate → 3 pillars thiếu 2 (traces + logs trắng)
- 824: - Alert chỉ resolve khi có traffic mới thành công để "dilute" error rate
- 825: 
- 826: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 827: Sau khi chạy experiment này, bạn phải trả lời được:
- 828: 
- 829: - [ ] **Stale metrics:** Tại sao `rate(errors[1h]) / rate(total[1h])` vẫn cao khi không có traffic? `0/0` trả về gì trong PromQL?
- 830: - [ ] **Alert lifecycle:** Alert firing → incident fixed → nhưng alert không resolve. Trong production, on-call engineer nên làm gì? (silence alert + ghi chú? hay chạy synthetic traffic?)
- 831: - [ ] **Root cause của phantom alert:** Vấn đề nằm ở alert rule hay ở bản chất của rate-based metrics?
- 832: - [ ] **Production fix:** Viết lại alert rule thêm điều kiện gì để tránh phantom alert? (Gợi ý: `rate(total[5m]) > 0`)
- 833: - [ ] **Alert fatigue:** Nếu team bắt đầu ignore SLO alerts vì "lại phantom alert" → hậu quả là gì khi incident thật xảy ra?
- 834: - [ ] **SEV Assessment:** Alert firing nhưng service healthy + no traffic → Đây có phải incident không? Nếu KHÔNG phải, bạn ghi vào Incident Log thế nào?
- 835: 
- 836: **Ví dụ production tương tự:**
- 837: Công ty e-commerce, service `payment-webhook` nhận callback từ Stripe. Ban đêm (0h-6h) chỉ ~5-10 requests/giờ. Deploy lúc 21:00 có bug → 3 webhooks fail → error rate 100% → burn rate 200x. Rollback xong 21:10 nhưng alert firing đến 02:00 sáng (5 tiếng!) vì không có webhook mới. On-call bị đánh thức 2 lần cho incident đã fix.
+ 775: **Dashboard reading path:**
+ 776: ```
+ 777: App Performance → Order Service: inventory_checks{result="out_of_stock"} tăng
+ 778:   → Order Service: orders_total{status="out_of_stock"} tăng
+ 779:     → Inventory Worker → Auto-Restock Events = no data (deadlock!)
+ 780:       → Kafka Overview → produce rate giảm (ít events vì orders fail)
+ 781: ```
+ 782: 
+ 783: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 784: Sau khi chạy experiment này, bạn phải trả lời được:
+ 785: 
+ 786: - [ ] **3 loại failure:** Phân biệt infrastructure failure (Exp 1), code bug, và design-level failure. Experiment này thuộc loại nào? Tại sao?
+ 787: - [ ] **Dashboard limitation:** Dashboard nào cho thấy triệu chứng rõ nhất? Dashboard nào không giúp gì trong trường hợp này? Tại sao?
+ 788: - [ ] **Missing event flow:** Vẽ sơ đồ event flow bình thường: `order.created → payment → notification → restock check`. Khi stock = 0, chuỗi bị đứt ở đâu?
+ 789: - [ ] **Monitoring gap:** Bạn có thể viết alert rule nào để detect trạng thái deadlock này không? (Gợi ý: `orders_total{status="out_of_stock"} > X` kết hợp `restock_events_total == 0`)
+ 790: - [ ] **Ứng dụng production:** Team PM báo "không ai đặt hàng được" nhưng tất cả infrastructure metrics đều xanh → bạn investigate thế nào?
+ 791: - [ ] **SEV Assessment:** Catalog issue, không ai đặt hàng được → Đây là SEV mấy? Có cần page VP Eng không hay chỉ Team Lead?
+ 792: 
+ 793: **Bài học:** Đây là **design-level failure** → không phải infrastructure, không phải code bug, mà là missing event flow. Dashboard cho thấy triệu chứng nhưng root cause nằm ở architecture.
+ 794: 
+ 795: **Rollback:**
+ 796: ```bash
+ 797: docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 100;"
+ 798: ```
+ 799: 
+ 800: ---
+ 801: 
+ 802: ## 🧪 Experiment 7: Memory Pressure (Container Resource Limit)
+ 803: 📖 **Runbook:** [RB-03 HighMemoryUsage](INCIDENT_RUNBOOK.md#-rb-03-highmemoryusage) • [RB-06 MemoryWillExhaust](INCIDENT_RUNBOOK.md#-rb-06-memorywillexhaustin2hours) • [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95)
+ 804: 
+ 805: **Giả thuyết:** Khi container bị giới hạn memory, latency tăng → eventually OOMKilled.
+ 806: 
+ 807: **Inject:**
+ 808: ```bash
+ 809: docker update --memory=64m --memory-swap=64m order-service
+ 810: # Chạy load test nặng
+ 811: ```
+ 812: 
+ 813: **Dashboard reading path:**
+ 814: ```
+ 815: Infrastructure → Docker Containers → memory usage tăng dần limit
+ 816:   → App Performance → Order Service P95 tăng (GC pauses)
+ 817:     → Alerting → HighMemoryUsage có thể firing
+ 818:       → Docker Containers → restart count tăng nếu OOMKilled
+ 819: ```
+ 820: 
+ 821: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 822: Sau khi chạy experiment này, bạn phải trả lời được:
+ 823: 
+ 824: - [ ] **USE method:** Memory pressure là U (Utilization), S (Saturation), hay E (Errors)? Khi nào nó chuyển từ Saturation sang Errors? (GC pauses → OOMKilled)
+ 825: - [ ] **Predictive alerting:** `predict_linear()` dự đoán memory exhaustion → nó firing bao lâu trước khi OOM thực sự xảy ra? Giá trị này hữu ích thế nào lúc 3 giờ sáng?
+ 826: - [ ] **Cascading effect:** Memory pressure ảnh hưởng latency thế nào? Tại sao P95 tăng trước P50? (GC pauses ảnh hưởng tail latency trước)
+ 827: - [ ] **Container restart:** OOMKilled container tự restart → metrics có bị mất không? Làm sao phân biệt "service healthy sau restart" vs "service đang flapping"?
+ 828: - [ ] **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ → bạn tăng memory limit hay investigate memory leak? Cách quyết định?
+ 829: - [ ] **SEV Assessment:** Container bị giới hạn memory, GC pauses → User thấy slow nhưng không error → SEV mấy? Predictive alert có cần page không?
+ 830: 
+ 831: **Rollback:**
+ 832: ```bash
+ 833: docker update --memory=0 order-service  # remove limit
+ 834: docker restart order-service
+ 835: ```
+ 836: 
+ 837: ---
  838: 
- 839: **Fix trong alert rule:**
- 840: ```yaml
- 841: # Thêm traffic guard → chỉ alert khi CÓ traffic
- 842: - alert: APIGatewayFastBurn
- 843:   expr: |
- 844:     slo:api_gateway_availability:burn_rate_1h > 14.4
- 845:     and slo:api_gateway_availability:burn_rate_5m > 14.4
- 846:     and rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m]) > 0
- 847: ```
- 848: 
- 849: **Rollback:** Không cần → đây là learning exercise.
+ 839: ## 🧪 Experiment 8: DNS Cache Stale (Nginx Proxy Issue)
+ 840: 📖 **Runbook:** Không có alert tương ứng → đây là networking issue mà monitoring không detect được. Cần manual investigation.
+ 841: 
+ 842: > Đây cũng là incident thực tế đã xảy ra trong quá trình phát triển hệ thống này.
+ 843: 
+ 844: **Giả thuyết:** Khi rebuild container, nginx giữ IP cũ → Connection refused.
+ 845: 
+ 846: **Inject:**
+ 847: ```bash
+ 848: # Ghi nhận IP hiện tại
+ 849: docker inspect inventory-worker --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
  850: 
- 851: **Bài học:** SLO burn rate alerts cần **traffic guard** (`rate(total) > 0`) cho low-traffic services. Không có traffic = không đủ data để tính burn rate chính xác.
- 852: 
- 853: ---
- 854: 
- 855: ## 🧪 Experiment 10: Timezone Trap — Đọc sai Dashboard do Timezone
- 856: 📖 **Runbook:** Không có alert tương ứng → đây là human error trong incident investigation, không phải system issue.
+ 851: # Rebuild (sẽ nhận IP mới)
+ 852: docker compose up -d --build inventory-worker
+ 853: 
+ 854: # Kiểm tra IP mới → nếu khác IP cũ → web-ui sẽ báo DOWN
+ 855: docker inspect inventory-worker --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+ 856: ```
  857: 
- 858: > Đây là incident thực tế đã xảy ra khi investigate alert trong lab này → Grafana browser timezone (UTC+7) ≠ server timezone (UTC) → đọc sai time window → investigate sai khoảng thời gian.
- 859: 
- 860: **Giả thuyết:** Khi Grafana timezone khác server timezone, on-call engineer sẽ suy luận sai về thời điểm xảy ra incident.
- 861: 
- 862: **Inject:**
- 863: ```bash
- 864: # Không inject failure → thay đổi Grafana timezone
- 865: # 1. Mở Grafana → Profile → Preferences → Timezone
- 866: # 2. Đổi từ UTC sang "Browser Time" (hoặc UTC+7)
- 867: # 3. Mở bất kỳ dashboard nào và đọc time range
- 868: ```
- 869: 
- 870: **Bẫy cần nhận biết:**
- 871: 
- 872: | Grafana hiển thị | Server (UTC) | Bạn nghĩ | Thực tế |
- 873: |-------------------|--------------|----------|---------|
- 874: | 00:00 - 08:00 (UTC+7) | 17:00 - 01:00 UTC | "Sáng nay 0h-8h" | "Chiều/tối hôm qua" |
- 875: | Alert lúc 02:00 (UTC+7) | 19:00 UTC hôm trước | "2 giờ sáng" | "7 giờ tối" |
- 876: | Traffic drop lúc 07:00 (UTC+7) | 00:00 UTC | "7 giờ sáng nay" | "Nửa đêm" |
+ 858: **Dashboard reading path:**
+ 859: ```
+ 860: Web UI → Inventory Worker badge = DOWN (red)
+ 861:   → Nhưng docker ps → container healthy
+ 862:     → web-ui logs → "Connection refused" tới IP cũ
+ 863:       → Không phải monitoring issue mà là networking issue
+ 864: ```
+ 865: 
+ 866: **Fix:** `docker restart web-ui` (reload nginx DNS)
+ 867: 
+ 868: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 869: Sau khi chạy experiment này, bạn phải trả lời được:
+ 870: 
+ 871: - [ ] **Monitoring blind spot:** Tại sao Prometheus/Blackbox Exporter không detect được vấn đề này? (Gợi ý: probe đi thẳng tới service, không qua nginx proxy)
+ 872: - [ ] **Misleading dashboard:** Web UI báo DOWN nhưng `docker ps` báo healthy → bạn tin cái nào? Cách cross-reference để xác nhận?
+ 873: - [ ] **DNS in Docker:** Container IP thay đổi khi nào? Tại sao nginx cache DNS lại gây vấn đề? Giải pháp production là gì? (resolver, service mesh)
+ 874: - [ ] **Incident classification:** Đây là SEV mấy theo incident-runbook-templates? (SEV3-4: service chạy, chỉ 1 proxy path bị ảnh hưởng)
+ 875: - [ ] **Ứng dụng production:** Sau deploy mới, 1 trong 5 service báo DOWN trên status page nhưng health check vẫn pass → nguyên nhân có thể là gì ngoài DNS cache?
+ 876: - [ ] **SEV Assessment:** Chỉ 1 proxy path bị ảnh hưởng, service thực sự healthy → Theo incident-runbook-templates đây là SEV mấy? Cần page ai?
  877: 
- 878: **Ví dụ cụ thể từ lab này:**
+ 878: **Bài học:** Dashboard có thể **misleading** → service thực sự healthy nhưng proxy layer không reach được. Cần cross-reference với container status.
  879: 
- 880: ```
- 881: Tình huống: Alert "APIGatewayFastBurn" firing
- 882: Dashboard time picker: "2026-05-19 00:00:00 to 07:59:59"
- 883: Availability gauge: 92.4%
+ 880: ---
+ 881: 
+ 882: ## 🧪 Experiment 9: Phantom Alert — SLO Burn Rate khi không có Traffic
+ 883: 📖 **Runbook:** [RB-08→13 (SLO Burn Rate)](INCIDENT_RUNBOOK.md#part-2-slo-burn-rate-alerts)
  884: 
- 885: Suy luận SAI (không biết timezone):
- 886:   "Sáng nay 0h-8h, hệ thống availability 92.4%"
- 887:   → Tìm incident trong khoảng 0h-8h sáng nay
+ 885: > Đây là incident thực tế đã xảy ra trong lab này → `APIGatewayFastBurn` firing lúc nửa đêm dù không có user traffic.
+ 886: 
+ 887: **Giả thuyết:** Sau khi traffic-gen chạy xong (có errors), SLO burn rate alert sẽ tiếp tục firing dù không còn traffic mới → vì `rate()` không thể "dilute" error rate khi `total = 0`.
  888: 
- 889: Suy luận ĐÚNG (biết timezone UTC+7):
- 890:   Dashboard = 00:00-08:00 UTC+7 = 17:00-01:00 UTC
- 891:   → Tìm incident trong khoảng 5PM-1AM hôm qua/nay (UTC)
- 892:   → Traffic-gen chạy lúc 14:40 UTC+7 (trước window 9 tiếng!)
- 893: ```
- 894: 
- 895: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 896: Sau khi chạy experiment này, bạn phải trả lời được:
- 897: 
- 898: - [ ] **Timezone awareness:** Grafana timezone setting ở đâu? Cách kiểm tra nhanh timezone đang dùng?
- 899: - [ ] **UTC convention:** Tại sao production teams thường thống nhất dùng UTC cho monitoring? Khi nào dùng local time có lợi?
- 900: - [ ] **Cross-reference:** Khi đọc dashboard time range, bạn cần cross-reference với timestamp nào? (server logs, docker logs, alert firing time → tất cả đều dùng UTC)
- 901: - [ ] **Incident impact:** Timezone sai có thể gây sai lệch investigation bao lâu? (Trong ví dụ này: tìm sai 9 tiếng)
- 902: - [ ] **Team practice:** Nếu team có người ở nhiều timezone (VN, US, EU), cách nào tránh nhầm lẫn khi handoff incident?
- 903: - [ ] **SEV Assessment:** Đọc sai timezone có thể dẫn đến phân SEV sai → Ví dụ: nghĩ là "sáng nay" nhưng thực tế là "tối hôm qua" → escalation sai người. Bạn sẽ chuẩn hóa timezone trong team thế nào?
- 904: 
- 905: **Best practice:**
- 906: - 🔧 **Grafana:** set timezone = UTC cho tất cả monitoring dashboards
- 907: - 🔧 **Docker:** đảm bảo host timezone = UTC (`timedatectl set-timezone UTC`)
- 908: - 🔧 **Logs:** luôn log timestamps ở UTC (ISO 8601: `2026-05-19T03:00:00Z`)
- 909: - 🔧 **Team:** quy ước "nói giờ UTC khi discuss incident" → "incident lúc 17:00Z"
- 910: 
- 911: **Rollback:** Đổi Grafana timezone về UTC: Profile → Preferences → Timezone → UTC.
+ 889: **Inject:**
+ 890: ```bash
+ 891: # Bước 1: Chạy traffic-gen với scenario có lỗi (ví dụ: stop payment trước)
+ 892: docker stop payment-service
+ 893: curl -X POST http://localhost:5003/start \
+ 894:   -H "Content-Type: application/json" \
+ 895:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+ 896: 
+ 897: # Bước 2: Chờ traffic-gen chạy xong (60s)
+ 898: # Bước 3: Start lại payment-service (fix incident)
+ 899: docker start payment-service
+ 900: 
+ 901: # Bước 4: KHÔNG chạy traffic mới → chỉ chờ và quan sát alert
+ 902: ```
+ 903: 
+ 904: **Dashboard reading path:**
+ 905: ```
+ 906: Alerting Overview → APIGatewayFastBurn firing (critical)
+ 907:   → SLO Overview → Availability gauge < 99.5% (từ data cũ)
+ 908:     → Unified Overview → tất cả RPS = 0 (không traffic)
+ 909:       → App Performance → error rate "đóng băng" ở giá trị cuối
+ 910:         → Tracing → không có trace mới
+ 911: ```
  912: 
- 913: **Bài học:** Timezone mismatch là **human error phổ biến nhất** trong incident investigation. Chỉ cần 1 người đọc sai timezone → toàn bộ timeline sai → investigate sai hướng → kéo dài MTTR.
- 914: 
- 915: ---
- 916: 
- 917: ## 🧪 Experiment 11: Cache-Miss Storm (Redis Dependency)
- 918: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) (latency tăng do DB overload khi cache miss)
- 919: 
- 920: > Dashboard `cache-performance` chưa bao giờ được dùng trong experiments trước → đây là experiment đầu tiên cover nó.
+ 913: **Quan sát kỳ vọng:**
+ 914: - Alert firing dù incident đã được fix (payment-service đã start lại)
+ 915: - Dashboard hiển thị error rate từ lần chạy cuối → không tự reset về 0
+ 916: - Không có trace mới để investigate → 3 pillars thiếu 2 (traces + logs trắng)
+ 917: - Alert chỉ resolve khi có traffic mới thành công để "dilute" error rate
+ 918: 
+ 919: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 920: Sau khi chạy experiment này, bạn phải trả lời được:
  921: 
- 922: **Giả thuyết:** Khi Redis bị stop, tất cả requests phải query DB trực tiếp → DB load tăng đột ngột → P95 latency tăng. Cache-aside pattern là single point of performance dù không phải single point of failure.
- 923: 
- 924: **Inject (2 terminals):**
- 925: ```bash
- 926: # Terminal 1: Stop Redis
- 927: docker stop redis
+ 922: - [ ] **Stale metrics:** Tại sao `rate(errors[1h]) / rate(total[1h])` vẫn cao khi không có traffic? `0/0` trả về gì trong PromQL?
+ 923: - [ ] **Alert lifecycle:** Alert firing → incident fixed → nhưng alert không resolve. Trong production, on-call engineer nên làm gì? (silence alert + ghi chú? hay chạy synthetic traffic?)
+ 924: - [ ] **Root cause của phantom alert:** Vấn đề nằm ở alert rule hay ở bản chất của rate-based metrics?
+ 925: - [ ] **Production fix:** Viết lại alert rule thêm điều kiện gì để tránh phantom alert? (Gợi ý: `rate(total[5m]) > 0`)
+ 926: - [ ] **Alert fatigue:** Nếu team bắt đầu ignore SLO alerts vì "lại phantom alert" → hậu quả là gì khi incident thật xảy ra?
+ 927: - [ ] **SEV Assessment:** Alert firing nhưng service healthy + no traffic → Đây có phải incident không? Nếu KHÔNG phải, bạn ghi vào Incident Log thế nào?
  928: 
- 929: # Terminal 2: Chạy traffic (browse_heavy để maximize cache miss impact)
- 930: curl -X POST http://localhost:5003/start \
- 931:   -H "Content-Type: application/json" \
- 932:   -d '{"scenario": "browse_heavy", "rate": 10, "duration": 120}'
- 933: ```
- 934: 
- 935: **Dashboard reading path:**
- 936: ```
- 937: Cache Performance → Hit Rate = 0% (hoặc no data), Latency = no data
- 938:   → DB Performance → query duration tăng, connection pool active tăng
- 939:     → App Performance → Order Service P95 tăng (mọi request hit DB)
- 940:       → Unified Overview → Error rate có thể tăng nếu DB overwhelmed
- 941:         → Tracing → span get_product_catalog chậm hơn bình thường
- 942: ```
+ 929: **Ví dụ production tương tự:**
+ 930: Công ty e-commerce, service `payment-webhook` nhận callback từ Stripe. Ban đêm (0h-6h) chỉ ~5-10 requests/giờ. Deploy lúc 21:00 có bug → 3 webhooks fail → error rate 100% → burn rate 200x. Rollback xong 21:10 nhưng alert firing đến 02:00 sáng (5 tiếng!) vì không có webhook mới. On-call bị đánh thức 2 lần cho incident đã fix.
+ 931: 
+ 932: **Fix trong alert rule:**
+ 933: ```yaml
+ 934: # Thêm traffic guard → chỉ alert khi CÓ traffic
+ 935: - alert: APIGatewayFastBurn
+ 936:   expr: |
+ 937:     slo:api_gateway_availability:burn_rate_1h > 14.4
+ 938:     and slo:api_gateway_availability:burn_rate_5m > 14.4
+ 939:     and rate(traces_spanmetrics_calls_total{service_name="api-gateway"}[5m]) > 0
+ 940: ```
+ 941: 
+ 942: **Rollback:** Không cần → đây là learning exercise.
  943: 
- 944: **Quan sát kỳ vọng:**
- 945: - Cache Performance dashboard: hit rate drop về 0, hoặc panels hiển thị "no data"
- 946: - DB Performance: query count tăng gấp nhiều lần (bình thường cache serve ~80% requests)
- 947: - App Performance: P95 tăng nhưng có thể không tăng nhiều nếu DB chưa quá tải → đây cũng là bài học
- 948: - So sánh: P95 khi có cache vs không cache → đo được cache giá trị bao nhiêu ms
- 949: 
- 950: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
- 951: Sau khi chạy experiment này, bạn phải trả lời được:
+ 944: **Bài học:** SLO burn rate alerts cần **traffic guard** (`rate(total) > 0`) cho low-traffic services. Không có traffic = không đủ data để tính burn rate chính xác.
+ 945: 
+ 946: ---
+ 947: 
+ 948: ## 🧪 Experiment 10: Timezone Trap — Đọc sai Dashboard do Timezone
+ 949: 📖 **Runbook:** Không có alert tương ứng → đây là human error trong incident investigation, không phải system issue.
+ 950: 
+ 951: > Đây là incident thực tế đã xảy ra khi investigate alert trong lab này → Grafana browser timezone (UTC+7) ≠ server timezone (UTC) → đọc sai time window → investigate sai khoảng thời gian.
  952: 
- 953: - [ ] **Cache dependency:** Redis down → service có crash không? Hay chỉ chậm hơn? Đây gọi là gì? (graceful degradation → service vẫn hoạt động, chỉ mất performance)
- 954: - [ ] **Cache value measurement:** P95 khi có cache = ___ms, P95 khi không cache = ___ms. Cache giúp giảm bao nhiêu %?
- 955: - [ ] **DB amplification:** Hit rate 80% nghĩa là DB chỉ serve 20% requests. Khi cache down, DB phải serve 100% → gấp 5 lần. Connection pool có chịu được không?
- 956: - [ ] **Cache-performance dashboard:** Panel nào cho thấy vấn đề nhanh nhất? Panel nào trở thành "no data" khi Redis down?
- 957: - [ ] **Ứng dụng production:** Redis cluster bị restart lúc flash sale → bạn cần ước lượng gì trước khi cho traffic vào lại? (DB capacity có chịu được 100% traffic không? Cần warm cache trước không?)
- 958: - [ ] **SEV Assessment:** Redis down → service chậm nhưng không crash (graceful degradation) → SEV mấy? Khi nào cần escalate lên Engineering Manager?
- 959: 
- 960: **Bài học:** Cache-aside pattern **che giấu** DB performance issues. Khi cache down, DB load tăng `1 / (1 - hit_rate)` lần. Với hit rate 80%, DB load tăng 5x. Biết con số này giúp sizing DB cho worst case.
- 961: 
- 962: **Rollback:**
- 963: ```bash
- 964: docker start redis
- 965: # Cache sẽ tự warm lại khi có requests mới (cache-aside pattern)
- 966: ```
- 967: 
- 968: ---
- 969: 
- 970: ## 🧪 Experiment 12: Multi-Alert Triage (Compound Failure)
- 971: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) • [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) • [RB-16 KafkaConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
+ 953: **Giả thuyết:** Khi Grafana timezone khác server timezone, on-call engineer sẽ suy luận sai về thời điểm xảy ra incident.
+ 954: 
+ 955: **Inject:**
+ 956: ```bash
+ 957: # Không inject failure → thay đổi Grafana timezone
+ 958: # 1. Mở Grafana → Profile → Preferences → Timezone
+ 959: # 2. Đổi từ UTC sang "Browser Time" (hoặc UTC+7)
+ 960: # 3. Mở bất kỳ dashboard nào và đọc time range
+ 961: ```
+ 962: 
+ 963: **Bẫy cần nhận biết:**
+ 964: 
+ 965: | Grafana hiển thị | Server (UTC) | Bạn nghĩ | Thực tế |
+ 966: |-------------------|--------------|----------|---------|
+ 967: | 00:00 - 08:00 (UTC+7) | 17:00 - 01:00 UTC | "Sáng nay 0h-8h" | "Chiều/tối hôm qua" |
+ 968: | Alert lúc 02:00 (UTC+7) | 19:00 UTC hôm trước | "2 giờ sáng" | "7 giờ tối" |
+ 969: | Traffic drop lúc 07:00 (UTC+7) | 00:00 UTC | "7 giờ sáng nay" | "Nửa đêm" |
+ 970: 
+ 971: **Ví dụ cụ thể từ lab này:**
  972: 
- 973: > Đây là experiment khó nhất → lần đầu tiên inject 2 failures cùng lúc. Mục tiêu không phải hiểu từng failure (đã làm ở Exp 2, 3) mà là luyện kỹ năng triage khi nhiều alerts firing đồng thời.
- 974: 
- 975: **Giả thuyết:** Khi DB bị lock VÀ notification-worker bị pause cùng lúc, 4-5 alerts sẽ firing đồng thời. On-call engineer phải phân biệt root cause vs symptom và quyết định fix cái nào trước.
- 976: 
- 977: **Inject (3 terminals):**
- 978: ```bash
- 979: # Terminal 1: Flush cache + Lock DB table 90s
- 980: docker exec redis redis-cli DEL "product:catalog"
- 981: docker exec postgres psql -U app -d orders -c "
- 982:   BEGIN;
- 983:   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
- 984:   SELECT pg_sleep(90);
- 985:   COMMIT;
- 986: "
+ 973: ```
+ 974: Tình huống: Alert "APIGatewayFastBurn" firing
+ 975: Dashboard time picker: "2026-05-19 00:00:00 to 07:59:59"
+ 976: Availability gauge: 92.4%
+ 977: 
+ 978: Suy luận SAI (không biết timezone):
+ 979:   "Sáng nay 0h-8h, hệ thống availability 92.4%"
+ 980:   → Tìm incident trong khoảng 0h-8h sáng nay
+ 981: 
+ 982: Suy luận ĐÚNG (biết timezone UTC+7):
+ 983:   Dashboard = 00:00-08:00 UTC+7 = 17:00-01:00 UTC
+ 984:   → Tìm incident trong khoảng 5PM-1AM hôm qua/nay (UTC)
+ 985:   → Traffic-gen chạy lúc 14:40 UTC+7 (trước window 9 tiếng!)
+ 986: ```
  987: 
- 988: # Terminal 2: Pause notification-worker
- 989: docker pause notification-worker
+ 988: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+ 989: Sau khi chạy experiment này, bạn phải trả lời được:
  990: 
- 991: # Terminal 3: Chạy traffic cao
- 992: curl -X POST http://localhost:5003/start \
- 993:   -H "Content-Type: application/json" \
- 994:   -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
- 995: ```
- 996: 
- 997: **Alerts kỳ vọng** (có thể firing trong 5-10 phút):
- 998: 
- 999: | Alert | Root cause? | Symptom? |
-1000: |-------|-------------|----------|
-1001: | HighLatencyP95 | ← DB lock | Root cause #1 |
-1002: | HighErrorRate | ← timeout từ DB lock | Symptom of DB |
-1003: | KafkaConsumerLagHigh | ← notification-worker paused | Root cause #2 |
-1004: | APIGatewayLatencyFastBurn | ← cascade từ DB lock | Symptom of DB |
+ 991: - [ ] **Timezone awareness:** Grafana timezone setting ở đâu? Cách kiểm tra nhanh timezone đang dùng?
+ 992: - [ ] **UTC convention:** Tại sao production teams thường thống nhất dùng UTC cho monitoring? Khi nào dùng local time có lợi?
+ 993: - [ ] **Cross-reference:** Khi đọc dashboard time range, bạn cần cross-reference với timestamp nào? (server logs, docker logs, alert firing time → tất cả đều dùng UTC)
+ 994: - [ ] **Incident impact:** Timezone sai có thể gây sai lệch investigation bao lâu? (Trong ví dụ này: tìm sai 9 tiếng)
+ 995: - [ ] **Team practice:** Nếu team có người ở nhiều timezone (VN, US, EU), cách nào tránh nhầm lẫn khi handoff incident?
+ 996: - [ ] **SEV Assessment:** Đọc sai timezone có thể dẫn đến phân SEV sai → Ví dụ: nghĩ là "sáng nay" nhưng thực tế là "tối hôm qua" → escalation sai người. Bạn sẽ chuẩn hóa timezone trong team thế nào?
+ 997: 
+ 998: **Best practice:**
+ 999: - 🔧 **Grafana:** set timezone = UTC cho tất cả monitoring dashboards
+1000: - 🔧 **Docker:** đảm bảo host timezone = UTC (`timedatectl set-timezone UTC`)
+1001: - 🔧 **Logs:** luôn log timestamps ở UTC (ISO 8601: `2026-05-19T03:00:00Z`)
+1002: - 🔧 **Team:** quy ước "nói giờ UTC khi discuss incident" → "incident lúc 17:00Z"
+1003: 
+1004: **Rollback:** Đổi Grafana timezone về UTC: Profile → Preferences → Timezone → UTC.
 1005: 
-1006: **Dashboard reading path:**
-1007: ```
-1008: Alerting Overview → 4+ alerts firing cùng lúc
-1009:   → STOP. Đừng click vào alert đầu tiên. Đọc TẤT CẢ alerts trước.
-1010:     → Phân nhóm:
-1011:        Nhóm 1 (Latency/Error): HighLatencyP95 + HighErrorRate + LatencyFastBurn
-1012:          → Correlation: cùng liên quan latency → likely cùng root cause
-1013:        Nhóm 2 (Kafka): KafkaConsumerLagHigh
-1014:          → Không liên quan latency → root cause riêng
-1015:     → Fix Nhóm 1 trước (severity cao hơn, ảnh hưởng user trực tiếp)
-1016:     → Fix Nhóm 2 sau (lag tăng nhưng chưa ảnh hưởng user ngay)
-1017: ```
-1018: 
-1019: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
-1020: Sau khi chạy experiment này, bạn phải trả lời được:
+1006: **Bài học:** Timezone mismatch là **human error phổ biến nhất** trong incident investigation. Chỉ cần 1 người đọc sai timezone → toàn bộ timeline sai → investigate sai hướng → kéo dài MTTR.
+1007: 
+1008: ---
+1009: 
+1010: ## 🧪 Experiment 11: Cache-Miss Storm (Redis Dependency)
+1011: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) (latency tăng do DB overload khi cache miss)
+1012: 
+1013: > Dashboard `cache-performance` chưa bao giờ được dùng trong experiments trước → đây là experiment đầu tiên cover nó.
+1014: 
+1015: **Giả thuyết:** Khi Redis bị stop, tất cả requests phải query DB trực tiếp → DB load tăng đột ngột → P95 latency tăng. Cache-aside pattern là single point of performance dù không phải single point of failure.
+1016: 
+1017: **Inject (2 terminals):**
+1018: ```bash
+1019: # Terminal 1: Stop Redis
+1020: docker stop redis
 1021: 
-1022: - [ ] **Triage priority:** 4 alerts firing cùng lúc → bạn xử lý theo thứ tự nào? Tại sao? (Gợi ý: severity + user impact)
-1023: - [ ] **Root cause vs symptom:** `HighErrorRate` là root cause hay symptom? Làm sao biết? (Nếu fix DB lock → error rate tự giảm → nó là symptom)
-1024: - [ ] **Correlation:** Làm sao nhận ra `HighLatencyP95` + `HighErrorRate` + `LatencyFastBurn` cùng root cause? (timing gần nhau, cùng service, latency → error → burn rate là cascade)
-1025: - [ ] **Independent failures:** `KafkaConsumerLagHigh` có liên quan tới DB lock không? Tại sao không? (notification-worker pause là inject riêng, DB lock không ảnh hưởng Kafka)
-1026: - [ ] **Fix order:** Nếu bạn chỉ có thể fix 1 thứ trước → DB lock hay unpause worker? Tại sao? (DB lock → ảnh hưởng user trực tiếp; Kafka lag → delay notification nhưng user vẫn đặt hàng được)
-1027: - [ ] **Ứng dụng production:** Lúc 3 giờ sáng nhận 5 alerts PagerDuty cùng lúc → bạn dùng kỹ thuật gì để không panic? (Đọc tất cả → phân nhóm → tìm correlation → fix root cause → symptoms tự resolve)
-1028: - [ ] **SEV Assessment:** 4+ alerts firing cùng lúc, nhiều root causes → Bạn phân SEV cho TOÀN BỘ incident hay cho từng root cause? Ai là người decide SEV khi có nhiều SME tham gia?
-1029: 
-1030: **Bài học:** Khi nhiều alerts firing, đừng fix từng alert → phân nhóm theo correlation, tìm root cause chung, fix root cause thì symptoms tự resolve. Đây là **skill quan trọng nhất** của on-call engineer.
-1031: 
-1032: **Rollback:**
-1033: ```bash
-1034: # DB lock tự release sau 90s, hoặc:
-1035: docker exec postgres psql -U app -d orders -c "
-1036:   SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-1037:   WHERE state = 'active' AND query LIKE '%pg_sleep%';
-1038: "
-1039: 
-1040: # Unpause notification-worker
-1041: docker unpause notification-worker
-1042: ```
-1043: 
-1044: ---
+1022: # Terminal 2: Chạy traffic (browse_heavy để maximize cache miss impact)
+1023: curl -X POST http://localhost:5003/start \
+1024:   -H "Content-Type: application/json" \
+1025:   -d '{"scenario": "browse_heavy", "rate": 10, "duration": 120}'
+1026: ```
+1027: 
+1028: **Dashboard reading path:**
+1029: ```
+1030: Cache Performance → Hit Rate = 0% (hoặc no data), Latency = no data
+1031:   → DB Performance → query duration tăng, connection pool active tăng
+1032:     → App Performance → Order Service P95 tăng (mọi request hit DB)
+1033:       → Unified Overview → Error rate có thể tăng nếu DB overwhelmed
+1034:         → Tracing → span get_product_catalog chậm hơn bình thường
+1035: ```
+1036: 
+1037: **Quan sát kỳ vọng:**
+1038: - Cache Performance dashboard: hit rate drop về 0, hoặc panels hiển thị "no data"
+1039: - DB Performance: query count tăng gấp nhiều lần (bình thường cache serve ~80% requests)
+1040: - App Performance: P95 tăng nhưng có thể không tăng nhiều nếu DB chưa quá tải → đây cũng là bài học
+1041: - So sánh: P95 khi có cache vs không cache → đo được cache giá trị bao nhiêu ms
+1042: 
+1043: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+1044: Sau khi chạy experiment này, bạn phải trả lời được:
 1045: 
-1046: # Part 3: Post-Exercise Activities (Hậu kỳ & Post-Mortem)
-1047: 
-1048: Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ngay. Hãy thực hành viết **Blameless Post-Mortem**.
-1049: 
-1050: > 📂 **Thực hành ở đâu?**
-1051: > Tất cả các bài Post-mortem được lưu trữ tại thư mục [`/post-mortems`](./post-mortems/) ở root của repository.
-1052: > - Xem [`00-TEMPLATE.md`](./post-mortems/00-TEMPLATE.md) để copy template trống.
-1053: > - Xem [`01-GOLDEN-EXAMPLE-DB-Saturation.md`](./post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md) để tham khảo "tiêu chuẩn vàng" (cách viết 5 Whys, SEV assessment, Action Items).
+1046: - [ ] **Cache dependency:** Redis down → service có crash không? Hay chỉ chậm hơn? Đây gọi là gì? (graceful degradation → service vẫn hoạt động, chỉ mất performance)
+1047: - [ ] **Cache value measurement:** P95 khi có cache = ___ms, P95 khi không cache = ___ms. Cache giúp giảm bao nhiêu %?
+1048: - [ ] **DB amplification:** Hit rate 80% nghĩa là DB chỉ serve 20% requests. Khi cache down, DB phải serve 100% → gấp 5 lần. Connection pool có chịu được không?
+1049: - [ ] **Cache-performance dashboard:** Panel nào cho thấy vấn đề nhanh nhất? Panel nào trở thành "no data" khi Redis down?
+1050: - [ ] **Ứng dụng production:** Redis cluster bị restart lúc flash sale → bạn cần ước lượng gì trước khi cho traffic vào lại? (DB capacity có chịu được 100% traffic không? Cần warm cache trước không?)
+1051: - [ ] **SEV Assessment:** Redis down → service chậm nhưng không crash (graceful degradation) → SEV mấy? Khi nào cần escalate lên Engineering Manager?
+1052: 
+1053: **Bài học:** Cache-aside pattern **che giấu** DB performance issues. Khi cache down, DB load tăng `1 / (1 - hit_rate)` lần. Với hit rate 80%, DB load tăng 5x. Biết con số này giúp sizing DB cho worst case.
 1054: 
-1055: ### Blameless Principles (Nhắc lại)
-1056: - ❌ "Tôi đã quên flush cache trước khi lock DB"
-1057: - ✅ "Quy trình inject failure thiếu checklist chuẩn bị state (cache warm/cold)"
-1058: - **Rule:** Mọi "human error" đều là **system gap**. Hệ thống tốt khiến human error khó xảy ra hoặc ít impact.
-1059: 
-1060: ### Mục tiêu của việc viết Post-mortem:
-1061: 1. Rèn luyện kỹ năng tóm tắt sự cố (Executive Summary) cho stakeholders.
-1062: 2. Đào sâu root cause (5 Whys) thay vì chỉ dừng lại ở triệu chứng.
-1063: 3. Tạo ra Action Items thực tế để cải thiện hệ thống (hoặc cải thiện chính Runbook).
-1064: 4. **Review SEV Assessment:** So sánh Initial SEV vs Re-assessed SEV → tại sao đúng/sai? Bài học gì?
+1055: **Rollback:**
+1056: ```bash
+1057: docker start redis
+1058: # Cache sẽ tự warm lại khi có requests mới (cache-aside pattern)
+1059: ```
+1060: 
+1061: ---
+1062: 
+1063: ## 🧪 Experiment 12: Multi-Alert Triage (Compound Failure)
+1064: 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) • [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) • [RB-16 KafkaConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
 1065: 
-1066: ---
+1066: > Đây là experiment khó nhất → lần đầu tiên inject 2 failures cùng lúc. Mục tiêu không phải hiểu từng failure (đã làm ở Exp 2, 3) mà là luyện kỹ năng triage khi nhiều alerts firing đồng thời.
 1067: 
-1068: # Part 4: Thứ tự thực hành đề xuất
+1068: **Giả thuyết:** Khi DB bị lock VÀ notification-worker bị pause cùng lúc, 4-5 alerts sẽ firing đồng thời. On-call engineer phải phân biệt root cause vs symptom và quyết định fix cái nào trước.
 1069: 
-1070: | Thứ tự | Experiment | Độ khó | Kỹ năng học được |
-1071: |--------|------------|--------|------------------|
-1072: | 1 | Service Down | ⭐ | Đọc alert cơ bản, phân biệt down vs slow |
-1073: | 2 | Cascading Failure | ⭐⭐ | Hiểu dependency chain, graceful degradation |
-1074: | 3 | Kafka Consumer Lag | ⭐⭐ | Leading vs lagging indicators |
-1075: | 4 | Stock Deadlock | ⭐⭐⭐ | Design-level failure, cross-dashboard correlation |
-1076: | 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method, Trace reading |
-1077: | 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
-1078: | 7 | Cache-Miss Storm | ⭐⭐⭐ | Cache dependency, DB amplification |
-1079: | 8 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking blind spots |
-1080: | 9 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
-1081: | 10 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
-1082: | 11 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
-1083: | 12 | Multi-Alert Triage | ⭐⭐⭐⭐⭐ | Compound failure, alert correlation, triage priority |
-1084: 
-1085: ## SEV Context Matrix — Tham khảo sau khi thực hành
-1086: 
-1087: Cùng 1 alert `critical` (burn-rate based) có thể là SEV khác nhau tùy business context. 
-1088: Bảng này giúp bạn **so sánh SEV assessment của mình** với production-grade judgment.
+1070: **Inject (3 terminals):**
+1071: ```bash
+1072: # Terminal 1: Flush cache + Lock DB table 90s
+1073: docker exec redis redis-cli DEL "product:catalog"
+1074: docker exec postgres psql -U app -d orders -c "
+1075:   BEGIN;
+1076:   LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
+1077:   SELECT pg_sleep(90);
+1078:   COMMIT;
+1079: "
+1080: 
+1081: # Terminal 2: Pause notification-worker
+1082: docker pause notification-worker
+1083: 
+1084: # Terminal 3: Chạy traffic cao
+1085: curl -X POST http://localhost:5003/start \
+1086:   -H "Content-Type: application/json" \
+1087:   -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
+1088: ```
 1089: 
-1090: | Experiment | Context A: Low Traffic / Off-hours | Context B: Peak / Flash Sale |
-1091: |------------|-------------------------------------|-------------------------------|
-1092: | Exp 1: Service Down | **SEV-3** (1 feature affected, ít user) | **SEV-2** (core feature down, nhiều user) |
-1093: | Exp 2: DB Saturation | **SEV-4** (no user impact, 3 AM) | **SEV-1** (tất cả orders fail, flash sale) |
-1094: | Exp 3: Kafka Lag | **SEV-3** (delayed notifications) | **SEV-2** (SLA email 2 phút bị breach) |
-1095: | Exp 4: Payment Down | **SEV-3** (maintenance window) | **SEV-1** (revenue loss trực tiếp) |
-1096: | Exp 6: Stock Deadlock | **SEV-3** (catalog issue) | **SEV-2** (không bán được hàng) |
-1097: | Exp 9: Phantom Alert | **Not an incident** (silence alert + log) | **SEV-2** (nếu có traffic thật) |
-1098: | Exp 11: Cache-Miss | **SEV-4** (perf degradation nhẹ) | **SEV-2** (checkout chậm, user bỏ giỏ) |
-1099: | Exp 12: Multi-Alert | **SEV-2** (compound issue) | **SEV-1** (everything broken) |
-1100: 
-1101: ### 🎯 3 Bài học quan trọng nhất từ bảng này:
-1102: 
-1103: **1. SEV phụ thuộc vào BUSINESS CONTEXT, không chỉ technical signal**
-1104: - Alert "critical" lúc 3 AM không traffic ≠ alert "critical" lúc flash sale
-1105: - On-call engineer giỏi biết **khi nào cần gọi sếp dậy, khi nào chỉ cần tạo ticket**
-1106: 
-1107: **2. Initial SEV thường sai — cần Re-assess**
-1108: - Sau 15 phút investigate, bạn có thêm information → upgrade hoặc downgrade SEV
-1109: - Ghi cả **Initial SEV** và **Re-assessed SEV** vào Incident Log (xem template 0.3)
-1110: 
-1111: **3. Phantom alerts KHÔNG phải incident**
-1112: - Alert firing + service healthy + no traffic → silence + log "phantom"
-1113: - Đừng waste escalation cho phantom alerts — nhưng cũng đừng ignore nếu không chắc
+1090: **Alerts kỳ vọng** (có thể firing trong 5-10 phút):
+1091: 
+1092: | Alert | Root cause? | Symptom? |
+1093: |-------|-------------|----------|
+1094: | HighLatencyP95 | ← DB lock | Root cause #1 |
+1095: | HighErrorRate | ← timeout từ DB lock | Symptom of DB |
+1096: | KafkaConsumerLagHigh | ← notification-worker paused | Root cause #2 |
+1097: | APIGatewayLatencyFastBurn | ← cascade từ DB lock | Symptom of DB |
+1098: 
+1099: **Dashboard reading path:**
+1100: ```
+1101: Alerting Overview → 4+ alerts firing cùng lúc
+1102:   → STOP. Đừng click vào alert đầu tiên. Đọc TẤT CẢ alerts trước.
+1103:     → Phân nhóm:
+1104:        Nhóm 1 (Latency/Error): HighLatencyP95 + HighErrorRate + LatencyFastBurn
+1105:          → Correlation: cùng liên quan latency → likely cùng root cause
+1106:        Nhóm 2 (Kafka): KafkaConsumerLagHigh
+1107:          → Không liên quan latency → root cause riêng
+1108:     → Fix Nhóm 1 trước (severity cao hơn, ảnh hưởng user trực tiếp)
+1109:     → Fix Nhóm 2 sau (lag tăng nhưng chưa ảnh hưởng user ngay)
+1110: ```
+1111: 
+1112: ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
+1113: Sau khi chạy experiment này, bạn phải trả lời được:
 1114: 
-1115: **Lời khuyên cuối cùng:** 
-1116: Tool không thay thế được process. Tốt nhất là master manual process (dùng lab này + Incident Log + Post-Mortem) trước khi add các tools như PagerDuty hay incident.io. Chúc bạn thực hành tốt! 🚀
+1115: - [ ] **Triage priority:** 4 alerts firing cùng lúc → bạn xử lý theo thứ tự nào? Tại sao? (Gợi ý: severity + user impact)
+1116: - [ ] **Root cause vs symptom:** `HighErrorRate` là root cause hay symptom? Làm sao biết? (Nếu fix DB lock → error rate tự giảm → nó là symptom)
+1117: - [ ] **Correlation:** Làm sao nhận ra `HighLatencyP95` + `HighErrorRate` + `LatencyFastBurn` cùng root cause? (timing gần nhau, cùng service, latency → error → burn rate là cascade)
+1118: - [ ] **Independent failures:** `KafkaConsumerLagHigh` có liên quan tới DB lock không? Tại sao không? (notification-worker pause là inject riêng, DB lock không ảnh hưởng Kafka)
+1119: - [ ] **Fix order:** Nếu bạn chỉ có thể fix 1 thứ trước → DB lock hay unpause worker? Tại sao? (DB lock → ảnh hưởng user trực tiếp; Kafka lag → delay notification nhưng user vẫn đặt hàng được)
+1120: - [ ] **Ứng dụng production:** Lúc 3 giờ sáng nhận 5 alerts PagerDuty cùng lúc → bạn dùng kỹ thuật gì để không panic? (Đọc tất cả → phân nhóm → tìm correlation → fix root cause → symptoms tự resolve)
+1121: - [ ] **SEV Assessment:** 4+ alerts firing cùng lúc, nhiều root causes → Bạn phân SEV cho TOÀN BỘ incident hay cho từng root cause? Ai là người decide SEV khi có nhiều SME tham gia?
+1122: 
+1123: **Bài học:** Khi nhiều alerts firing, đừng fix từng alert → phân nhóm theo correlation, tìm root cause chung, fix root cause thì symptoms tự resolve. Đây là **skill quan trọng nhất** của on-call engineer.
+1124: 
+1125: **Rollback:**
+1126: ```bash
+1127: # DB lock tự release sau 90s, hoặc:
+1128: docker exec postgres psql -U app -d orders -c "
+1129:   SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+1130:   WHERE state = 'active' AND query LIKE '%pg_sleep%';
+1131: "
+1132: 
+1133: # Unpause notification-worker
+1134: docker unpause notification-worker
+1135: ```
+1136: 
+1137: ---
+1138: 
+1139: # Part 3: Post-Exercise Activities (Hậu kỳ & Post-Mortem)
+1140: 
+1141: Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ngay. Hãy thực hành viết **Blameless Post-Mortem**.
+1142: 
+1143: > 📂 **Thực hành ở đâu?**
+1144: > Tất cả các bài Post-mortem được lưu trữ tại thư mục [`/post-mortems`](./post-mortems/) ở root của repository.
+1145: > - Xem [`00-TEMPLATE.md`](./post-mortems/00-TEMPLATE.md) để copy template trống.
+1146: > - Xem [`01-GOLDEN-EXAMPLE-DB-Saturation.md`](./post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md) để tham khảo "tiêu chuẩn vàng" (cách viết 5 Whys, SEV assessment, Action Items).
+1147: 
+1148: ### Blameless Principles (Nhắc lại)
+1149: - ❌ "Tôi đã quên flush cache trước khi lock DB"
+1150: - ✅ "Quy trình inject failure thiếu checklist chuẩn bị state (cache warm/cold)"
+1151: - **Rule:** Mọi "human error" đều là **system gap**. Hệ thống tốt khiến human error khó xảy ra hoặc ít impact.
+1152: 
+1153: ### Mục tiêu của việc viết Post-mortem:
+1154: 1. Rèn luyện kỹ năng tóm tắt sự cố (Executive Summary) cho stakeholders.
+1155: 2. Đào sâu root cause (5 Whys) thay vì chỉ dừng lại ở triệu chứng.
+1156: 3. Tạo ra Action Items thực tế để cải thiện hệ thống (hoặc cải thiện chính Runbook).
+1157: 4. **Review SEV Assessment:** So sánh Initial SEV vs Re-assessed SEV → tại sao đúng/sai? Bài học gì?
+1158: 
+1159: ---
+1160: 
+1161: # Part 4: Thứ tự thực hành đề xuất
+1162: 
+1163: | Thứ tự | Experiment | Độ khó | Kỹ năng học được |
+1164: |--------|------------|--------|------------------|
+1165: | 1 | Service Down | ⭐ | Đọc alert cơ bản, phân biệt down vs slow |
+1166: | 2 | Cascading Failure | ⭐⭐ | Hiểu dependency chain, graceful degradation |
+1167: | 3 | Kafka Consumer Lag | ⭐⭐ | Leading vs lagging indicators |
+1168: | 4 | Stock Deadlock | ⭐⭐⭐ | Design-level failure, cross-dashboard correlation |
+1169: | 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method, Trace reading |
+1170: | 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
+1171: | 7 | Cache-Miss Storm | ⭐⭐⭐ | Cache dependency, DB amplification |
+1172: | 8 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking blind spots |
+1173: | 9 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
+1174: | 10 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
+1175: | 11 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
+1176: | 12 | Multi-Alert Triage | ⭐⭐⭐⭐⭐ | Compound failure, alert correlation, triage priority |
+1177: 
+1178: ## SEV Context Matrix — Tham khảo sau khi thực hành
+1179: 
+1180: Cùng 1 alert `critical` (burn-rate based) có thể là SEV khác nhau tùy business context. 
+1181: Bảng này giúp bạn **so sánh SEV assessment của mình** với production-grade judgment.
+1182: 
+1183: | Experiment | Context A: Low Traffic / Off-hours | Context B: Peak / Flash Sale |
+1184: |------------|-------------------------------------|-------------------------------|
+1185: | Exp 1: Service Down | **SEV-3** (1 feature affected, ít user) | **SEV-2** (core feature down, nhiều user) |
+1186: | Exp 2: DB Saturation | **SEV-4** (no user impact, 3 AM) | **SEV-1** (tất cả orders fail, flash sale) |
+1187: | Exp 3: Kafka Lag | **SEV-3** (delayed notifications) | **SEV-2** (SLA email 2 phút bị breach) |
+1188: | Exp 4: Payment Down | **SEV-3** (maintenance window) | **SEV-1** (revenue loss trực tiếp) |
+1189: | Exp 6: Stock Deadlock | **SEV-3** (catalog issue) | **SEV-2** (không bán được hàng) |
+1190: | Exp 9: Phantom Alert | **Not an incident** (silence alert + log) | **SEV-2** (nếu có traffic thật) |
+1191: | Exp 11: Cache-Miss | **SEV-4** (perf degradation nhẹ) | **SEV-2** (checkout chậm, user bỏ giỏ) |
+1192: | Exp 12: Multi-Alert | **SEV-2** (compound issue) | **SEV-1** (everything broken) |
+1193: 
+1194: ### 🎯 3 Bài học quan trọng nhất từ bảng này:
+1195: 
+1196: **1. SEV phụ thuộc vào BUSINESS CONTEXT, không chỉ technical signal**
+1197: - Alert "critical" lúc 3 AM không traffic ≠ alert "critical" lúc flash sale
+1198: - On-call engineer giỏi biết **khi nào cần gọi sếp dậy, khi nào chỉ cần tạo ticket**
+1199: 
+1200: **2. Initial SEV thường sai — cần Re-assess**
+1201: - Sau 15 phút investigate, bạn có thêm information → upgrade hoặc downgrade SEV
+1202: - Ghi cả **Initial SEV** và **Re-assessed SEV** vào Incident Log (xem template 0.3)
+1203: 
+1204: **3. Phantom alerts KHÔNG phải incident**
+1205: - Alert firing + service healthy + no traffic → silence + log "phantom"
+1206: - Đừng waste escalation cho phantom alerts — nhưng cũng đừng ignore nếu không chắc
+1207: 
+1208: **Lời khuyên cuối cùng:** 
+1209: Tool không thay thế được process. Tốt nhất là master manual process (dùng lab này + Incident Log + Post-Mortem) trước khi add các tools như PagerDuty hay incident.io. Chúc bạn thực hành tốt! 🚀
 </file>
 
 <file path="README.md">
@@ -21460,6 +21553,27 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-25 02:00:36 +0000</date>
+<message>fix promql issue in db performance dashboard</message>
+<files>
+on-premises/observability-vm/phase1-metrics/grafana/dashboards/Application/db-performance.json
+</files>
+</git_log_commit>
+<git_log_commit>
+<date>2026-05-25 00:55:36 +0000</date>
+<message>modify incident simulation guide</message>
+<files>
+on-premises/INCIDENT_SIMULATION_GUIDE.md
+</files>
+</git_log_commit>
+<git_log_commit>
+<date>2026-05-25 00:32:25 +0000</date>
+<message>update new contents for repomix output file</message>
+<files>
+on-premises/repomix-output.xml
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-24 08:35:27 +0000</date>
 <message>add new panel for db performance dashboard</message>
 <files>
@@ -21603,29 +21717,6 @@ on-premises/README.md
 on-premises/OBSERVABILITY_LEARNING_GUIDE.md
 on-premises/applications-vm/applications/api-gateway/Dockerfile
 on-premises/applications-vm/applications/order-service/Dockerfile
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-20 09:48:58 +0000</date>
-<message>update contents in README</message>
-<files>
-README.md
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-20 03:58:25 +0000</date>
-<message>fix metric issues in db query of order service</message>
-<files>
-on-premises/OBSERVABILITY_LEARNING_GUIDE.md
-on-premises/applications-vm/applications/order-service/app.py
-on-premises/applications-vm/applications/shared/db_utils.py
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-19 10:01:26 +0000</date>
-<message>modify command in alert rule to fix phantom alert</message>
-<files>
-on-premises/observability-vm/phase1-metrics/prometheus/alert_rules.yml
 </files>
 </git_log_commit>
 </git_logs>
