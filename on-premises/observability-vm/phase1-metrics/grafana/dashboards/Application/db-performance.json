@@ -52,7 +52,7 @@
           "legendFormat": "Active Connections"
         },
         {
-          "expr": "db_connection_pool_max{job=\"app-metrics\"}",
+          "expr": "db_connection_pool_max_ratio{job=\"app-metrics\"}",
           "legendFormat": "Max Pool Size"
         }
       ]
@@ -156,7 +156,7 @@
       },
       "targets": [
         {
-          "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max{job=\"app-metrics\"}",
+          "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max_ratio{job=\"app-metrics\"}",
           "legendFormat": "Pool Utilization",
           "refId": "A"
         }
