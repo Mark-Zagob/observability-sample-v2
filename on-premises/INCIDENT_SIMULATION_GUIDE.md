@@ -410,9 +410,9 @@ curl -X POST http://localhost:5003/start \
   -H "Content-Type: application/json" \
   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
 ```
-# Đợi 10-15s để traffic ổn định
-# Mở Unified Overview → ghi nhận RPS baseline (~2 req/s)
-# Mở App Performance → ghi nhận P95 latency baseline (~400ms)
+- Đợi 10-15s để traffic ổn định
+- Mở Unified Overview → ghi nhận RPS baseline (~2 req/s)
+- Mở App Performance → ghi nhận P95 latency baseline (~400ms)
 
 **Phase 2: Inject Failure (TRONG KHI traffic đang chạy)**
 

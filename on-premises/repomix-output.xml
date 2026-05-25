@@ -19658,9 +19658,9 @@ This section contains the contents of the repository's files.
  410:   -H "Content-Type: application/json" \
  411:   -d '{"scenario": "normal", "rate": 2, "duration": 60}'
  412: ```
- 413: # Đợi 10-15s để traffic ổn định
- 414: # Mở Unified Overview → ghi nhận RPS baseline (~2 req/s)
- 415: # Mở App Performance → ghi nhận P95 latency baseline (~400ms)
+ 413: - Đợi 10-15s để traffic ổn định
+ 414: - Mở Unified Overview → ghi nhận RPS baseline (~2 req/s)
+ 415: - Mở App Performance → ghi nhận P95 latency baseline (~400ms)
  416: 
  417: **Phase 2: Inject Failure (TRONG KHI traffic đang chạy)**
  418: 
@@ -21677,6 +21677,13 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-25 07:38:26 +0000</date>
+<message>update repomix</message>
+<files>
+on-premises/repomix-output.xml
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-25 07:38:06 +0000</date>
 <message>make the conten clear in experiment 1</message>
 <files>
@@ -21828,13 +21835,6 @@ on-premises/INCIDENT_RUNBOOK.md
 <git_log_commit>
 <date>2026-05-22 10:03:26 +0000</date>
 <message>update content</message>
-<files>
-on-premises/INCIDENT_SIMULATION_GUIDE.md
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-22 09:55:00 +0000</date>
-<message>update contents in ISG document</message>
 <files>
 on-premises/INCIDENT_SIMULATION_GUIDE.md
 </files>
