@@ -467,6 +467,7 @@ Sau ~5 phút (nếu traffic-gen vẫn chạy):
 - `ServiceNoTraces_OrderService` - firing sau ~5 phút (nếu traffic-gen đang chạy)
   - Alert rule: `absent_over_time(traces[3m]) and traffic_gen_running == 1`
   - Nếu KHÔNG có traffic → alert này KHÔNG fire (chỉ có `ServiceHealthCheckFailed`)  
+  
 **🟡 Unified Overview:**
 
 - Order Service RPS = 0 (service down, không xử lý requests)
