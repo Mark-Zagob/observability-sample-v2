@@ -8046,31 +8046,106 @@ This section contains the contents of the repository's files.
  88:       ]
  89:     },
  90:     {
- 91:       "title": "Order Processing Duration by Status",
- 92:       "type": "timeseries",
- 93:       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
- 94:       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
- 95:       "fieldConfig": {
- 96:         "defaults": {
- 97:           "unit": "s",
- 98:           "custom": { "lineWidth": 2, "fillOpacity": 10 }
- 99:         }
-100:       },
-101:       "targets": [
-102:         {
-103:           "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, status))",
-104:           "legendFormat": "p95 — {{ status }}"
-105:         }
-106:       ]
-107:     }
-108:   ],
-109:   "schemaVersion": 39,
-110:   "tags": ["application", "database", "postgresql"],
-111:   "templating": { "list": [] },
-112:   "time": { "from": "now-1h", "to": "now" },
-113:   "title": "Database Performance",
-114:   "uid": "db-performance"
-115: }
+ 91:       "title": "Avg Query Duration",
+ 92:       "description": "Thời gian trung bình của DB queries (baseline 1-10ms). Tính bằng sum(rate(duration_sum)) / sum(rate(duration_count)). Grouped by operation (SELECT/INSERT/UPDATE/DELETE)",
+ 93:       "type": "stat",
+ 94:       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+ 95:       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+ 96:       "fieldConfig": {
+ 97:         "defaults": {
+ 98:           "unit": "s",
+ 99:           "thresholds": {
+100:             "mode": "absolute",
+101:             "steps": [
+102:               { "color": "green", "value": null },
+103:               { "color": "yellow", "value": 0.01 },
+104:               { "color": "orange", "value": 0.05 },
+105:               { "color": "red", "value": 0.1 }
+106:             ]
+107:           },
+108:           "mappings": []
+109:         },
+110:         "overrides": []
+111:       },
+112:       "options": {
+113:         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+114:         "orientation": "auto",
+115:         "textMode": "auto",
+116:         "colorMode": "background",
+117:         "graphMode": "area",
+118:         "justifyMode": "auto"
+119:       },
+120:       "targets": [
+121:         {
+122:           "expr": "sum by (operation) (rate(db_query_duration_seconds_sum{job=\"app-metrics\"}[5m])) / sum by (operation) (rate(db_query_duration_seconds_count{job=\"app-metrics\"}[5m]))",
+123:           "legendFormat": "{{ operation }}",
+124:           "refId": "A"
+125:         }
+126:       ]
+127:     },
+128:     {
+129:       "title": "DB Connection Pool Utilization (%)",
+130:       "description": "Tỷ lệ % connection pool đang được sử dụng. >80% = nguy cơ saturation.",
+131:       "type": "gauge",
+132:       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+133:       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+134:       "fieldConfig": {
+135:         "defaults": {
+136:           "unit": "percentunit",
+137:           "min": 0,
+138:           "max": 1,
+139:           "thresholds": {
+140:             "mode": "absolute",
+141:             "steps": [
+142:               { "color": "green", "value": null },
+143:               { "color": "yellow", "value": 0.6 },
+144:               { "color": "orange", "value": 0.8 },
+145:               { "color": "red", "value": 0.95 }
+146:             ]
+147:           }
+148:         },
+149:         "overrides": []
+150:       },
+151:       "options": {
+152:         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+153:         "showThresholdLabels": false,
+154:         "showThresholdMarkers": true,
+155:         "orientation": "auto"
+156:       },
+157:       "targets": [
+158:         {
+159:           "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max{job=\"app-metrics\"}",
+160:           "legendFormat": "Pool Utilization",
+161:           "refId": "A"
+162:         }
+163:       ]
+164:     },
+165:     {
+166:       "title": "Order Processing Duration by Status",
+167:       "type": "timeseries",
+168:       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+169:       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+170:       "fieldConfig": {
+171:         "defaults": {
+172:           "unit": "s",
+173:           "custom": { "lineWidth": 2, "fillOpacity": 10 }
+174:         }
+175:       },
+176:       "targets": [
+177:         {
+178:           "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, status))",
+179:           "legendFormat": "p95 — {{ status }}"
+180:         }
+181:       ]
+182:     }
+183:   ],
+184:   "schemaVersion": 39,
+185:   "tags": ["application", "database", "postgresql"],
+186:   "templating": { "list": [] },
+187:   "time": { "from": "now-1h", "to": "now" },
+188:   "title": "Database Performance",
+189:   "uid": "db-performance"
+190: }
 </file>
 
 <file path="observability-vm/phase1-metrics/grafana/dashboards/Application/kafka-overview.json">
@@ -21385,6 +21460,22 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-24 08:35:27 +0000</date>
+<message>add new panel for db performance dashboard</message>
+<files>
+on-premises/observability-vm/phase1-metrics/grafana/dashboards/Application/db-performance.json
+</files>
+</git_log_commit>
+<git_log_commit>
+<date>2026-05-24 02:09:41 +0000</date>
+<message>add repomix-instruction.md</message>
+<files>
+on-premises/repomix-instruction.md
+on-premises/repomix-output.xml
+on-premises/repomix.config.json
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-24 01:07:12 +0000</date>
 <message>bypass security check for repomix</message>
 <files>
@@ -21535,27 +21626,6 @@ on-premises/applications-vm/applications/shared/db_utils.py
 <message>modify command in alert rule to fix phantom alert</message>
 <files>
 on-premises/observability-vm/phase1-metrics/prometheus/alert_rules.yml
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-19 07:27:49 +0000</date>
-<message>update plan</message>
-<files>
-on-premises/EXPANSION_PLAN.md
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-19 06:41:18 +0000</date>
-<message>update documents</message>
-<files>
-README.md
-on-premises/ARCHITECTURE.md
-on-premises/ARCHITECTURE_DETAIL.md
-on-premises/INCIDENT_RUNBOOK.md
-on-premises/README.md
-on-premises/architecture_summary.md
-on-premises/devops-question-senior.md
-on-premises/devops-question.md
 </files>
 </git_log_commit>
 </git_logs>
