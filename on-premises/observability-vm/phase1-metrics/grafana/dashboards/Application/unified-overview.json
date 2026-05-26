@@ -294,15 +294,45 @@
       ]
     },
     {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s",
+          "min": 0,
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "id": 12,
+      "title": "🔍 API Gateway P95 — Per Endpoint (Drill-down)",
+      "description": "P95 latency tách theo từng endpoint. Dùng để debug SLO chính xác hơn so với panel aggregate bên trên.\n\n• GET /products: cache hit → rất nhanh (~10-30ms)\n• GET /orders: DB query (~80-150ms)\n• POST /order: bao gồm payment call → có 20% slow gateway (~1.5-2s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/products\"}[5m])) by (le))",
+          "legendFormat": "GET /products P95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/orders\"}[5m])) by (le))",
+          "legendFormat": "GET /orders P95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/order\"}[5m])) by (le))",
+          "legendFormat": "POST /order P95"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
       "id": 102,
       "title": "📋 Live Logs (Logs — Loki)",
       "type": "row"
     },
     {
       "datasource": { "type": "loki", "uid": "loki-datasource" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
       "id": 7,
       "title": "Application Logs (JSON — click TraceID to jump to trace)",
       "description": "Structured JSON logs from all 3 services. Click the TraceID link to correlate with Tempo traces.",
@@ -327,14 +357,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
       "id": 103,
       "title": "🔍 Recent Traces (Traces — Tempo)",
       "type": "row"
     },
     {
       "datasource": { "type": "tempo", "uid": "tempo-datasource" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
       "id": 8,
       "title": "Recent Traces (click to explore full trace)",
       "description": "Recent distributed traces. Click any trace to view the full waterfall diagram.",

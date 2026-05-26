@@ -285,16 +285,38 @@ curl -X POST http://localhost:5003/start \
 > - **Observability VM** → chọn `vm = observability`
 > - **Cả hai** → chọn `vm = All`
 
-### Application Metrics
+### Application Metrics — Level 1: Aggregate View
+
+> **Khi nào dùng:** Đọc tổng quan, phát hiện anomaly lớn, check SLO compliance ở mức service.
 
 | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
 |-----------|--------------------------------------|----------------|-------------------|
 | **Unified Overview** | `API Gateway — RPS` | req/s | ~2 req/s |
 | **Unified Overview** | `Payment Error Rate` | % | < 1% |
-| **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 300-600ms |
-| **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~200ms, P95 ~400ms, P99 ~800ms |
+| **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 1.2-2.0s* |
+| **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~5-15ms, P95 ~1.5s, P99 ~2.3s* |
 | **App Performance** | `Rate — Request Rate` (Order Service section) | req/s by status | — |
 | **App Performance** | `Errors — Error Rate` (Order Service section) | % | < 1% |
+
+\* **Lưu ý quan trọng:** Các giá trị P95/P99 cao (~1.5-2.3s) là **BÌNH THƯỜNG** khi aggregate tất cả endpoints, vì:
+- ~45% requests là GET nhanh (cache hit) → kéo P50 xuống rất thấp (~5-15ms)
+- ~25% requests là POST /order → trong đó 20% bị slow payment gateway (500ms-2s) → kéo P95/P99 lên
+- Đây KHÔNG phải lỗi hệ thống, mà là đặc tính của traffic mix.
+
+### Application Metrics — Level 2: Per-Endpoint View (Drill-down)
+
+> **Khi nào dùng:** Debug SLO vi phạm, xác định endpoint nào là bottleneck, verify performance sau deploy.
+>
+> **Panel mới:** `🔍 API Gateway P95 — Per Endpoint` trên Unified Overview, hoặc `🔍 Latency by Endpoint (P95)` trên App Performance.
+
+| Dashboard | Panel trên Dashboard | Endpoint | Baseline tham khảo | SLO Target gợi ý |
+|-----------|---------------------|----------|-------------------|------------------|
+| **Unified / App Perf** | `API Gateway P95 — Per Endpoint` | `GET /products` | P95 ~10-30ms | < 50ms |
+| **Unified / App Perf** | `API Gateway P95 — Per Endpoint` | `GET /orders` | P95 ~80-150ms | < 200ms |
+| **Unified / App Perf** | `API Gateway P95 — Per Endpoint` | `POST /order` (normal) | P95 ~300-500ms | < 500ms |
+| **Unified / App Perf** | `API Gateway P95 — Per Endpoint` | `POST /order` (slow payment) | P95 ~1.5-2.0s | — (expected behavior) |
+
+> 💡 **Tip:** 20% requests POST /order bị slow payment gateway (500ms-2s) là **thiết kế có chủ ý** để mô phỏng external dependency không ổn định — giống Stripe/PayPal trong production.
 
 ### Database & Cache
 
@@ -350,8 +372,64 @@ curl -X POST http://localhost:5003/start \
 | **Alerting Overview** | `⚠️ Warning` *(stat)* | Count | 0 |
 | **Alerting Overview** | `⏳ Pending` *(stat)* | Count | 0 |
 
-### Mẹo ghi baseline nhanh
+### 📊 Hiểu về Aggregate vs Per-Endpoint Metrics
 
+**Vấn đề thường gặp:** Khi đọc P95 latency aggregate của API Gateway, bạn thấy ~1.5-2s và nghĩ "hệ thống chậm". Nhưng thực tế:
+
+**Scenario "normal" traffic mix:**
+
+```
+25% GET /products  → cache hit → ~5ms    (rất nhanh)
+5%  GET /health    → ~1ms                (rất nhanh)
+15% GET /orders    → DB query → ~100ms   (trung bình)
+30% browse_then_buy → GET + POST → ~300ms
+25% POST /order    → normal: ~300ms, slow (20%): ~1.5s
+```
+
+**Kết quả aggregate:**
+
+```
+P50  ~ 8-15ms     ← phản ánh GET requests nhanh (median)
+P95  ~ 1.5s       ← phản ánh slow payment gateway
+P99  ~ 2.3s       ← tail latency của slow gateway
+```
+
+**Trong production thực tế:** SLO latency LUÔN được định nghĩa per-endpoint hoặc per-route, KHÔNG BAO GIỜ aggregate toàn service:
+
+```yaml
+# Production SLO example
+slo:
+  - name: "api_get_products_latency"
+    target: 95% < 50ms
+    filter: endpoint="/products"
+  - name: "api_create_order_latency"
+    target: 95% < 500ms
+    filter: endpoint="/order"
+# Note: Slow payment gateway (20% requests) nằm ngoài SLO này
+# vì đó là external dependency, cần SLO riêng với payment provider
+```
+
+**Workflow đọc dashboard đúng:**
+
+- **Bước 1 — Aggregate view (phát hiện):**
+  - Mở Unified Overview → thấy P95 aggregate cao (~1.5s)
+  - KHÔNG hoảng loạn → đây có thể là bình thường
+
+- **Bước 2 — Per-endpoint drill-down (xác nhận):**
+  - Mở panel "API Gateway P95 — Per Endpoint"
+  - So sánh với baseline per-endpoint
+  - Nếu `GET /products` P95 > 50ms → có vấn đề thực sự (Redis/DB)
+  - Nếu `POST /order` P95 > 500ms nhưng < 2s → normal (slow payment)
+  - Nếu `POST /order` P95 > 2s → payment gateway degradation
+
+- **Bước 3 — So sánh với SLO target:**
+  - Mỗi endpoint có threshold riêng
+  - Chỉ alert khi endpoint vi phạm SLO của CHÍNH NÓ
+
+> 💡 **Bài học:** "P95 cao" KHÔNG có nghĩa là "hệ thống chậm". Phải hiểu traffic mix và đọc per-endpoint trước khi kết luận.
+
+
+### Mẹo ghi baseline nhanh
 1. **Dùng Grafana Annotation** (Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject failure → giúp so sánh trước/sau dễ hơn.
 
 2. **Chụp screenshot** các dashboard quan trọng (Unified Overview, App Performance) để đối chiếu khi incident xảy ra.
