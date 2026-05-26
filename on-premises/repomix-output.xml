@@ -3488,52 +3488,87 @@ This section contains the contents of the repository's files.
  9: from opentelemetry.sdk.trace.export import BatchSpanProcessor
 10: from opentelemetry.sdk.metrics import MeterProvider
 11: from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-12: from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-13: from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-14: from opentelemetry.sdk.resources import Resource
-15: from opentelemetry.instrumentation.logging import LoggingInstrumentor
-16: from opentelemetry.propagate import set_global_textmap
-17: from opentelemetry.propagators.composite import CompositePropagator
-18: from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-19: 
+12: from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View   # ← THÊM DÒNG NÀY
+13: from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+14: from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+15: from opentelemetry.sdk.resources import Resource
+16: from opentelemetry.instrumentation.logging import LoggingInstrumentor
+17: from opentelemetry.propagate import set_global_textmap
+18: from opentelemetry.propagators.composite import CompositePropagator
+19: from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 20: 
-21: def init_otel(service_name, service_version="1.0.0"):
-22:     """Initialize OpenTelemetry tracing + metrics for a service.
-23: 
-24:     Args:
-25:         service_name: Name for traces/metrics (e.g., "order-service")
-26:         service_version: Service version string
-27: 
-28:     Returns:
-29:         (tracer, meter) tuple
-30:     """
-31:     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
-32: 
-33:     resource = Resource.create({
-34:         "service.name": service_name,
-35:         "service.version": service_version,
-36:     })
-37: 
-38:     # --- Tracing ---
-39:     trace_provider = TracerProvider(resource=resource)
-40:     trace_provider.add_span_processor(
-41:         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
-42:     )
-43:     trace.set_tracer_provider(trace_provider)
-44:     set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))
-45: 
-46:     # --- Metrics ---
-47:     metric_reader = PeriodicExportingMetricReader(
-48:         OTLPMetricExporter(endpoint=endpoint, insecure=True),
-49:         export_interval_millis=10000,
-50:     )
-51:     meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-52:     metrics.set_meter_provider(meter_provider)
-53: 
-54:     # --- Logging injection ---
-55:     LoggingInstrumentor().instrument(set_logging_format=True)
-56: 
-57:     return trace.get_tracer(service_name), metrics.get_meter(service_name)
+21: # ============================================================
+22: # Histogram bucket boundaries cho duration metrics (seconds)
+23: # ============================================================
+24: # Default OTel SDK buckets: [0, 5, 10, 25, 50, 75, 100, 250, 500, ...]
+25: # → Quá coarse khi unit="s" vì 400ms (0.4s) rơi vào bucket [0, 5]
+26: # → histogram_quantile() nội suy tuyến tính → P95 ≈ 4.75s (SAI)
+27: #
+28: # Custom buckets bên dưới phù hợp cho latency measurement:
+29: #   5ms → 10ms → 25ms → 50ms → 100ms → 250ms → 500ms → 1s → 2.5s → 5s → 10s
+30: # ============================================================
+31: DURATION_BUCKETS = [
+32:     0.005,   # 5ms
+33:     0.01,    # 10ms
+34:     0.025,   # 25ms
+35:     0.05,    # 50ms
+36:     0.1,     # 100ms
+37:     0.25,    # 250ms
+38:     0.5,     # 500ms
+39:     1.0,     # 1s
+40:     2.5,     # 2.5s
+41:     5.0,     # 5s
+42:     10.0,    # 10s
+43: ]
+44: 
+45: # View áp dụng cho TẤT CẢ histogram metrics có tên kết thúc bằng "duration_seconds"
+46: duration_view = View(
+47:     instrument_name="*duration_seconds",
+48:     aggregation=ExplicitBucketHistogramAggregation(boundaries=DURATION_BUCKETS),
+49: )
+50: 
+51: 
+52: def init_otel(service_name, service_version="1.0.0"):
+53:     """Initialize OpenTelemetry tracing + metrics for a service.
+54: 
+55:     Args:
+56:         service_name: Name for traces/metrics (e.g., "order-service")
+57:         service_version: Service version string
+58: 
+59:     Returns:
+60:         (tracer, meter) tuple
+61:     """
+62:     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+63: 
+64:     resource = Resource.create({
+65:         "service.name": service_name,
+66:         "service.version": service_version,
+67:     })
+68: 
+69:     # --- Tracing ---
+70:     trace_provider = TracerProvider(resource=resource)
+71:     trace_provider.add_span_processor(
+72:         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
+73:     )
+74:     trace.set_tracer_provider(trace_provider)
+75:     set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))
+76: 
+77:     # --- Metrics ---
+78:     metric_reader = PeriodicExportingMetricReader(
+79:         OTLPMetricExporter(endpoint=endpoint, insecure=True),
+80:         export_interval_millis=10000,
+81:     )
+82:     meter_provider = MeterProvider(
+83:         resource=resource,
+84:         metric_readers=[metric_reader],
+85:         views=[duration_view],   # ← THÊM DÒNG NÀY: áp dụng custom histogram buckets
+86:     )
+87:     metrics.set_meter_provider(meter_provider)
+88: 
+89:     # --- Logging injection ---
+90:     LoggingInstrumentor().instrument(set_logging_format=True)
+91: 
+92:     return trace.get_tracer(service_name), metrics.get_meter(service_name)
 </file>
 
 <file path="applications-vm/applications/traffic-gen/.dockerignore">
@@ -9251,93 +9286,101 @@ This section contains the contents of the repository's files.
 264:       "type": "timeseries",
 265:       "targets": [
 266:         {
-267:           "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le))",
-268:           "legendFormat": "API Gateway"
+267:           "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/order\"}[5m])) by (le))",
+268:           "legendFormat": "API Gateway /order"
 269:         },
 270:         {
-271:           "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))",
-272:           "legendFormat": "Order Service"
+271:           "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/products\"}[5m])) by (le))",
+272:           "legendFormat": "API Gateway /products"
 273:         },
 274:         {
-275:           "expr": "histogram_quantile(0.95, sum(rate(payment_gateway_duration_seconds_bucket[5m])) by (le))",
-276:           "legendFormat": "Payment Gateway"
+275:           "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/orders\"}[5m])) by (le))",
+276:           "legendFormat": "API Gateway /orders"
 277:         },
 278:         {
-279:           "expr": "histogram_quantile(0.95, sum(rate(notification_processing_duration_seconds_bucket[5m])) by (le))",
-280:           "legendFormat": "Notification Worker"
+279:           "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))",
+280:           "legendFormat": "Order Service"
 281:         },
 282:         {
-283:           "expr": "histogram_quantile(0.95, sum(rate(inventory_processing_duration_seconds_bucket[5m])) by (le))",
-284:           "legendFormat": "Inventory Worker"
-285:         }
-286:       ]
-287:     },
-288:     {
-289:       "collapsed": false,
-290:       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
-291:       "id": 102,
-292:       "title": "📋 Live Logs (Logs — Loki)",
-293:       "type": "row"
-294:     },
-295:     {
-296:       "datasource": { "type": "loki", "uid": "loki-datasource" },
-297:       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 },
-298:       "id": 7,
-299:       "title": "Application Logs (JSON — click TraceID to jump to trace)",
-300:       "description": "Structured JSON logs from all 3 services. Click the TraceID link to correlate with Tempo traces.",
-301:       "type": "logs",
-302:       "options": {
-303:         "showTime": true,
-304:         "showLabels": true,
-305:         "showCommonLabels": false,
-306:         "wrapLogMessage": true,
-307:         "prettifyLogMessage": true,
-308:         "enableLogDetails": true,
-309:         "dedupStrategy": "none",
-310:         "sortOrder": "Descending"
-311:       },
-312:       "targets": [
-313:         {
-314:           "datasource": { "type": "loki", "uid": "loki-datasource" },
-315:           "expr": "{container_name=~\"api-gateway|order-service|payment-service|notification-worker|inventory-worker\"} | json",
-316:           "refId": "A"
-317:         }
-318:       ]
-319:     },
-320:     {
-321:       "collapsed": false,
-322:       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
-323:       "id": 103,
-324:       "title": "🔍 Recent Traces (Traces — Tempo)",
-325:       "type": "row"
-326:     },
-327:     {
-328:       "datasource": { "type": "tempo", "uid": "tempo-datasource" },
-329:       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 },
-330:       "id": 8,
-331:       "title": "Recent Traces (click to explore full trace)",
-332:       "description": "Recent distributed traces. Click any trace to view the full waterfall diagram.",
-333:       "type": "table",
-334:       "targets": [
-335:         {
-336:           "datasource": { "type": "tempo", "uid": "tempo-datasource" },
-337:           "queryType": "nativeSearch",
-338:           "limit": 20,
-339:           "refId": "A"
-340:         }
-341:       ]
-342:     }
-343:   ],
-344:   "schemaVersion": 39,
-345:   "tags": ["unified", "correlation", "phase6", "application"],
-346:   "templating": { "list": [] },
-347:   "time": { "from": "now-30m", "to": "now" },
-348:   "timepicker": {},
-349:   "timezone": "browser",
-350:   "title": "Unified Overview — Metrics + Logs + Traces",
-351:   "uid": "unified-overview",
-352:   "version": 1
-353: }
+283:           "expr": "histogram_quantile(0.95, sum(rate(payment_gateway_duration_seconds_bucket[5m])) by (le))",
+284:           "legendFormat": "Payment Gateway"
+285:         },
+286:         {
+287:           "expr": "histogram_quantile(0.95, sum(rate(notification_processing_duration_seconds_bucket[5m])) by (le))",
+288:           "legendFormat": "Notification Worker"
+289:         },
+290:         {
+291:           "expr": "histogram_quantile(0.95, sum(rate(inventory_processing_duration_seconds_bucket[5m])) by (le))",
+292:           "legendFormat": "Inventory Worker"
+293:         }
+294:       ]
+295:     },
+296:     {
+297:       "collapsed": false,
+298:       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+299:       "id": 102,
+300:       "title": "📋 Live Logs (Logs — Loki)",
+301:       "type": "row"
+302:     },
+303:     {
+304:       "datasource": { "type": "loki", "uid": "loki-datasource" },
+305:       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 },
+306:       "id": 7,
+307:       "title": "Application Logs (JSON — click TraceID to jump to trace)",
+308:       "description": "Structured JSON logs from all 3 services. Click the TraceID link to correlate with Tempo traces.",
+309:       "type": "logs",
+310:       "options": {
+311:         "showTime": true,
+312:         "showLabels": true,
+313:         "showCommonLabels": false,
+314:         "wrapLogMessage": true,
+315:         "prettifyLogMessage": true,
+316:         "enableLogDetails": true,
+317:         "dedupStrategy": "none",
+318:         "sortOrder": "Descending"
+319:       },
+320:       "targets": [
+321:         {
+322:           "datasource": { "type": "loki", "uid": "loki-datasource" },
+323:           "expr": "{container_name=~\"api-gateway|order-service|payment-service|notification-worker|inventory-worker\"} | json",
+324:           "refId": "A"
+325:         }
+326:       ]
+327:     },
+328:     {
+329:       "collapsed": false,
+330:       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+331:       "id": 103,
+332:       "title": "🔍 Recent Traces (Traces — Tempo)",
+333:       "type": "row"
+334:     },
+335:     {
+336:       "datasource": { "type": "tempo", "uid": "tempo-datasource" },
+337:       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 },
+338:       "id": 8,
+339:       "title": "Recent Traces (click to explore full trace)",
+340:       "description": "Recent distributed traces. Click any trace to view the full waterfall diagram.",
+341:       "type": "table",
+342:       "targets": [
+343:         {
+344:           "datasource": { "type": "tempo", "uid": "tempo-datasource" },
+345:           "queryType": "nativeSearch",
+346:           "limit": 20,
+347:           "refId": "A"
+348:         }
+349:       ]
+350:     }
+351:   ],
+352:   "schemaVersion": 39,
+353:   "tags": ["unified", "correlation", "phase6", "application"],
+354:   "templating": { "list": [] },
+355:   "time": { "from": "now-30m", "to": "now" },
+356:   "timepicker": {},
+357:   "timezone": "browser",
+358:   "title": "Unified Overview — Metrics + Logs + Traces",
+359:   "uid": "unified-overview",
+360:   "version": 1
+361: }
 </file>
 
 <file path="observability-vm/phase1-metrics/grafana/dashboards/Infrastructure/docker-containers.json">
@@ -21678,6 +21721,14 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-25 07:43:11 +0000</date>
+<message>fix syntax</message>
+<files>
+on-premises/INCIDENT_SIMULATION_GUIDE.md
+on-premises/repomix-output.xml
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-25 07:41:41 +0000</date>
 <message>fix syntax error</message>
 <files>
@@ -21832,13 +21883,6 @@ on-premises/post-mortems/01-GOLDEN-EXAMPLE-DB-Saturation.md
 <message>update content of IS guide</message>
 <files>
 on-premises/INCIDENT_SIMULATION_GUIDE.md
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-22 10:08:20 +0000</date>
-<message>update content of runbook</message>
-<files>
-on-premises/INCIDENT_RUNBOOK.md
 </files>
 </git_log_commit>
 </git_logs>

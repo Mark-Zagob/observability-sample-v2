@@ -264,8 +264,16 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "API Gateway"
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/order\"}[5m])) by (le))",
+          "legendFormat": "API Gateway /order"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/products\"}[5m])) by (le))",
+          "legendFormat": "API Gateway /products"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{endpoint=\"/orders\"}[5m])) by (le))",
+          "legendFormat": "API Gateway /orders"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))",
