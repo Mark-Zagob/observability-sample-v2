@@ -20488,6 +20488,14 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-28 01:04:35 +0000</date>
+<message>update</message>
+<files>
+on-premises/ARCHITECTURE.md
+on-premises/repomix-output.xml
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-28 00:58:32 +0000</date>
 <message>update</message>
 <files>
@@ -20645,14 +20653,6 @@ on-premises/applications-vm/applications/sample-app/requirements.txt
 on-premises/applications-vm/applications/sample-app/traffic_gen.py
 on-premises/repomix-output.xml
 on-premises/repomix.config.json
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-23 08:19:20 +0000</date>
-<message>modify promql</message>
-<files>
-on-premises/observability-vm/phase1-metrics/grafana/dashboards/Application/app-performance.json
-on-premises/repomix-output.xml
 </files>
 </git_log_commit>
 </git_logs>

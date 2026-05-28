@@ -3,7 +3,124 @@
 > E-commerce microservices platform with event-driven architecture, full observability stack, and Kafka event streaming.
 
 ---
+## Related Documents Quick Reference
 
+| If you need to... | Go to... |
+|-------------------|----------|
+| Understand system design | This document |
+| Handle an alert | [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) |
+| Practice incident response | [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) |
+| Understand component internals | [BREAK_TEST_RECOVERY.md](BREAK_TEST_RECOVERY.md) |
+| Plan next expansion | [EXPANSION_PLAN.md](EXPANSION_PLAN.md) |
+| Prepare for interview | [devops-question-senior.md](devops-question-senior.md) & [devops-question.md](devops-question.md)|
+
+---
+## Document Metadata
+
+| Field | Value |
+|-------|-------|
+| **Document Status** | ✅ Reviewed & Approved |
+| **Last Updated** | 2026-05-28 |
+| **Version** | 2.1 (post-expansion planning) |
+| **Owner** | Platform Engineering Team |
+| **Author(s)** | dungtt, [Co-author if any] |
+| **Reviewers** | [Principal Architect], [SRE Lead], [Security Team] |
+| **Next Review** | 2026-08-28 (quarterly) |
+| **Approval Date** | 2026-05-28 |
+
+### Document History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 1.0 | 2026-01-15 | dungtt | Initial architecture (6 services) |
+| 2.0 | 2026-05-20 | dungtt | Added Network, Security, Capacity Planning, Failure Modes sections |
+| 2.1 | 2026-05-28 | dungtt | Enhanced Mermaid diagrams, added metadata, cross-references |
+
+### Related Architecture Decision Records (ADRs)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| ADR-001 | Use KRaft instead of ZooKeeper for Kafka | ✅ Accepted | 2026-01-20 |
+| ADR-002 | MinIO as S3-compatible storage for Loki/Tempo | ✅ Accepted | 2026-02-05 |
+| ADR-003 | Separate Applications VM and Observability VM | ✅ Accepted | 2026-01-15 |
+| ADR-004 | Gthread workers with deliberate connection pool queue | ✅ Accepted | 2026-03-10 |
+| ADR-005 | Cache-aside pattern over write-through | ✅ Accepted | 2026-02-15 |
+| ADR-006 | Pessimistic locking for inventory updates | ✅ Accepted | 2026-02-20 |
+| ADR-007 | Idempotent consumers over exactly-once semantics | ✅ Accepted | 2026-03-01 |
+| ADR-008 | OTel Collector as centralized telemetry pipeline | ✅ Accepted | 2026-02-10 |
+| ADR-009 | Blackbox Exporter for 24/7 active probing | ✅ Accepted | 2026-03-15 |
+| ADR-010 | Traffic guards on SLO burn rate alerts | ✅ Accepted | 2026-04-01 |
+
+> **Note:** Xem chi tiết các ADRs trong [`docs/adrs/`](./docs/adrs/) (nếu có) hoặc trong git commit history.
+
+### Document Scope
+
+**In Scope:**
+- Current architecture (6 services on Applications VM)
+- Observability stack (Observability VM)
+- Data flows (sync HTTP + async Kafka)
+- Design patterns applied
+- Security architecture (current state + planned)
+- Capacity planning & resource allocation
+- Failure modes & recovery procedures
+- Operational considerations (backup, retention, upgrades)
+
+**Out of Scope:**
+- AWS deployment architecture (see separate repository)
+- Terraform/IaC configurations
+- Detailed API specifications (see OpenAPI specs)
+- Database migration scripts
+- CI/CD pipeline configurations (see `.github/workflows/`)
+
+### Maintenance Guidelines
+
+**When to Update This Document:**
+- ✅ Adding new service or removing existing service
+- ✅ Changing communication patterns (sync ↔ async)
+- ✅ Modifying data layer (new database, cache strategy change)
+- ✅ Updating security architecture (TLS, auth, secrets)
+- ✅ Changing observability pipeline (new backend, sampling policy)
+- ✅ Adjusting capacity planning (resource limits, pool sizing)
+- ❌ Minor code refactoring (no architectural impact)
+- ❌ Bug fixes (unless they reveal architectural gaps)
+
+**Review Process:**
+1. **Quarterly Review** (every 3 months): Full document review by owner + reviewers
+2. **Ad-hoc Updates**: When architectural changes occur, update relevant sections immediately
+3. **Version Bumping**: 
+   - Patch (2.1 → 2.2): Minor clarifications, typo fixes
+   - Minor (2.1 → 3.0): New sections, significant updates
+   - Major (2.1 → 3.0): Architectural changes, new services
+
+**Approval Workflow:**
+1. Author updates document → creates PR
+2. Reviewers comment and approve
+3. Principal Architect final approval
+4. Merge to main branch
+5. Update "Last Updated" and "Version" fields
+
+### References & Dependencies
+
+**Internal Documents:**
+- [INCIDENT_RUNBOOK.md](./INCIDENT_RUNBOOK.md) - Alert triage & recovery procedures
+- [INCIDENT_SIMULATION_GUIDE.md](./INCIDENT_SIMULATION_GUIDE.md) - 12 incident simulation experiments
+- [BREAK_TEST_RECOVERY.md](./BREAK_TEST_RECOVERY.md) - 28 break/test/recovery exercises
+- [EXPANSION_PLAN.md](./EXPANSION_PLAN.md) - Roadmap to 10 services
+- [devops-question-senior.md](./devops-question-senior.md) - Senior-level interview questions
+- [devops-question.md](./devops-question.md) - junior and middle level interview questions
+
+**External Standards:**
+- [RFC 7807](https://datatracker.ietf.org/doc/html/rfc7807) - Problem Details for HTTP APIs
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/) - Distributed tracing propagation
+- [Google SRE Book](https://sre.google/sre-book/table-of-contents/) - SLO/SLI/Error Budget concepts
+- [OpenTelemetry Specification](https://opentelemetry.io/docs/specs/) - Telemetry standards
+
+**Compliance & Security:**
+- OWASP Top 10 (web application security)
+- CIS Docker Benchmark (container hardening)
+- NIST Cybersecurity Framework (incident response)
+
+---
 ## System Architecture  
 
 ### High-Level Topology
@@ -15,14 +132,14 @@ graph TB
         GW["API Gateway<br/>Flask :5000"]
         OS["Order Service<br/>Flask :5001"]
         PS["Payment Service<br/>Flask :5002"]
-        TG["Traffic Gen<br/>:5003"]
+        TG["Traffic Generator<br/>:5003"]
         NW["Notification Worker<br/>:5004"]
         IW["Inventory Worker<br/>:5005"]
         PG[(PostgreSQL 16)]
         RD[(Redis 7)]
         KF[Kafka 3.7<br/>KRaft]
     end
-
+    
     subgraph "Observability VM (192.168.100.55)"
         OTEL["OTel Collector<br/>:4317/:4318"]
         PROM[Prometheus]
@@ -32,14 +149,14 @@ graph TB
         AM[Alertmanager]
         BB[Blackbox Exporter]
     end
-
+    
     UI -->|reverse proxy| GW
     GW -->|HTTP| OS -->|HTTP| PS
     OS --> PG & RD & KF
     KF --> NW & IW
     NW & IW --> PG
     TG -->|load test| GW
-
+    
     OS & GW & PS & NW & IW -->|OTLP| OTEL
     OTEL --> PROM & TEMPO & LOKI
     PROM --> GRAF & AM
@@ -59,7 +176,7 @@ sequenceDiagram
     participant PS as Payment Service
     participant DB as PostgreSQL
     participant RD as Redis
-
+    
     U->>UI: Place Order
     UI->>GW: POST /order
     GW->>OS: POST /process
@@ -88,7 +205,7 @@ sequenceDiagram
     participant NW as Notification Worker
     participant IW as Inventory Worker
     participant DB as PostgreSQL
-
+    
     OS->>KF: Publish order.created
     par Parallel Consumption
         KF-->>NW: Consume event
@@ -110,21 +227,21 @@ sequenceDiagram
 ```mermaid
 graph LR
     APP[All Services] -->|OTLP gRPC| OTEL[OTel Collector]
-
+    
     OTEL -->|filter + tail sampling| TEMPO[Tempo]
     OTEL -->|spanmetrics connector| PROM[Prometheus]
     OTEL -->|app metrics| PROM
-
+    
     ALLOY[Alloy Agent] -->|Docker + host logs| LOKI[Loki]
-
+    
     BB[Blackbox Exporter] -->|HTTP probes| APP
     PROM -->|scrape every 15s| BB
     PROM -->|scrape| APP
-
+    
     PROM --> GRAF[Grafana]
     TEMPO --> GRAF
     LOKI --> GRAF
-
+    
     PROM -->|alerts| AM[Alertmanager]
     AM --> TG[Telegram]
     AM --> WH[Webhook Receiver]
@@ -1095,15 +1212,5 @@ Xem chi tiết tại [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md#escalation-matrix
 ```
 
 > [!TIP]
-> **Key takeaway**: Observability is not just "viewing metrics" — it's the ability to **trace a request end-to-end** through the entire system (HTTP → Kafka → Worker → Database), combining 3 signals (Metrics + Logs + Traces) to **debug faster** and **detect issues before users are impacted**.
+> 💡 **Key takeaway**: Observability is not just "viewing metrics" — it's the ability to **trace a request end-to-end** through the entire system (HTTP → Kafka → Worker → Database), combining 3 signals (Metrics + Logs + Traces) to **debug faster** and **detect issues before users are impacted**.
 
----
-
-## Related Documentation
-
-| Document | Mục đích |
-|----------|----------|
-| [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) | Dashboard reading & 12 incident simulations |
-| [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) | Alert triage & recovery (24 alerts) |
-| [BREAK_TEST_RECOVERY.md](BREAK_TEST_RECOVERY.md) | CLI deep-dive & 28 exercises |
-| [EXPANSION_PLAN.md](EXPANSION_PLAN.md) | Kế hoạch mở rộng lên 10 services |
