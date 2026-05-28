@@ -696,31 +696,6 @@ user: appuser                      # Non-root user (UID 1000)
 
 > **Exception:** `web-ui` (nginx) không dùng `read_only: true` vì entrypoint scripts cần write `/etc/nginx/conf.d/` khi startup. Vẫn enforce `cap_drop: ALL` + `no-new-privileges`.
 
-### Multi-Stage Docker Builds
-
-Tất cả Python services dùng multi-stage build để giảm attack surface:
-
-```dockerfile
-# Stage 1: Build dependencies (isolated)
-FROM python:3.12-slim-bookworm AS builder
-WORKDIR /build
-COPY requirements.txt .
-RUN pip install --no-cache-dir --no-compile --prefix=/install -r requirements.txt
-
-# Stage 2: Runtime (minimal image, no build tools)
-FROM python:3.12-slim-bookworm
-RUN groupadd -r appuser && useradd -r -g appuser -s /usr/sbin/nologin appuser
-COPY --from=builder /install /usr/local
-COPY app.py .
-USER appuser
-```
-
-**Benefits:**
-
-- Runtime image không có `pip`, `setuptools`, `wheel` (giảm CVE surface)
-- No `.pyc` files (works with read-only filesystem)
-- Smaller image size (~150MB vs ~400MB)
-
 ### Planned Security Improvements (Production)
 
 Xem chi tiết trong [EXPANSION_PLAN.md](EXPANSION_PLAN.md):
@@ -1050,25 +1025,10 @@ docker compose up -d  # Apps last, with health check dependencies
 
 ### On-Call Procedures
 
-**Escalation matrix:**
-
-- Critical alert > 15 min unresolved → Team Lead
-- Critical alert > 30 min unresolved → Engineering Manager
-- Suspected security breach → Security Team immediately
-- Revenue impact (payment failures) → Finance + PM
-
-**Communication templates:**
-
-- Initial: `🚨 INCIDENT: [description], SEV: [1-4], Impact: [X% users]`
-- Update (every 15 min): `🔄 UPDATE: Status [Investigating/Mitigating], Duration: [X min]`
-- Resolution: `✅ RESOLVED: Duration [X min], Root cause: [1 sentence]`
-
-**Post-incident (within 48h):**
-
-- Blameless post-mortem using `post-mortems/00-TEMPLATE.md`
-- 5 Whys root cause analysis
-- SMART action items with owners and deadlines
-- Follow-up: 1 week, 1 month, quarterly review
+Xem chi tiết tại [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md#escalation-matrix):
+- Escalation matrix (Team Lead → Engineering Manager → VP Eng)
+- Communication templates (Initial/Update/Resolution)
+- Post-incident process (blameless post-mortem trong 48h)
 
 ---
 ## DevOps Knowledge Applied
