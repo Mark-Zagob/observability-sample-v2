@@ -8,7 +8,7 @@
     "style": "xml",
     "parsableStyle": false,
     "compress": false,
-    "instructionFilePath": "repomix-instruction.md",
+    "instructionFilePath": "./AI-conventions/repomix-instruction.md",
     "fileSummary": true,
     "directoryStructure": true,
     "files": true,
