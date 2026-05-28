@@ -144,7 +144,7 @@ graph LR
 
 Hiện tại sử dụng **single Docker bridge network** (`observability`) cho tất cả services.
 
-> **Production note:** Khi mở rộng (xem EXPANSION_PLAN.md), cần tách thành 4 networks:
+> **Production note:** Khi mở rộng (xem [EXPANSION_PLAN.md](EXPANSION_PLAN.md)), cần tách thành 4 networks:
 > - `frontend` — Web UI, nginx
 > - `backend` — API Gateway, services  
 > - `data` — PostgreSQL, Redis, Kafka, OpenSearch
