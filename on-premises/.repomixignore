@@ -1,4 +1,5 @@
 # Dependencies
+AI-conventions/
 node_modules/
 vendor/
 venv/
