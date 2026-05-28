@@ -14823,7 +14823,7 @@ This section contains the contents of the repository's files.
 292: | **Predictive** | `DiskSpacePrediction`, `MemoryUsagePrediction` | `predict_linear()` based forecasting |
 293: 
 294: ### Traffic Guards
-295: - SLO burn rate alerts include `rate(total[5m]) > 0.1` condition
+295: - SLO burn rate alerts include `rate(total[5m]) > 0` condition
 296: - Prevents **phantom alerts** when stale metrics persist after traffic stops
 297: - Recording rules use `or vector(1)` fallback, but traffic guards are still needed for alert accuracy
 298: 
@@ -14936,6 +14936,17 @@ This section contains the contents of the repository's files.
 405: 
 406: > [!TIP]
 407: > **Key takeaway**: Observability is not just "viewing metrics" — it's the ability to **trace a request end-to-end** through the entire system (HTTP → Kafka → Worker → Database), combining 3 signals (Metrics + Logs + Traces) to **debug faster** and **detect issues before users are impacted**.
+408: 
+409: ---
+410: 
+411: ## Related Documentation
+412: 
+413: | Document | Mục đích |
+414: |----------|----------|
+415: | [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) | Dashboard reading & 12 incident simulations |
+416: | [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) | Alert triage & recovery (24 alerts) |
+417: | [BREAK_TEST_RECOVERY.md](BREAK_TEST_RECOVERY.md) | CLI deep-dive & 28 exercises |
+418: | [EXPANSION_PLAN.md](EXPANSION_PLAN.md) | Kế hoạch mở rộng lên 10 services |
 </file>
 
 <file path="BREAK_TEST_RECOVERY.md">
@@ -20898,6 +20909,14 @@ This section contains the contents of the repository's files.
 
 <git_logs>
 <git_log_commit>
+<date>2026-05-28 00:06:11 +0000</date>
+<message>update</message>
+<files>
+on-premises/.repomixignore
+on-premises/repomix-output.xml
+</files>
+</git_log_commit>
+<git_log_commit>
 <date>2026-05-27 09:19:25 +0000</date>
 <message>add files</message>
 <files>
@@ -21051,13 +21070,6 @@ on-premises/repomix-output.xml
 </git_log_commit>
 <git_log_commit>
 <date>2026-05-23 02:17:04 +0000</date>
-<message>update expansion plan</message>
-<files>
-on-premises/EXPANSION_PLAN.md
-</files>
-</git_log_commit>
-<git_log_commit>
-<date>2026-05-23 01:41:08 +0000</date>
 <message>update expansion plan</message>
 <files>
 on-premises/EXPANSION_PLAN.md

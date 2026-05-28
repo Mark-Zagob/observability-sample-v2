@@ -292,7 +292,7 @@ API Gateway aggregates calls to backend services and handles error propagation, 
 | **Predictive** | `DiskSpacePrediction`, `MemoryUsagePrediction` | `predict_linear()` based forecasting |
 
 ### Traffic Guards
-- SLO burn rate alerts include `rate(total[5m]) > 0.1` condition
+- SLO burn rate alerts include `rate(total[5m]) > 0` condition
 - Prevents **phantom alerts** when stale metrics persist after traffic stops
 - Recording rules use `or vector(1)` fallback, but traffic guards are still needed for alert accuracy
 
@@ -405,3 +405,14 @@ API Gateway aggregates calls to backend services and handles error propagation, 
 
 > [!TIP]
 > **Key takeaway**: Observability is not just "viewing metrics" — it's the ability to **trace a request end-to-end** through the entire system (HTTP → Kafka → Worker → Database), combining 3 signals (Metrics + Logs + Traces) to **debug faster** and **detect issues before users are impacted**.
+
+---
+
+## Related Documentation
+
+| Document | Mục đích |
+|----------|----------|
+| [INCIDENT_SIMULATION_GUIDE.md](INCIDENT_SIMULATION_GUIDE.md) | Dashboard reading & 12 incident simulations |
+| [INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) | Alert triage & recovery (24 alerts) |
+| [BREAK_TEST_RECOVERY.md](BREAK_TEST_RECOVERY.md) | CLI deep-dive & 28 exercises |
+| [EXPANSION_PLAN.md](EXPANSION_PLAN.md) | Kế hoạch mở rộng lên 10 services |
