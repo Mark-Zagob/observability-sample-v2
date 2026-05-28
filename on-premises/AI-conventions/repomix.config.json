@@ -23,7 +23,7 @@
       "sortByChanges": true,
       "sortByChangesMaxCommits": 50,
       "includeDiffs": false,
-      "includeLogs": true,
+      "includeLogs": false,
       "includeLogsCount": 20
     }
   },
@@ -36,7 +36,11 @@
       "coverage/",
       "__tests__/",
       "*.test.ts",
-      "*.spec.ts"]
+      "*.spec.ts",
+      ".repomixignore",
+      "AI-conventions/",
+      "CONTEXT.md"
+      ]
   },
   "security": {
     "enableSecurityCheck": true
