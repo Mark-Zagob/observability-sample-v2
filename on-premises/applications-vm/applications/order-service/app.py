@@ -22,7 +22,7 @@ import uuid
 import requests
 from confluent_kafka import Producer as KafkaProducer
 from flask import Flask, jsonify, request as flask_request
-
+from shared.errors import problem_response, map_order_status_to_http
 # ----------------------------------------------------------
 # Shared modules
 # ----------------------------------------------------------
@@ -462,6 +462,11 @@ def process_order():
                         "duration_ms": int(duration * 1000),
                         "product": product["name"], "total_amount": total_amount})
 
+    # [PLATFORM GUARDRAIL] Tự động map HTTP Code dựa trên Business Status
+    http_status = map_order_status_to_http(order_status)
+
+    # Giữ nguyên payload JSON để không break Contract với Web UI (Backward Compatible)
+    # Nhưng thay đổi HTTP Envelope để API Gateway và Prometheus hiểu đúng bản chất
     return jsonify({
         "order_id": order_id,
         "product": product["name"],
@@ -469,7 +474,7 @@ def process_order():
         "total_amount": total_amount,
         "payment": payment,
         "status": order_status,
-    })
+    }), http_status
 
 
 if __name__ == "__main__":

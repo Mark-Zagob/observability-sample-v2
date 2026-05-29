@@ -57,6 +57,42 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "green", "value": 0.1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 9 },
+      "id": 99,
+      "title": "🚦 Traffic Guard Status — All Services",
+      "description": "⚠️ Nếu tất cả = 0 (màu đỏ), Traffic Guard đang active → Error Rate panels sẽ hiển thị 'No Data' để tránh phantom alerts lúc không có traffic.",
+      "type": "stat",
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "expr": "sum(rate(api_gateway_requests_total[5m]))",
+          "legendFormat": "API Gateway RPS"
+        },
+        {
+          "expr": "sum(rate(orders_created_total[5m]))",
+          "legendFormat": "Order Service RPS"
+        },
+        {
+          "expr": "sum(rate(payments_total[5m]))",
+          "legendFormat": "Payment Service RPS"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
           "color": { "fixedColor": "red", "mode": "fixed" }, "unit": "percentunit", "min": 0, "max": 1,
           "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 } ] }
         }
@@ -68,7 +104,10 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(api_gateway_requests_total{status=\"error\"}[5m])) or vector(0)) / sum(rate(api_gateway_requests_total[5m]))", "legendFormat": "Error Rate" }
+        {
+          "expr": "(sum(rate(api_gateway_requests_total{status=\"error\"}[5m])) / (sum(rate(api_gateway_requests_total[5m])) or vector(1))) and (sum(rate(api_gateway_requests_total[5m])) > 0.1)",
+          "legendFormat": "Error Rate (Infra)"
+        }
       ]
     },
 
@@ -103,27 +142,66 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" }, "unit": "percentunit", "min": 0, "max": 1,
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 } ] }
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "unit": "percentunit", "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
         }
       },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
       "id": 6,
-      "title": "Errors — Error Rate",
-      "description": "Percentage of orders that failed (payment_error, out_of_stock, unknown_error)",
+      "title": "Errors — Infrastructure Error Rate",
+      "description": "🔴 SRE ALERT: Tỷ lệ lỗi HẠ TẦNG của Order Service (DB timeout, Kafka fail, Payment service unreachable). KHÔNG bao gồm lỗi nghiệp vụ (hết hàng, thẻ bị từ chối). Dùng để Alert SRE.",
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "1 - ((sum(rate(orders_created_total{status=\"completed\"}[5m])) or vector(0)) / (sum(rate(orders_created_total[5m])) or vector(1)))", "legendFormat": "Error Rate" }
+        {
+          "expr": "(sum(rate(orders_created_total{status=~\"payment_error|db_error|kafka_error|unknown_error\"}[5m])) / (sum(rate(orders_created_total[5m])) or vector(1))) and (sum(rate(orders_created_total[5m])) > 0.1)",
+          "legendFormat": "Infra Error Rate"
+        }
       ]
     },
-
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 }, "id": 102, "title": "💳 Payment Service — RED", "type": "row" },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "unit": "percentunit", "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.85 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 26 },
+      "id": 60,
+      "title": "💼 Business — Order Success Rate",
+      "description": "📊 PM DASHBOARD: Tỷ lệ đơn hàng hoàn thành thành công. Dùng cho Product Manager theo dõi health của business. KHÔNG dùng để alert SRE.",
+      "type": "stat",
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        {
+          "expr": "sum(rate(orders_created_total{status=\"completed\"}[5m])) / (sum(rate(orders_created_total[5m])) or vector(1))",
+          "legendFormat": "Success Rate"
+        }
+      ]
+    },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 }, "id": 102, "title": "💳 Payment Service — RED", "type": "row" },
 
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 35 },
       "id": 7,
       "title": "Rate — Request Rate",
       "description": "Payment requests per second (total throughput)",
@@ -135,7 +213,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 35 },
       "id": 8,
       "title": "Duration — Gateway Latency by Provider (P95)",
       "description": "External payment gateway call duration P95 grouped by provider",
@@ -148,27 +226,38 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" }, "unit": "percentunit", "min": 0, "max": 1,
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 } ] }
+          "color": { "fixedColor": "orange", "mode": "fixed" },
+          "unit": "percentunit", "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
         }
       },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
       "id": 9,
-      "title": "Errors — Error Rate",
-      "description": "Percentage of payment requests that failed or were rejected",
+      "title": "💼 Business — Gateway Failure Rate",
+      "description": "📊 PM DASHBOARD: Tỷ lệ giao dịch bị từ chối bởi Payment Gateway (bao gồm 10% mock failure có chủ ý). Đây là Business Outcome, KHÔNG phải lỗi hạ tầng của Payment Service. Baseline ~10%.",
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))", "legendFormat": "Error Rate" }
+        {
+          "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / (sum(rate(payments_total[5m])) or vector(1)) and (sum(rate(payments_total[5m])) > 0.1)",
+          "legendFormat": "Gateway Failure Rate"
+        }
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 }, "id": 104, "title": "📨 Notification Worker — RED", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 }, "id": 104, "title": "📨 Notification Worker — RED", "type": "row" },
 
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 36 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 44 },
       "id": 12,
       "title": "Rate — Events Consumed",
       "description": "Kafka events consumed per second by event type",
@@ -180,7 +269,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 36 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 44 },
       "id": 13,
       "title": "Duration — Processing Latency (P50 / P95)",
       "description": "Time to process and send notifications",
@@ -199,23 +288,26 @@
           "noValue": "0 (no errors)"
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 44 },
       "id": 18,
       "title": "Errors — Processing Errors",
       "description": "Difference between consumed events and sent notifications. 'No data' = zero errors (healthy).",
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) - sum(rate(notifications_sent_total[5m]))", "legendFormat": "Errors/s" }
+        {
+          "expr": "(sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) - sum(rate(notifications_sent_total[5m]))) and (sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) > 0.05)",
+          "legendFormat": "Errors/s"
+        }
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 }, "id": 105, "title": "📦 Inventory Worker — RED", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 }, "id": 105, "title": "📦 Inventory Worker — RED", "type": "row" },
 
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 45 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 53 },
       "id": 15,
       "title": "Rate — Operations (by Action)",
       "description": "Stock update operations per second: reserve, release, restock",
@@ -227,7 +319,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 45 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 53 },
       "id": 16,
       "title": "Duration — Processing Latency (P50 / P95)",
       "description": "Time to process stock reserve/release",
@@ -240,22 +332,25 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 45 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 53 },
       "id": 17,
       "title": "Errors — Error Rate (by Event Type)",
       "description": "Inventory update errors per second",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(inventory_errors_total[5m])) by (event_type)", "legendFormat": "{{ event_type }}" }
+        {
+          "expr": "sum(rate(inventory_errors_total[5m])) by (event_type) and (sum(rate(inventory_updates_total[5m])) > 0.05)",
+          "legendFormat": "{{ event_type }}"
+        }
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 }, "id": 106, "title": "📊 Business KPIs", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 61 }, "id": 106, "title": "📊 Business KPIs", "type": "row" },
 
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 54 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 62 },
       "id": 20,
       "title": "Orders Created (by Status)",
       "description": "Business view: orders per second grouped by final status (completed, payment_error, out_of_stock)",
@@ -267,7 +362,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 54 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 62 },
       "id": 21,
       "title": "Payments (by Status & Provider)",
       "description": "Business view: payment outcomes per provider (Stripe, PayPal, Square)",
@@ -279,7 +374,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 54 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 62 },
       "id": 22,
       "title": "Inventory Checks (by Result)",
       "description": "Stock availability outcomes: in_stock vs out_of_stock",
@@ -291,7 +386,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 62 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 70 },
       "id": 23,
       "title": "Notifications Sent (by Type)",
       "description": "Business view: notification delivery by type (order_confirmation, payment_failed, etc.)",
@@ -303,7 +398,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "fixedColor": "blue", "mode": "fixed" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 20, "lineWidth": 2 }, "noValue": "No restocks triggered (stock above threshold)" } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 62 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 70 },
       "id": 24,
       "title": "Auto-Restock Events",
       "description": "Automatic stock replenishment when stock drops below threshold (default: 10 units)",
@@ -315,7 +410,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "currencyUSD", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 62 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 70 },
       "id": 25,
       "title": "Payment Amount (Average by Provider)",
       "description": "Average payment amount in USD by provider",
@@ -325,12 +420,12 @@
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 70 }, "id": 103, "title": "📈 End-to-End Overview", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 78 }, "id": 103, "title": "📈 End-to-End Overview", "type": "row" },
 
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 79 },
       "id": 10,
       "title": "Service Latency Comparison (P95)",
       "description": "P95 latency of each service to identify bottlenecks",
@@ -346,7 +441,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 71 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 79 },
       "id": 11,
       "title": "Throughput Comparison",
       "description": "Operations per second across all services for relative comparison",
