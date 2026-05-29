@@ -89,8 +89,8 @@
 2. **Ad-hoc Updates**: When architectural changes occur, update relevant sections immediately
 3. **Version Bumping**: 
    - Patch (2.1 → 2.2): Minor clarifications, typo fixes
-   - Minor (2.1 → 3.0): New sections, significant updates
-   - Major (2.1 → 3.0): Architectural changes, new services
+   - Minor (2.x → 3.0): New sections, significant updates
+   - Major (x.0 → y.0): Architectural changes, new services
 
 **Approval Workflow:**
 1. Author updates document → creates PR
@@ -346,6 +346,7 @@ ALLOW 3000/tcp   # Grafana
 | **Grafana** | 3000 | Dashboards — application health, Kafka, workers, SLO |
 | **Tempo** | 3200 | Distributed tracing backend |
 | **Loki** | 3100 | Log aggregation with LogQL |
+| **Alloy** | — | Log collection agent — Docker + host logs → Loki |
 | **Alertmanager** | 9093 | Alert routing → Telegram |
 | **Blackbox Exporter** | 9115 | Active probing — HTTP health checks to service `/health/live` endpoints |
 
@@ -1057,7 +1058,7 @@ Redis restart → cache empty → all requests hit DB
 
 - **Problem:** `rate(errors[1h]) / rate(total[1h])` stays high when traffic = 0
 - **Example:** 3 errors out of 3 requests = 100% error rate, but only 3 requests!
-- **Solution:** Add `rate(total[5m]) > 0.1` condition
+- **Solution:** Add `rate(total[5m]) > 0` condition
 - **Trade-off:** May miss real incidents during very low traffic (acceptable)
 
 ---
@@ -1076,10 +1077,12 @@ Redis restart → cache empty → all requests hit DB
 **Backup commands:**
 
 ```bash
-# PostgreSQL (per-database, hybrid strategy)
-pg_dump -h localhost -U app_user app_db > backup/app_db_$(date +%Y%m%d).sql
-pg_dump -h localhost -U auth_user auth_db > backup/auth_db_$(date +%Y%m%d).sql
-pg_dump -h localhost -U shipping_user shipping_db > backup/shipping_db_$(date +%Y%m%d).sql
+# PostgreSQL — current (single database)
+pg_dump -h localhost -U app app_db > backup/app_db_$(date +%Y%m%d).sql
+
+# PostgreSQL — after expansion (per-database, hybrid strategy)
+# pg_dump -h localhost -U auth_user auth_db > backup/auth_db_$(date +%Y%m%d).sql
+# pg_dump -h localhost -U shipping_user shipping_db > backup/shipping_db_$(date +%Y%m%d).sql
 
 # Verify backup integrity (dry-run)
 pg_restore --list backup/app_db_20260528.sql
