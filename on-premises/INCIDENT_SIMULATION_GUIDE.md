@@ -290,13 +290,28 @@ curl -X POST http://localhost:5003/start \
 > **Khi nào dùng:** Đọc tổng quan, phát hiện anomaly lớn, check SLO compliance ở mức service.
 
 | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
-|-----------|--------------------------------------|----------------|-------------------|
-| **Unified Overview** | `API Gateway — RPS` | req/s | ~2 req/s |
-| **Unified Overview** | `Payment Error Rate` | % | ~10% (Do thiết kế mô phỏng Gateway lỗi) |
-| **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 1.2-2.0s* |
-| **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~5-15ms, P95 ~1.5s, P99 ~2.3s* |
-| **App Performance** | `Rate — Request Rate` (Order Service section) | req/s by status | — |
-| **App Performance** | `Errors — Error Rate` (Order Service section) | % | < 1% |
+| --- | --- | --- | --- |
+| Unified Overview | API Gateway — RPS | req/s | ~2 req/s |
+| Unified Overview | Payment Error Rate | % | **~10%** *(Thiết kế có chủ ý - Intentional Flakiness mô phỏng Gateway bên thứ 3)* |
+| Unified Overview | P95 Latency — All Services (timeseries) | API Gateway P95 | 1.2-2.0s* |
+| App Performance | Duration — Latency (P50 / P95 / P99) (API Gateway section) | P50 / P95 / P99 | P50 ~5-15ms, P95 ~1.5s, P99 ~2.3s* |
+| App Performance | Rate — Request Rate (Order Service section) | req/s by status | — |
+| App Performance | **Errors — Infrastructure Error Rate** | % | **< 1%** *(Chỉ đo lỗi hạ tầng: DB, Kafka, Timeout. Đã loại bỏ lỗi nghiệp vụ)* |
+| App Performance | **💼 Business — Order Success Rate** | % | **~85-90%** *(Dành cho PM/Business theo dõi tỷ lệ chốt đơn thành công)* |  
+
+
+> 💡 **Bài học SRE cốt lõi (The "Aha!" Moment): Tách biệt Business Metric và Infrastructure SLI**
+>
+> Thông qua việc kiểm chứng Baseline và Refactor Dashboard, chúng ta rút ra một nguyên tắc vàng trong Observability: **"Đừng bao giờ dùng Business Metric (kết quả kinh doanh) để làm SLI cho Infrastructure Alerting (sức khoẻ hạ tầng)."**
+>
+> *   **Business Metric** (`orders_created_total`, `revenue_usd`, `payment_failed`): Dùng để làm Dashboard cho CEO, PM, và Alerting cho Business Team (ví dụ: "Tỷ lệ checkout thành công tụt dốc", "Cổng thanh toán Stripe đang từ chối thẻ").
+> *   **Infrastructure SLI** (`http_server_requests{status="5xx"}`, `db_connection_pool`, `kafka_produce_latency`): Dùng để làm SLO cho SRE và Alerting cho On-call Engineer (ví dụ: "Order Service đang trả về 500 Internal Server Error", "PostgreSQL Connection Pool bị tràn").
+>
+> **Tại sao điều này quan trọng?** 
+> 1. Nếu dùng Business Metric để alert SRE, bạn sẽ bị **Alert Fatigue** (bão hòa alert) vì những thứ SRE không thể fix (ví dụ: khách hàng nhập sai thẻ, hết hàng). 
+> 2. Ngược lại, nếu chỉ nhìn Infra Metric, bạn có thể bỏ qua **Design-level Failures** (như Experiment 6: Stock Depletion Deadlock - Infra xanh lè nhưng Business chết). 
+> 
+> 👉 **Best Practice:** Dashboard chuẩn Enterprise luôn tách bạch 2 lớp này (Infra RED vs Business KPI) và áp dụng **HTTP Semantic** (trả về đúng mã 4xx/5xx) để công cụ Monitoring tự động phân loại lỗi mà không cần phụ thuộc vào payload JSON.  
 
 \* **Lưu ý quan trọng:** Các giá trị P95/P99 cao (~1.5-2.3s) là **BÌNH THƯỜNG** khi aggregate tất cả endpoints, vì:
 - ~45% requests là GET nhanh (cache hit) → kéo P50 xuống rất thấp (~5-15ms)
