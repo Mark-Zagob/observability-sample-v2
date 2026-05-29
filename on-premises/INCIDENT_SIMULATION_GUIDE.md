@@ -292,7 +292,7 @@ curl -X POST http://localhost:5003/start \
 | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
 |-----------|--------------------------------------|----------------|-------------------|
 | **Unified Overview** | `API Gateway — RPS` | req/s | ~2 req/s |
-| **Unified Overview** | `Payment Error Rate` | % | < 1% |
+| **Unified Overview** | `Payment Error Rate` | % | ~10% (Do thiết kế mô phỏng Gateway lỗi) |
 | **Unified Overview** | `P95 Latency — All Services` (timeseries) | API Gateway P95 | 1.2-2.0s* |
 | **App Performance** | `Duration — Latency (P50 / P95 / P99)` (API Gateway section) | P50 / P95 / P99 | P50 ~5-15ms, P95 ~1.5s, P99 ~2.3s* |
 | **App Performance** | `Rate — Request Rate` (Order Service section) | req/s by status | — |
@@ -301,7 +301,14 @@ curl -X POST http://localhost:5003/start \
 \* **Lưu ý quan trọng:** Các giá trị P95/P99 cao (~1.5-2.3s) là **BÌNH THƯỜNG** khi aggregate tất cả endpoints, vì:
 - ~45% requests là GET nhanh (cache hit) → kéo P50 xuống rất thấp (~5-15ms)
 - ~25% requests là POST /order → trong đó 20% bị slow payment gateway (500ms-2s) → kéo P95/P99 lên
-- Đây KHÔNG phải lỗi hệ thống, mà là đặc tính của traffic mix.
+- Đây KHÔNG phải lỗi hệ thống, mà là đặc tính của traffic mix.  
+> ⚠️ **Lưu ý về Payment Error Rate**
+>
+> Khác với các service nội bộ (Order, API Gateway) có baseline error rate < 1%, Payment Service có baseline error rate **~10%**. Đây là **thiết kế có chủ ý (Intentional Design)** để mô phỏng sự thiếu ổn định của các Payment Gateway bên thứ 3 (Stripe, VNPay...).
+>
+> Khi định nghĩa SLO cho Payment, team SRE cần:
+> - Tính toán Error Budget dựa trên con số **10%** này, hoặc
+> - Chỉ đo lường SLO trên **Internal Errors** thay vì lỗi từ Gateway trả về.
 
 ### Application Metrics — Level 2: Per-Endpoint View (Drill-down)
 
