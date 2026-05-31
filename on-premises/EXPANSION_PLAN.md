@@ -104,7 +104,539 @@ AUTH_DATABASE_URL=postgresql://auth_user:***@postgres:5432/auth_db
 # Shipping Service + Worker
 SHIPPING_DATABASE_URL=postgresql://shipping_user:***@postgres:5432/shipping_db
 ```
+## Database Migration Plan (`orders` → `app_db`)
 
+Đây là migration procedure bắt buộc trước khi bắt đầu Phase 1 (Auth Service) vì Auth Service cần kết nối tới `auth_db` trên cùng PostgreSQL instance. Migration này cũng là template để tái sử dụng khi tạo `shipping_db` ở Phase 2.
+
+**Migration Approach:** Logical migration với brief downtime (~5-10 phút)
+
+**Rationale:**
+
+- Đơn giản, an toàn, dễ rollback
+- Phù hợp với database size nhỏ-vừa (< 10GB)
+- Đủ cho lab environment và production giai đoạn đầu
+
+> Alternative (zero-downtime với logical replication) được đề cập ở cuối section này cho trường hợp database lớn hoặc không chấp nhận downtime.
+
+### Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|------|------------|--------|------------|
+| Data loss trong quá trình dump/restore | Low | Critical | Backup verification trước khi migrate |
+| Migration kéo dài hơn dự kiến | Medium | Medium | Test trên staging với production-size data trước |
+| Connection string update thiếu service | Medium | High | Verification checklist với `curl /health/ready` |
+| Rollback fail | Low | Critical | Giữ nguyên backup file, không xóa cho đến khi verify xong |
+
+### Pre-Migration Checklist (BẮT BUỘC)
+
+Hoàn thành **TẤT CẢ** các bước này TRƯỚC KHI bắt đầu migration:
+
+- [ ] Thông báo stakeholders (nếu production): maintenance window 30 phút
+- [ ] Stop traffic generator: `curl -X POST http://localhost:5003/stop`
+- [ ] Verify không có in-flight transactions:
+
+```bash
+  docker exec postgres psql -U app -d orders \
+    -c "SELECT count(*) FROM pg_stat_activity WHERE state = 'active';"
+  # Expected: 0 hoặc chỉ có chính query này
+```
+
+- [ ] Tạo backup và verify:
+
+```bash
+  mkdir -p backup
+  docker exec postgres pg_dump -U app -d orders > backup/orders_$(date +%Y%m%d_%H%M%S).sql
+  ls -lh backup/              # Verify file size > 0
+  head -20 backup/orders_*.sql  # Verify có CREATE TABLE statements
+```
+
+- [ ] Chuẩn bị rollback script (lưu vào `rollback.sh`)
+- [ ] Đảm bảo có đủ disk space (backup size × 2):
+
+```bash
+  df -h /var/lib/docker  # hoặc path chứa PostgreSQL volume
+```
+
+### Migration Steps
+
+#### Step 0: Tạo script migration (`migration.sh`)
+
+Tạo file `migration.sh` với nội dung sau để đảm bảo reproducibility:
+
+```bash
+#!/bin/bash
+# Database Migration: orders → app_db
+# Run from project root: bash migration.sh
+set -euo pipefail
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="./backup"
+mkdir -p "$BACKUP_DIR"
+
+echo "=========================================="
+echo "🚀 Database Migration: orders → app_db"
+echo "   Started at: $(date)"
+echo "=========================================="
+
+# Step 1: Stop application services (giữ postgres + redis chạy)
+echo ""
+echo "📦 Step 1/6: Stopping application services..."
+cd applications-vm/applications
+docker compose stop api-gateway order-service payment-service \
+  notification-worker inventory-worker traffic-gen web-ui
+cd ../..
+
+# Step 2: Backup current database
+echo ""
+echo "💾 Step 2/6: Backing up 'orders' database..."
+docker exec postgres pg_dump -U app -d orders \
+  > "$BACKUP_DIR/orders_${TIMESTAMP}.sql"
+
+BACKUP_SIZE=$(stat -c%s "$BACKUP_DIR/orders_${TIMESTAMP}.sql" 2>/dev/null || stat -f%z "$BACKUP_DIR/orders_${TIMESTAMP}.sql")
+echo "   ✅ Backup created: $BACKUP_DIR/orders_${TIMESTAMP}.sql ($BACKUP_SIZE bytes)"
+
+if [ "$BACKUP_SIZE" -lt 1000 ]; then
+  echo "   ❌ Backup too small, aborting!"
+  exit 1
+fi
+
+# Step 3: Create new databases + users
+echo ""
+echo "🏗️  Step 3/6: Creating new databases and users..."
+docker exec postgres psql -U app -d postgres <<'EOF'
+-- Create app_user với password (change in production!)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user') THEN
+    CREATE ROLE app_user WITH LOGIN PASSWORD 'app_user_secret';
+  END IF;
+END
+$$;
+
+-- Create app_db
+SELECT 'CREATE DATABASE app_db OWNER app_user'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'app_db')\gexec
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE app_db TO app_user;
+EOF
+
+echo "   ✅ Created: app_db + app_user"
+
+# Step 4: Restore data vào app_db
+echo ""
+echo "♻️  Step 4/6: Restoring data to app_db..."
+docker exec -i postgres psql -U app_user -d app_db \
+  < "$BACKUP_DIR/orders_${TIMESTAMP}.sql"
+
+# Fix ownership (pg_dump dùng user 'app', cần đổi sang 'app_user')
+docker exec postgres psql -U app_user -d app_db <<'EOF'
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  -- Change table ownership
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE 'ALTER TABLE ' || quote_ident(r.tablename) || ' OWNER TO app_user';
+  END LOOP;
+
+  -- Change sequence ownership
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+    EXECUTE 'ALTER SEQUENCE ' || quote_ident(r.sequencename) || ' OWNER TO app_user';
+  END LOOP;
+END
+$$;
+
+-- Grant schema usage
+GRANT ALL ON SCHEMA public TO app_user;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO app_user;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO app_user;
+EOF
+
+echo "   ✅ Data restored to app_db"
+
+# Step 5: Verify data integrity
+echo ""
+echo "🔍 Step 5/6: Verifying data integrity..."
+ORDERS_OLD=$(docker exec postgres psql -U app -d orders -tAc "SELECT count(*) FROM orders;")
+ORDERS_NEW=$(docker exec postgres psql -U app_user -d app_db -tAc "SELECT count(*) FROM orders;")
+PRODUCTS_OLD=$(docker exec postgres psql -U app -d orders -tAc "SELECT count(*) FROM products;")
+PRODUCTS_NEW=$(docker exec postgres psql -U app_user -d app_db -tAc "SELECT count(*) FROM products;")
+
+echo "   Orders:   old=$ORDERS_OLD  new=$ORDERS_NEW"
+echo "   Products: old=$PRODUCTS_OLD new=$PRODUCTS_NEW"
+
+if [ "$ORDERS_OLD" != "$ORDERS_NEW" ] || [ "$PRODUCTS_OLD" != "$PRODUCTS_NEW" ]; then
+  echo "   ❌ Data mismatch! Aborting, keeping old database intact."
+  exit 1
+fi
+
+echo "   ✅ Data integrity verified"
+
+# Step 6: Update docker-compose.yml
+echo ""
+echo "📝 Step 6/6: Updating connection strings..."
+cd applications-vm/applications
+
+# Backup docker-compose.yml
+cp docker-compose.yml docker-compose.yml.bak.${TIMESTAMP}
+
+# Update DATABASE_URL cho tất cả services
+sed -i.bak 's|postgresql://app:app_secret@postgres:5432/orders|postgresql://app_user:***@postgres:5432/app_db|g' docker-compose.yml
+
+echo "   ✅ docker-compose.yml updated (backup: docker-compose.yml.bak.${TIMESTAMP})"
+
+echo ""
+echo "=========================================="
+echo "✅ Migration completed successfully!"
+echo "   Next: Start services với 'docker compose up -d'"
+echo "=========================================="
+```
+
+```bash
+chmod +x migration.sh
+```
+
+#### Step 1: Chạy migration
+
+```bash
+bash migration.sh
+```
+
+Script sẽ tự động:
+
+1. Stop 7 application services (giữ `postgres`, `redis`, `kafka` chạy)
+2. Backup database `orders` → `backup/orders_TIMESTAMP.sql`
+3. Tạo `app_db` + `app_user`
+4. Restore data vào `app_db`, fix ownership
+5. Verify row counts match
+6. Update connection strings trong `docker-compose.yml`
+
+#### Step 2: Start services với connection string mới
+
+```bash
+cd applications-vm/applications
+docker compose up -d
+```
+
+#### Step 3: Verification Checklist
+
+- [ ] Health endpoints trả về 200:
+
+```bash
+  for port in 5000 5001 5002 5004 5005; do
+    echo "Port $port: $(curl -s http://localhost:$port/health/ready | jq -r .status)"
+  done
+  # Expected: tất cả = "ready"
+```
+
+- [ ] Data accessible qua API:
+
+```bash
+  curl -s http://localhost:5001/products | jq '.products | length'
+  # Expected: 5 (số products trong seed data)
+
+  curl -s http://localhost:5001/orders?limit=5 | jq '.count'
+  # Expected: số orders hiện có
+```
+
+- [ ] Kafka workers processing events mới:
+
+```bash
+  # Tạo test order
+  curl -X POST http://localhost:5000/order \
+    -H "Content-Type: application/json" \
+    -d '{"product_id": 1, "quantity": 1}' | jq .
+
+  # Check workers
+  curl -s http://localhost:5004/status | jq '.stats.processed'
+  curl -s http://localhost:5005/status | jq '.stats.reserved'
+```
+
+- [ ] Metrics flowing tới Prometheus:
+
+```bash
+  # Trên Observability VM
+  curl -s 'http://localhost:9090/api/v1/query?query=up{job="app-metrics"}' | jq .
+```
+
+- [ ] Không có error logs:
+
+```bash
+  docker compose logs --tail=50 | grep -i error
+  # Expected: không có output hoặc chỉ warnings không liên quan
+```
+
+### Rollback Procedure
+
+**Khi nào rollback?**
+
+- Bất kỳ bước nào trong Verification Checklist fail
+- Migration chạy quá 15 phút (expected 5-10 phút)
+- Data integrity check fail ở Step 5
+
+**Rollback Steps** (restore về trạng thái cũ):
+
+```bash
+#!/bin/bash
+# rollback.sh - Restore về database 'orders' cũ
+set -euo pipefail
+
+echo "🔄 Rolling back to old 'orders' database..."
+
+# Find latest backup
+LATEST_BACKUP=$(ls -t ./backup/orders_*.sql | head -1)
+echo "   Using backup: $LATEST_BACKUP"
+
+# Stop services
+cd applications-vm/applications
+docker compose stop
+
+# Restore docker-compose.yml từ backup
+LATEST_COMPOSE_BACKUP=$(ls -t docker-compose.yml.bak.* 2>/dev/null | head -1)
+if [ -n "$LATEST_COMPOSE_BACKUP" ]; then
+  cp "$LATEST_COMPOSE_BACKUP" docker-compose.yml
+  echo "   ✅ docker-compose.yml restored"
+fi
+
+# Start services (sẽ dùng lại connection string cũ: orders database)
+docker compose up -d
+
+echo ""
+echo "✅ Rollback completed. Services running với old 'orders' database."
+echo "   Old database 'orders' vẫn còn nguyên, data không mất."
+```
+
+```bash
+bash rollback.sh
+```
+
+### Post-Migration Cleanup
+
+> ⚠️ Chỉ chạy **SAU KHI** verify thành công 100%, và giữ 24h để đề phòng.
+
+```bash
+# DROP old 'orders' database (CẨN THẬN!)
+docker exec postgres psql -U app -d postgres -c "DROP DATABASE orders;"
+
+# Remove old 'app' user (nếu không còn service nào dùng)
+docker exec postgres psql -U postgres -c "DROP ROLE app;"
+
+# Xóa backup files (optional - keep 7 days)
+find ./backup -name "orders_*.sql" -mtime +7 -delete
+```
+
+### Zero-Downtime Alternative (cho database lớn / production critical)
+
+**Khi nào dùng approach này thay vì brief downtime?**
+
+- Database > 10GB (`pg_dump`/restore mất > 30 phút)
+- SLA không cho phép downtime > 1 phút
+- Có read-heavy workload (có thể switch reads trước, writes sau)
+
+**Approach: Logical Replication với Blue-Green Switch**
+
+**Phase A: Setup replication (zero downtime)**
+
+```sql
+-- Trên database cũ (orders) - publisher
+ALTER SYSTEM SET wal_level = logical;
+-- Restart PostgreSQL để apply
+SELECT pg_reload_conf();
+
+CREATE PUBLICATION orders_pub FOR ALL TABLES;
+
+-- Trên PostgreSQL instance (cùng host, khác DB) - subscriber
+CREATE SUBSCRIPTION orders_sub
+  CONNECTION 'host=localhost port=5432 dbname=orders user=app password=***'
+  PUBLICATION orders_pub;
+
+-- Monitor replication lag
+SELECT * FROM pg_stat_subscription;
+```
+
+**Phase B: Verify sync hoàn tất**
+
+```sql
+-- Check all tables synced
+SELECT * FROM pg_stat_subscription;
+-- srsubstate should be 'r' (ready) for all tables
+
+-- Row count comparison
+SELECT schemaname, relname, n_live_tup
+FROM pg_stat_user_tables
+ORDER BY n_live_tup DESC;
+```
+
+**Phase C: Cutover (downtime ~30 giây)**
+
+1. Stop writes (maintenance mode trên API Gateway)
+2. Wait cho replication lag = 0
+3. Drop subscription, promote subscriber thành primary
+4. Update connection strings
+5. Start writes
+
+**Phase D: Cleanup**
+
+```sql
+DROP SUBSCRIPTION orders_sub;
+DROP PUBLICATION orders_pub;
+```
+
+**Trade-offs:**
+
+- ✅ Pros: Downtime < 1 phút, an toàn (có thể abort bất kỳ lúc nào)
+- ❌ Cons: Phức tạp, cần hiểu PostgreSQL internals, cần disk space ×2 trong quá trình sync
+
+### DevOps/SRE Learning Value
+
+| Skill | Thực hành qua migration này |
+|-------|---------------------------|
+| Backup/Restore | `pg_dump`, `pg_restore`, verification queries |
+| PostgreSQL administration | `CREATE ROLE`, `GRANT`, ownership transfer, WAL level |
+| Script automation | Bash scripting, `set -euo pipefail`, atomic operations |
+| Rollback planning | Blue-green approach, backup retention, rollback triggers |
+| Zero-downtime techniques | Logical replication, publisher/subscriber model |
+| Observability during migration | `pg_stat_activity`, connection count monitoring, health checks |
+| Risk management | Pre-flight checklist, verification gates, abort criteria |
+
+---
+
+### 🔧 Các files KHÁC cần update (sau khi migration thành công)
+
+#### 1. `applications-vm/applications/init.sql`
+
+File này hiện tại được mount vào `/docker-entrypoint-initdb.d/init.sql` và chỉ chạy khi PostgreSQL volume trống. Sau migration, bạn cần tạo file mới cho các database mới:
+
+```
+applications-vm/applications/
+├── init.sql          # Giữ nguyên - seed data cho orders DB (legacy)
+├── init-app.sql      # MỚI - sẽ dùng cho app_db
+├── init-auth.sql     # MỚI - cho Phase 1 (auth_db)
+└── init-shipping.sql # MỚI - cho Phase 2 (shipping_db)
+```
+
+> **KHÔNG sửa `init.sql` cũ** vì nó sẽ không chạy nữa (volume đã có data). Thay vào đó, tạo `init-app.sql` chứa schema mới cho Phase 1+ (khi bạn reset volume để test):
+
+```sql
+-- init-app.sql (schema cho app_db - dùng khi tạo mới từ đầu)
+-- Các bảng: orders, products, processed_events, notifications, inventory_log
+-- (copy từ init.sql cũ, chỉ đổi ownership)
+```
+
+#### 2. `applications-vm/applications/docker-compose.yml`
+
+Sau khi chạy `migration.sh`, file này đã được tự động update. Nhưng bạn cần review lại và thêm healthcheck cho database mới:
+
+```yaml
+services:
+  postgres:
+    # ... giữ nguyên ...
+    environment:
+      POSTGRES_DB: postgres        # Đổi từ 'orders' → 'postgres' (default DB)
+      POSTGRES_USER: postgres      # Superuser
+      POSTGRES_PASSWORD: ***       # Superuser password
+    # volumes giữ nguyên
+
+  order-service:
+    environment:
+      # Đã được migration.sh update:
+      - DATABASE_URL=postgresql://app_user:***@postgres:5432/app_db
+```
+---
+### Connection Pooling Strategy (PgBouncer Integration)
+
+**Vấn đề khi scale lên 10 services (The Connection Exhaustion Trap):**
+
+Hiện tại, mỗi Python service sử dụng `ThreadedConnectionPool` của `psycopg2` với `maxconn=10`.
+
+- Với 6 services: ~60 connections (PostgreSQL chịu đựng tốt).
+- Với 10 services + Gunicorn gthread (2 workers × 8 threads = 16 concurrent requests/service): Nếu mỗi thread giữ 1 connection, chúng ta cần 160+ connections.
+- **Hậu quả:** PostgreSQL mặc định có `max_connections = 100`. Mỗi connection tốn ~2-10MB RAM và tốn CPU cho context switching. Vượt ngưỡng 200 connections, PostgreSQL sẽ bị "connection thrashing" (CPU tăng vọt nhưng throughput giảm do chuyển đổi context liên tục), dẫn đến cascading failure toàn bộ hệ thống.
+
+**Giải pháp: Thêm PgBouncer (Transaction Pooling Mode)**
+
+Thêm PgBouncer làm middleware đứng giữa Python Services và PostgreSQL để multiplex (ghép kênh) connections.
+
+```
+[Python Apps] --(100+ client conns)--> [PgBouncer :6432] --(20 server conns)--> [PostgreSQL :5432]
+```
+
+#### 1. Docker Compose Setup (Future State)
+
+```yaml
+pgbouncer:
+  image: edoburu/pgbouncer:latest
+  container_name: pgbouncer
+  environment:
+    # Kết nối tới PostgreSQL với user có quyền cao nhất (hoặc user chung)
+    DATABASE_URL: "postgresql://postgres:***@postgres:5432/app_db"
+    POOL_MODE: transaction       # QUAN TRỌNG: Xem giải thích bên dưới
+    MAX_CLIENT_CONN: 200         # Số connections tối đa từ Python Apps
+    DEFAULT_POOL_SIZE: 20        # Số connections thực sự mở tới PostgreSQL
+    RESERVE_POOL_SIZE: 5         # Dự phòng cho traffic spike
+    RESERVE_POOL_TIMEOUT: 3      # Chờ 3s trước khi dùng reserve pool
+    SERVER_IDLE_TIMEOUT: 600     # Đóng server conn nếu idle 10 phút
+  ports:
+    - "6432:6432"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - data
+```
+
+#### 2. Updated Connection Strings
+
+Tất cả Python services sẽ **KHÔNG** connect trực tiếp tới port `5432` nữa, mà đi qua PgBouncer port `6432`:
+
+```
+# Order, Payment, Inventory, Notification, Auth, Shipping...
+DATABASE_URL=postgresql://app_user:***@pgbouncer:6432/app_db
+```
+
+#### 3. Sizing Math (Công thức chuẩn Production)
+
+| Tầng | Cấu hình | Giải thích |
+|------|---------|-----------|
+| Python App | `maxconn=20` | App thoải mái mở connection tới PgBouncer (vì PgBouncer rất nhẹ, tốn ~10KB/conn) |
+| PgBouncer | `DEFAULT_POOL_SIZE=20` | Giữ ổn định 20 connections tới Postgres. Phục vụ hàng trăm requests từ App |
+| PostgreSQL | `max_connections=120` | 100 cho PgBouncer + 20 dành cho Admin/Backup/Migration tools connect trực tiếp |
+
+#### 4. ⚠️ PgBouncer Transaction Mode Caveats
+
+PgBouncer có 3 chế độ: `session`, `transaction`, và `statement`. Chúng ta **BẮT BUỘC** dùng `transaction` mode cho E-commerce, nhưng cần lưu ý các điểm sau trong code Python:
+
+**✅ An toàn (Đã implement đúng):**
+
+- `SELECT ... FOR UPDATE` (Pessimistic locking trong `inventory-worker`): Hoạt động hoàn hảo vì nó nằm gọn trong 1 `BEGIN ... COMMIT` transaction. PgBouncer sẽ giữ connection cho đến khi `COMMIT`.
+- Idempotency checks (`processed_events`): Hoạt động tốt.
+
+**❌ Chống chỉ định (Cần tránh trong tương lai):**
+
+- **Session-level features:** Không dùng `SET SESSION ...`, `LISTEN/NOTIFY`, hoặc temporary tables. Vì sau mỗi `COMMIT`, PgBouncer sẽ thu hồi connection và trả về pool — session state sẽ bị mất hoặc rò rỉ sang request của user khác.
+- **Prepared Statements:** Mặc định PgBouncer transaction mode không hỗ trợ PostgreSQL `PREPARE` statements (do statement bị tách khỏi session). `psycopg2` cơ bản không dùng cái này trừ khi bật explicit server-side cursors. Nếu sau này dùng SQLAlchemy, phải set `pool_pre_ping=True` và tắt prepared statements.
+
+---
+
+### 💡 Phân tích sâu
+
+**Tại sao document rõ các Caveats ở mục 4?**
+
+**Góc nhìn Staff SWE:** Rất nhiều team khi đưa PgBouncer vào đã gặp lỗi `"Prepared statement does not exist"` hoặc `"Lock bị mất giữa chừng"` do dùng `statement` mode hoặc Session-level locks. Việc document rõ điều này ngay từ đầu sẽ bảo vệ các Dev junior/mid trong team không viết những đoạn code "phá vỡ" pooling contract khi scale lên 10 services.
+
+**Góc nhìn Staff SRE:** Việc định nghĩa rõ `MAX_CLIENT_CONN=200` và `DEFAULT_POOL_SIZE=20` giúp SRE team hiểu được **Blast Radius**. Nếu App bị lỗi (VD: Infinite loop query DB), nó sẽ làm tràn `MAX_CLIENT_CONN` (200) và gây timeout ở tầng PgBouncer, nhưng **PostgreSQL vẫn sống khỏe** vì chỉ phải chịu tối đa 20 connections. Đây là nguyên tắc **Bulkhead Pattern** (Vách ngăn chống chìm tàu) kinh điển trong System Design.
+
+---
+
+### 🛠️ Files cần update sau này (Checklist cho Phase 0)
+
+1. **`applications-vm/applications/docker-compose.yml`:** Thêm service `pgbouncer`, đổi network của `postgres` thành `data` (chỉ cho `pgbouncer` và app truy cập), ẩn port `5432` khỏi host.
+
+2. **`applications-vm/applications/shared/db_utils.py`:** Hiện tại đang hardcode parse URL. Sau này khi dùng PgBouncer, cần thêm tham số `connect_timeout` ngắn hơn (ví dụ `2s`) để fail-fast nếu PgBouncer queue đầy.
+
+3. **`observability-vm/phase1-metrics/prometheus/prometheus.yml`:** Cần thêm job scrape metrics cho PgBouncer (dùng `prometheus-community/pgbouncer_exporter`) để SRE team có thể alert khi `pgbouncer_pools_cl_active` (số client đang chờ) tăng cao.
+---
 ### So sánh với các approaches khác
 
 | Approach | Services 6 | Services 10 | Services 30+ |
@@ -286,17 +818,600 @@ Compensation (shipping fail):
 | `order.shipping_failed` | Shipping Worker | Notification Worker |
 | `order.refunded` | Shipping Worker | Notification Worker, Inventory Worker |
 
-**Saga State Machine:**
-```
-States: INITIATED → PAYMENT_PENDING → PAYMENT_COMPLETED → SHIPPING_PENDING
-        → SHIPPED | SHIPPING_FAILED → COMPENSATING → REFUNDED | COMPENSATION_FAILED
+### Saga State Machine — Production-Grade Design
 
-Rules:
-  - Timeout: 5 minutes per step, 15 minutes total saga
-  - Retry: 3 attempts with exponential backoff (1s, 5s, 25s)
-  - DLQ: after max_retries exhausted OR total timeout exceeded
-  - Crash recovery: on startup, query saga_state for PENDING states → resume
+Saga Orchestration là pattern khó nhất trong distributed systems. Design dưới đây giải quyết 5 vấn đề kinh điển: **double-refund**, **lost saga**, **zombie saga**, **race condition**, và **crash mid-step**.
+
+#### State Machine Diagram
+
 ```
+                ┌──────────────────────────────────────────────┐
+                │                                              │
+                ▼                                              │
+[order.payment_completed]                                   [Retry]
+         │                                                      │
+         ▼                                                      │
+   ┌─────────────┐   success   ┌─────────────────┐             │
+   │  INITIATED  │────────────►│ SHIPPING_PENDING │──── fail ──┤
+   └─────────────┘             └─────────────────┘             │
+         │                            │                         │
+         │                            │ success                 │
+         │                            ▼                         │
+         │                     ┌─────────────┐                  │
+         │                     │   SHIPPED   │  (terminal ✓)    │
+         │                     └─────────────┘                  │
+         │                                                       │
+         │ timeout/max_retries                                   │
+         ▼                                                       │
+   ┌──────────────┐   success   ┌──────────────┐                │
+   │ COMPENSATING │────────────►│   REFUNDED   │ (terminal ✓)   │
+   └──────────────┘             └──────────────┘                │
+         │                                                       │
+         │ compensation fail                                     │
+         ▼                                                       │
+   ┌──────────────────────┐                                      │
+   │ COMPENSATION_FAILED  │  (terminal ✗ — manual intervention) │
+   └──────────────────────┘                                      │
+         │                                                       │
+         │ manual review/approval                                │
+         ▼                                                       │
+   ┌─────────────┐                                               │
+   │ DEAD_LETTER │  (Kafka DLQ topic)                            │
+   └─────────────┘                                               │
+```
+
+**7 Invariants (bất biến) phải đảm bảo:**
+
+| # | Invariant | Cơ chế đảm bảo |
+|---|-----------|----------------|
+| 1 | Mỗi `order_id` chỉ có 1 saga duy nhất | `UNIQUE(order_id)` constraint trên `saga_state` |
+| 2 | Không refund 2 lần | Idempotency check: `if state == COMPENSATED → skip` |
+| 3 | Không ship 2 lần | Idempotency check: `if state == SHIPPED → skip` |
+| 4 | Saga không bị "lost" khi worker crash | Write-Ahead Log: insert PENDING TRƯỚC KHI gọi HTTP |
+| 5 | Saga không bị "zombie" vĩnh viễn | `timeout_at` column + recovery job mỗi 60s |
+| 6 | Không race condition giữa nhiều worker instances | `SELECT FOR UPDATE` trên `saga_state` row |
+| 7 | Không "half-done" saga | Atomic state transitions trong transaction |
+
+#### Database Schema (`shipping_db`)
+
+```sql
+CREATE TABLE saga_state (
+    saga_id         VARCHAR(50) PRIMARY KEY,
+    order_id        VARCHAR(50) NOT NULL UNIQUE,  -- 1 order = 1 saga (Invariant #1)
+    state           VARCHAR(50) NOT NULL,
+    step_data       JSONB DEFAULT '{}',           -- Dynamic data: {shipment_id, tracking_no, ...}
+    retry_count     INTEGER DEFAULT 0,
+    max_retries     INTEGER DEFAULT 3,
+    next_retry_at   TIMESTAMP,                    -- Exponential backoff scheduling
+    timeout_at      TIMESTAMP NOT NULL,           -- Invariant #5
+    last_error      TEXT,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW(),
+
+    CONSTRAINT valid_state CHECK (state IN (
+        'INITIATED', 'SHIPPING_PENDING', 'SHIPPED',
+        'SHIPPING_FAILED', 'COMPENSATING', 'REFUNDED',
+        'COMPENSATION_FAILED', 'DEAD_LETTER'
+    ))
+);
+
+-- Index cho recovery job (Invariant #5)
+CREATE INDEX idx_saga_recoverable
+    ON saga_state(state, next_retry_at)
+    WHERE state IN ('SHIPPING_PENDING', 'COMPENSATING')
+      AND next_retry_at IS NOT NULL;
+
+-- Index cho timeout detection
+CREATE INDEX idx_saga_timeout
+    ON saga_state(timeout_at)
+    WHERE state NOT IN ('SHIPPED', 'REFUNDED', 'DEAD_LETTER');
+
+-- Audit log cho debugging
+CREATE TABLE saga_history (
+    id              SERIAL PRIMARY KEY,
+    saga_id         VARCHAR(50) NOT NULL,
+    from_state      VARCHAR(50),
+    to_state        VARCHAR(50) NOT NULL,
+    trigger_reason  VARCHAR(100),  -- 'http_success', 'http_fail', 'timeout', 'recovery'
+    error_message   TEXT,
+    duration_ms     INTEGER,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX idx_saga_history_saga ON saga_history(saga_id);
+```
+
+**Rationale cho từng column:**
+
+- `step_data JSONB`: Lưu dynamic data (`shipment_id` từ Shipping Service, `refund_txn_id` từ Payment Service) → tránh thêm columns mới khi thêm steps
+- `next_retry_at`: Cho phép worker "sleep" saga đến thời điểm retry → giảm polling load
+- `timeout_at`: Hard deadline cho toàn bộ saga (15 phút) → prevent zombie sagas
+- `saga_history`: Audit trail để debug tại sao saga vào state X → quan trọng cho post-mortem
+
+#### Python Implementation Pattern (`SagaOrchestrator`)
+
+```python
+# shipping-worker/saga_orchestrator.py
+
+import time
+import uuid
+import psycopg2
+import psycopg2.extras
+import requests
+from datetime import datetime, timedelta
+from typing import Callable, Optional, Dict, Any
+
+class SagaOrchestrator:
+    """
+    Production-grade Saga Orchestrator với:
+    - Write-Ahead Log pattern (state PENDING trước khi action)
+    - Idempotency checks (Invariant #2, #3)
+    - SELECT FOR UPDATE (Invariant #6)
+    - Exponential backoff retry
+    - Crash recovery từ saga_state table
+    """
+
+    TOTAL_TIMEOUT_SECONDS = 900  # 15 phút
+    BASE_BACKOFF_SECONDS = 1     # 1s, 5s, 25s (5^n)
+
+    def __init__(self, db_pool, shipping_service_url, payment_service_url, tracer):
+        self.db = db_pool
+        self.shipping_url = shipping_service_url
+        self.payment_url = payment_service_url
+        self.tracer = tracer
+
+    def start_saga(self, order_id: str, initial_data: Dict[str, Any]) -> str:
+        """
+        Khởi tạo saga mới. Idempotent: nếu saga đã tồn tại → trả về saga_id cũ.
+        """
+        saga_id = f"saga-{order_id}-{uuid.uuid4().hex[:8]}"
+        timeout_at = datetime.utcnow() + timedelta(seconds=self.TOTAL_TIMEOUT_SECONDS)
+
+        conn = self.db.get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Idempotent insert: ON CONFLICT DO NOTHING
+                cur.execute("""
+                    INSERT INTO saga_state
+                        (saga_id, order_id, state, step_data, timeout_at)
+                    VALUES (%s, %s, 'INITIATED', %s, %s)
+                    ON CONFLICT (order_id) DO NOTHING
+                    RETURNING saga_id
+                """, (saga_id, order_id, psycopg2.extras.Json(initial_data), timeout_at))
+
+                result = cur.fetchone()
+                if result is None:
+                    # Saga đã tồn tại → fetch existing
+                    cur.execute(
+                        "SELECT saga_id, state FROM saga_state WHERE order_id = %s",
+                        (order_id,)
+                    )
+                    existing = cur.fetchone()
+                    saga_id = existing[0]
+                    # Nếu saga chưa terminal → resume
+                    if existing[1] not in ('SHIPPED', 'REFUNDED', 'DEAD_LETTER'):
+                        self._log_history(conn, saga_id, None, existing[1],
+                                         'idempotent_resume', None)
+                else:
+                    self._log_history(conn, saga_id, None, 'INITIATED',
+                                     'saga_created', None)
+
+                conn.commit()
+                return saga_id
+        finally:
+            self.db.put_conn(conn)
+
+    def execute_step(self, saga_id: str, step_name: str,
+                     action_fn: Callable, compensate_fn: Callable) -> bool:
+        """
+        Execute 1 step với Write-Ahead Log pattern.
+
+        Flow:
+        1. SELECT FOR UPDATE saga row
+        2. Check idempotency (đã done chưa?)
+        3. Check timeout
+        4. Update state = PENDING (Write-Ahead)
+        5. Execute action_fn()
+        6. Update state = COMPLETED hoặc trigger compensation
+
+        Returns: True nếu step thành công, False nếu cần compensation
+        """
+        conn = self.db.get_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Invariant #6: SELECT FOR UPDATE
+                cur.execute("""
+                    SELECT saga_id, state, step_data, retry_count, timeout_at
+                    FROM saga_state
+                    WHERE saga_id = %s
+                    FOR UPDATE
+                """, (saga_id,))
+
+                saga = cur.fetchone()
+                if not saga:
+                    raise ValueError(f"Saga {saga_id} not found")
+
+                # Invariant #2, #3: Idempotency check
+                if self._is_terminal_state(saga['state']):
+                    return saga['state'] in ('SHIPPED', 'REFUNDED')
+
+                # Invariant #5: Timeout check
+                if datetime.utcnow() > saga['timeout_at']:
+                    self._transition_state(conn, saga_id, saga['state'],
+                                          'DEAD_LETTER', 'total_timeout_exceeded')
+                    conn.commit()
+                    return False
+
+                # Write-Ahead Log: state = PENDING TRƯỚC KHI action
+                pending_state = f"{step_name}_PENDING"
+                self._transition_state(conn, saga_id, saga['state'],
+                                      pending_state, f'{step_name}_started')
+                conn.commit()  # Commit WAL trước khi gọi HTTP
+
+            # Execute action OUTSIDE transaction (tránh giữ lock quá lâu)
+            start_time = time.time()
+            try:
+                with self.tracer.start_as_current_span(f"saga.{step_name}") as span:
+                    span.set_attribute("saga.id", saga_id)
+                    span.set_attribute("saga.step", step_name)
+
+                    result = action_fn(saga['step_data'])
+
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    span.set_attribute("saga.duration_ms", duration_ms)
+
+                # Success: transition to next state
+                with conn.cursor() as cur:
+                    next_state = self._get_next_state(step_name, success=True)
+                    new_step_data = {**saga['step_data'], **result}
+
+                    cur.execute("""
+                        UPDATE saga_state
+                        SET state = %s,
+                            step_data = %s,
+                            retry_count = 0,
+                            next_retry_at = NULL,
+                            updated_at = NOW()
+                        WHERE saga_id = %s
+                    """, (next_state, psycopg2.extras.Json(new_step_data), saga_id))
+
+                    self._log_history(conn, saga_id, pending_state, next_state,
+                                     'http_success', None, duration_ms)
+                    conn.commit()
+                return True
+
+            except (requests.Timeout, requests.ConnectionError) as e:
+                # Transient error → retry với exponential backoff
+                return self._handle_retry(conn, saga_id, saga, step_name,
+                                         pending_state, e, compensate_fn)
+
+            except requests.HTTPError as e:
+                if 400 <= e.response.status_code < 500:
+                    # Business error (VD: out of capacity) → compensate
+                    return self._trigger_compensation(conn, saga_id, saga,
+                                                     step_name, e, compensate_fn)
+                else:
+                    # 5xx server error → retry
+                    return self._handle_retry(conn, saga_id, saga, step_name,
+                                             pending_state, e, compensate_fn)
+        finally:
+            self.db.put_conn(conn)
+
+    def recover_stale_sagas(self):
+        """
+        Background job: chạy mỗi 60s để resume sagas bị crash hoặc quá retry time.
+        Đây là cơ chế đảm bảo Invariant #4 (no lost saga) và #5 (no zombie).
+        """
+        conn = self.db.get_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT saga_id, state, step_data, retry_count, timeout_at
+                    FROM saga_state
+                    WHERE (
+                        (state IN ('SHIPPING_PENDING', 'COMPENSATING')
+                         AND next_retry_at < NOW())
+                        OR
+                        (state LIKE '%_PENDING'
+                         AND updated_at < NOW() - INTERVAL '2 minutes')
+                        OR
+                        (timeout_at < NOW()
+                         AND state NOT IN ('SHIPPED', 'REFUNDED', 'DEAD_LETTER'))
+                    )
+                    ORDER BY timeout_at ASC
+                    LIMIT 10          -- Batch processing, tránh overload
+                    FOR UPDATE SKIP LOCKED  -- Multiple workers can run concurrently
+                """)
+
+                stale_sagas = cur.fetchall()
+
+                for saga in stale_sagas:
+                    try:
+                        if datetime.utcnow() > saga['timeout_at']:
+                            self._transition_state(conn, saga['saga_id'],
+                                                  saga['state'], 'DEAD_LETTER',
+                                                  'total_timeout_exceeded')
+                        elif saga['state'] == 'COMPENSATING':
+                            self._resume_compensation(conn, saga)
+                        else:
+                            self._resume_step(conn, saga)
+
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                        logger.error(f"Failed to recover saga {saga['saga_id']}: {e}")
+        finally:
+            self.db.put_conn(conn)
+
+    # --- Private helpers ---
+
+    def _is_terminal_state(self, state: str) -> bool:
+        return state in ('SHIPPED', 'REFUNDED', 'DEAD_LETTER', 'COMPENSATION_FAILED')
+
+    def _transition_state(self, conn, saga_id, from_state, to_state,
+                         reason, error=None):
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE saga_state
+                SET state = %s, last_error = %s, updated_at = NOW()
+                WHERE saga_id = %s
+            """, (to_state, str(error) if error else None, saga_id))
+            self._log_history(conn, saga_id, from_state, to_state, reason, error)
+
+    def _log_history(self, conn, saga_id, from_state, to_state,
+                    reason, error, duration_ms=None):
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO saga_history
+                    (saga_id, from_state, to_state, trigger_reason,
+                     error_message, duration_ms)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (saga_id, from_state, to_state, reason,
+                  str(error) if error else None, duration_ms))
+
+    def _handle_retry(self, conn, saga_id, saga, step_name,
+                     pending_state, error, compensate_fn):
+        retry_count = saga['retry_count'] + 1
+
+        if retry_count >= saga['max_retries']:
+            return self._trigger_compensation(conn, saga_id, saga,
+                                             step_name, error, compensate_fn)
+
+        # Exponential backoff: 1s, 5s, 25s, 125s
+        backoff = self.BASE_BACKOFF_SECONDS * (5 ** (retry_count - 1))
+        next_retry = datetime.utcnow() + timedelta(seconds=backoff)
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE saga_state
+                SET state = %s,
+                    retry_count = %s,
+                    next_retry_at = %s,
+                    last_error = %s,
+                    updated_at = NOW()
+                WHERE saga_id = %s
+            """, (f"{step_name}_FAILED", retry_count, next_retry,
+                  str(error), saga_id))
+            self._log_history(conn, saga_id, pending_state,
+                             f"{step_name}_FAILED", 'retry_scheduled', error)
+        conn.commit()
+        return False
+
+    def _trigger_compensation(self, conn, saga_id, saga,
+                             step_name, error, compensate_fn):
+        """Trigger compensation phase - will be executed by recover_stale_sagas"""
+        self._transition_state(conn, saga_id, saga['state'],
+                              'COMPENSATING', f'{step_name}_failed', error)
+        conn.commit()
+        return False
+```
+
+#### 5 Idempotency Scenarios (Phải test trước khi go-live)
+
+| # | Scenario | Expected Behavior | Cơ chế đảm bảo |
+|---|---------|-------------------|----------------|
+| 1 | Kafka redeliver `order.payment_completed` 2 lần | Lần 2: skip, không tạo saga mới | `UNIQUE(order_id)` + `ON CONFLICT DO NOTHING` |
+| 2 | Worker crash sau khi tạo shipment nhưng trước khi update state | Recovery job resume → thấy state `SHIPPING_PENDING` stale 2 phút → gọi lại Shipping Service (idempotent API) | Write-Ahead Log + `SELECT FOR UPDATE` + idempotent external API |
+| 3 | Shipping Service trả về timeout nhưng thực tế đã tạo shipment | Retry → Shipping Service trả về existing shipment (idempotent) → saga tiếp tục bình thường | External API PHẢI idempotent (dùng `order_id` làm idempotency key) |
+| 4 | Compensation (refund) chạy 2 lần do Kafka redeliver `order.shipping_failed` | Lần 2: skip vì `state = REFUNDED` | `_is_terminal_state()` check |
+| 5 | 2 instances của Shipping Worker cùng consume 1 message | Chỉ 1 instance win `SELECT FOR UPDATE`, instance kia block hoặc skip | `SELECT FOR UPDATE` + `FOR UPDATE SKIP LOCKED` trong recovery |
+
+#### Crash Recovery Flow
+
+```
+Time 0:00  Saga bắt đầu, state = INITIATED
+Time 0:01  state = SHIPPING_PENDING (WAL committed)
+Time 0:02  Worker crash 💥 (trước khi gọi Shipping Service)
+
+Time 1:00  Recovery job chạy (mỗi 60s)
+           → Query: "saga in PENDING > 2 phút"
+           → Tìm thấy saga của chúng ta
+           → SELECT FOR UPDATE
+           → Resume: gọi Shipping Service
+
+Time 1:02  Shipping Service respond success
+           → state = SHIPPED
+           → Publish order.shipped event
+```
+
+#### Observability Instrumentation
+
+```python
+# Metrics PHẢI có cho Saga (dùng OTel Meter)
+saga_started_total = meter.create_counter(
+    name="saga_started_total",
+    description="Total sagas initiated"
+)
+saga_completed_total = meter.create_counter(
+    name="saga_completed_total",
+    description="Sagas by terminal state"
+    # labels: terminal_state=SHIPPED|REFUNDED|DEAD_LETTER
+)
+saga_duration_seconds = meter.create_histogram(
+    name="saga_duration_seconds",
+    description="Time from INITIATED to terminal state"
+)
+saga_step_duration_seconds = meter.create_histogram(
+    name="saga_step_duration_seconds",
+    description="Duration per step"
+    # labels: step=shipping|compensation
+)
+saga_recoveries_total = meter.create_counter(
+    name="saga_recoveries_total",
+    description="Sagas recovered by background job"
+)
+
+# Span attributes cho distributed tracing
+with tracer.start_as_current_span("saga.execute") as span:
+    span.set_attribute("saga.id", saga_id)
+    span.set_attribute("saga.order_id", order_id)
+    span.set_attribute("saga.state", current_state)
+    span.set_attribute("saga.retry_count", retry_count)
+```
+
+**Alerts** (thêm vào `kafka_alert_rules.yml`):
+
+```yaml
+- alert: SagaHighCompensationRate
+  expr: |
+    (
+      sum(rate(saga_completed_total{terminal_state="REFUNDED"}[5m]))
+      /
+      sum(rate(saga_started_total[5m]))
+    ) > 0.05
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "🔥 Saga compensation rate > 5% — systemic shipping issue"
+
+- alert: SagaDeadLetterQueueGrowing
+  expr: |
+    sum(saga_state_count{state="DEAD_LETTER"})
+    - sum(saga_state_count{state="DEAD_LETTER"} offset 10m) > 5
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "⚠️ Saga DLQ growing — manual intervention needed"
+
+- alert: SagaStuckInPending
+  expr: |
+    sum(saga_state_count{state=~".*_PENDING"}) > 0
+    and
+    avg(saga_state_age_seconds{state=~".*_PENDING"}) > 300
+  for: 5m
+  labels:
+    severity: warning
+```
+
+#### Testing Strategy (Contract Tests)
+
+```python
+# tests/test_saga_orchestrator.py
+
+def test_saga_idempotency_on_kafka_redelivery():
+    """Invariant #1: 1 order = 1 saga"""
+    saga_id_1 = orchestrator.start_saga("ORD-001", {...})
+    saga_id_2 = orchestrator.start_saga("ORD-001", {...})
+    assert saga_id_1 == saga_id_2
+
+def test_crash_recovery_resumes_pending_saga():
+    """Invariant #4: No lost saga"""
+    # Simulate: saga stuck in SHIPPING_PENDING for 3 minutes
+    db.execute("""
+        INSERT INTO saga_state (saga_id, order_id, state, updated_at)
+        VALUES ('saga-1', 'ORD-002', 'SHIPPING_PENDING', NOW() - INTERVAL '3 minutes')
+    """)
+
+    orchestrator.recover_stale_sagas()
+
+    # Verify: saga moved to SHIPPED
+    state = db.execute("SELECT state FROM saga_state WHERE saga_id = 'saga-1'")
+    assert state == 'SHIPPED'
+
+def test_no_double_refund():
+    """Invariant #2: Compensation idempotent"""
+    # Setup: saga đã REFUNDED
+    db.execute("""
+        INSERT INTO saga_state (saga_id, order_id, state)
+        VALUES ('saga-1', 'ORD-003', 'REFUNDED')
+    """)
+
+    # Simulate Kafka redeliver shipping_failed event
+    orchestrator.handle_shipping_failed("saga-1", {...})
+
+    # Verify: refund API chỉ được gọi 1 lần (dùng mock)
+    assert payment_service.refund.call_count == 0
+```
+
+---
+
+### 🔧 Files codebase sẽ bị ảnh hưởng (Checklist cho Phase 2)
+
+**1. `applications-vm/applications/shipping-worker/saga_orchestrator.py`** (MỚI)
+
+- Copy class `SagaOrchestrator` ở trên
+- Inject dependencies: `db_pool`, `shipping_service_url`, `payment_service_url`, `tracer`
+
+**2. `applications-vm/applications/shipping-worker/app.py`** (MỚI)
+
+```python
+from saga_orchestrator import SagaOrchestrator
+
+# Kafka consumer loop
+def handle_payment_completed(msg):
+    order_id = msg['order_id']
+    saga_id = orchestrator.start_saga(order_id, msg['data'])
+
+    # Step 1: Create shipment
+    success = orchestrator.execute_step(
+        saga_id=saga_id,
+        step_name="SHIPPING",
+        action_fn=lambda data: create_shipment(data),
+        compensate_fn=lambda data: refund_payment(data)
+    )
+
+    if success:
+        publish_event("order.shipped", order_id, {...})
+    # Compensation will be handled by recovery job
+```
+
+**3. `applications-vm/applications/shipping-worker/init-shipping.sql`** (MỚI)
+
+- Copy schema `saga_state` và `saga_history` ở trên
+
+**4. `observability-vm/phase1-metrics/prometheus/kafka_alert_rules.yml`**
+
+- Thêm 3 alerts: `SagaHighCompensationRate`, `SagaDeadLetterQueueGrowing`, `SagaStuckInPending`
+
+**5. `observability-vm/phase1-metrics/grafana/dashboards/Application/saga-monitor.json`** (MỚI)
+
+- Panels: Saga State Machine Flow (Node Graph plugin), Saga Duration Distribution (Histogram), Compensation Rate (Time series), Active Sagas by State (Stacked bar), DLQ Size (Stat)
+
+**6. `INCIDENT_RUNBOOK.md`** — Thêm runbook mới:
+
+- `RB-SAGA-01`: Saga Stuck in PENDING → Check recovery job logs, manually resume
+- `RB-SAGA-02`: High Compensation Rate → Investigate Shipping Service health
+- `RB-SAGA-03`: DLQ Growing → Manual review & replay
+
+---
+
+### 💡 Staff SRE Note: Tại sao KHÔNG dùng Temporal/Cadence?
+
+| Yếu tố | Self-implemented | Temporal/Cadence |
+|--------|-----------------|-----------------|
+| Learning value | ✅ Hiểu sâu state machine, WAL, idempotency | ❌ Black box |
+| Operational complexity | ✅ Chỉ PostgreSQL | ❌ Thêm 1 distributed system (Temporal server + Cassandra) |
+| Cost | ✅ Free | ❌ Temporal Cloud $$ hoặc self-host tốn RAM |
+| Use case fit | ✅ 1 saga type (order fulfillment) | ✅ Hàng chục saga types |
+| Production-ready | ⚠️ Cần test kỹ | ✅ Battle-tested |
+
+**Recommendation:**
+
+- **Lab này** (1 saga type): Self-implement → maximize learning
+- **Production thực tế** (>5 saga types): Dùng Temporal → giảm operational burden
+
+Đây chính là trade-off thinking mà Senior/Staff Engineer cần có: biết **KHI NÀO** dùng tool, **KHI NÀO** tự viết.
 
 **Schema bổ sung (shipping_db):**
 ```sql
