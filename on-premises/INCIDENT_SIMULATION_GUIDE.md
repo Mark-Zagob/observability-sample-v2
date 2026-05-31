@@ -344,10 +344,11 @@ curl -X POST http://localhost:5003/start \
 
 | Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
 |-----------|--------------------------------------|----------------|-------------------|
-| **DB Performance** | `DB Connection Pool Activity` | Active / Max connections | 1-3 / 10 |
+| **DB Performance** | `DB Connection Pool Activity` | Active / Max connections | 0-1 / 10 (Lưu ý: 0-1 là do Sampling Artifact, không phải lỗi) |
 | **DB Performance** | `Avg Query Duration` | SELECT duration (ms) | 1-10ms |
 | **DB Performance** | `DB Connection Pool Utilization (%)` | % | ~ 0-10% (Thực tế rất thấp do query nhanh) |  
 | **DB Performance** | `DB Pool Wait Time (P95)` | P95 wait (ms) | < 1ms (Thời gian chờ lấy connection) |
+| **DB Performance** | `Pool Saturation Status` | Status Text | Healthy (Màu xanh) (Dựa trên Wait Time P95) |
 | **Cache Performance** | `Cache Hit Ratio (%)` *(gauge)* | Hit Ratio | > 80% |
 | **Cache Performance** | `Cache Operation Latency (p95)` *(timeseries)* | GET / SET latency | < 5ms |
 | **Cache Performance** | `Cache Operations per Second` | ops/s by operation & result | — |
@@ -487,7 +488,11 @@ slo:
 
 **Bước 4:** Ghi timestamp bắt đầu inject failure (dùng cho tính MTTD sau).
 
-**Mẹo:** Dùng Grafana annotation (nhấn Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject → giúp so sánh trước/sau dễ hơn.
+**Mẹo:** Dùng Grafana annotation (nhấn Ctrl+Click trên chart → Add annotation) để đánh dấu thời điểm inject → giúp so sánh trước/sau dễ hơn.  
+
+💡 **Tip: PromQL Vector Matching & OTel Buckets**
+- Khi chia 2 metrics trong Grafana (ví dụ: `active / max`), nếu thấy "No Data", hãy thêm `on(job)` vào giữa: `active / on(job) max`.
+- Khi tạo Histogram metric mới trong Python OTel SDK, **HÃY ĐẶT TÊN KẾT THÚC BẰNG `_duration_seconds`** (ví dụ: `db_pool_wait_duration_seconds`). Nếu đặt tên khác (như `_wait_seconds`), metric sẽ không match với `View` custom buckets, dẫn đến việc dùng Default Buckets `[0, 5, 10...]` quá thô, khiến hàm `histogram_quantile()` nội suy sai (ví dụ: 0.0001s bị nội suy thành 4.75s) → Gây Phantom Alert "EXHAUSTED" trên Dashboard.
 
 ---
 
@@ -711,12 +716,13 @@ curl -X POST http://localhost:5003/start \
 **Dashboard reading path:**
 ```
 App Performance → P95/P99 duration spike → Order Service (từ ~400ms lên 5-30s)
-  → DB Performance → DB Pool Wait Time (P95) tăng vọt lên hàng chục giây (Leading Indicator: báo hiệu threads đang xếp hàng chờ getconn() do pool đầy)
-    → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
-      → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
-      → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
-        → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
-          → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
+  → DB Performance → Pool Saturation Status chuyển từ "Healthy" (Xanh) sang "EXHAUSTED" (Đỏ) (Leading Indicator sớm nhất)
+    → DB Performance → DB Pool Wait Time (P95) tăng vọt lên hàng chục giây (Threads đang xếp hàng chờ getconn())
+      → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
+        → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
+          → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
+            → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
+              → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
 ```
 
 ### 🎯 Kỳ vọng & Câu hỏi kiểm tra:

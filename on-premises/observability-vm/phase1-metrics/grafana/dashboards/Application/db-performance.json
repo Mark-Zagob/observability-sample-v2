@@ -38,7 +38,7 @@
     {
       "title": "DB Connection Pool Activity",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
@@ -64,8 +64,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 0
+        "x": 0,
+        "y": 24
       },
       "datasource": {
         "type": "prometheus",
@@ -104,12 +104,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(db_pool_wait_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(db_pool_wait_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
           "legendFormat": "P95 Wait Time",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(db_pool_wait_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.50, sum(rate(db_pool_wait_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
           "legendFormat": "P50 Wait Time",
           "refId": "B"
         }
@@ -225,10 +225,10 @@
       "description": "Trạng thái bão hòa của Connection Pool dựa trên Wait Time. Xanh = Healthy, Vàng = Bắt đầu queue, Đỏ = Exhausted (Leading Indicator).",
       "type": "stat",
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 20
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
       },
       "datasource": {
         "type": "prometheus",
@@ -297,7 +297,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(db_pool_wait_seconds_bucket{job=\"app-metrics\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(db_pool_wait_duration_seconds_bucket{job=\"app-metrics\"}[5m])) by (le))",
           "legendFormat": "P95 Wait",
           "refId": "A"
         }
@@ -306,7 +306,7 @@
     {
       "title": "Order Processing Duration by Status",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {

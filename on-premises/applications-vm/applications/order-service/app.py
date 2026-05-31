@@ -74,7 +74,7 @@ db_query_duration = meter.create_histogram(
 )
 
 db_pool_wait = meter.create_histogram(
-    name="db_pool_wait_seconds",
+    name="db_pool_wait_duration_seconds",  # <-- THÊM CHỮ "duration" ĐỂ MATCH VIEW
     description="Time spent waiting to get a connection from the pool",
     unit="s",
 )
