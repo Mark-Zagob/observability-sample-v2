@@ -71,6 +71,8 @@ PROVIDERS = ["stripe", "paypal", "square"]
 health_bp = create_health_blueprint("payment-service")
 app.register_blueprint(health_bp)
 
+FAILURE_RATE = float(os.getenv("PAYMENT_FAILURE_RATE", "0.10")) # Mặc định 10% lỗi
+SLOW_RATE = float(os.getenv("PAYMENT_SLOW_RATE", "0.20"))  # Mặc định 20% chậm
 
 @app.route("/charge", methods=["POST"])
 def charge():
@@ -108,7 +110,7 @@ def charge():
 
         # Simulate gateway latency
         delay = random.uniform(0.05, 0.15)
-        is_slow = random.random() < 0.2
+        is_slow = random.random() < SLOW_RATE
 
         if is_slow:
             delay = random.uniform(0.5, 2.0)
@@ -124,7 +126,7 @@ def charge():
         span.set_attribute("payment.gateway_duration_ms", int(delay * 1000))
 
         # Simulate payment failure (10% chance)
-        if random.random() < 0.1:
+        if random.random() < FAILURE_RATE:
             span.set_attribute("error", True)
             span.set_attribute("error.message", "Payment gateway timeout")
 

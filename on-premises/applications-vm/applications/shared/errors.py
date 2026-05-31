@@ -42,3 +42,29 @@ def problem_response(status, title, detail, instance=None, extra=None):
     response = make_response(jsonify(body), status)
     response.content_type = "application/problem+json"
     return response
+
+# ============================================================================
+# Platform Contract: HTTP Semantic Mapping
+# ============================================================================
+
+def map_order_status_to_http(order_status: str) -> int:
+    """
+    [Platform Guardrail] Maps internal business order status to standard HTTP status codes.
+    Prevents the 'HTTP 200 Trap' where business/infra failures incorrectly return 200 OK.
+    
+    - 200: Success
+    - 402: Payment Required (Business failure, e.g., gateway rejected card)
+    - 409: Conflict (Business state, e.g., out of stock)
+    - 502: Bad Gateway (Dependency failure, e.g., payment service timeout)
+    - 500: Internal Server Error (Catch-all for unknown/db/kafka errors)
+    """
+    mapping = {
+        "completed": 200,
+        "payment_failed": 402,
+        "out_of_stock": 409,
+        "payment_error": 502,
+        "db_error": 500,
+        "kafka_error": 500,
+    }
+    # Default to 500 for any unmapped critical errors to fail-safe
+    return mapping.get(order_status, 500)

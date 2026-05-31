@@ -22,7 +22,7 @@ import uuid
 import requests
 from confluent_kafka import Producer as KafkaProducer
 from flask import Flask, jsonify, request as flask_request
-
+from shared.errors import problem_response, map_order_status_to_http
 # ----------------------------------------------------------
 # Shared modules
 # ----------------------------------------------------------
@@ -73,6 +73,12 @@ db_query_duration = meter.create_histogram(
     unit="s",
 )
 
+db_pool_wait = meter.create_histogram(
+    name="db_pool_wait_duration_seconds",  # <-- THÊM CHỮ "duration" ĐỂ MATCH VIEW
+    description="Time spent waiting to get a connection from the pool",
+    unit="s",
+)
+
 db_pool_active = meter.create_up_down_counter(
     name="db_connection_pool_active",
     description="Active database connections in pool",
@@ -118,12 +124,14 @@ inventory_checks_counter = meter.create_counter(
 # ============================================================
 # Database + Cache (using shared helpers)
 # ============================================================
+# secretlint-disable-next-line
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
                   pool_active_counter=db_pool_active,
-                  query_duration_histogram=db_query_duration)
+                  query_duration_histogram=db_query_duration,
+                  pool_wait_histogram=db_pool_wait)  # <-- Thêm dòng này
 cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
                    cache_duration=cache_duration)
 
@@ -461,6 +469,11 @@ def process_order():
                         "duration_ms": int(duration * 1000),
                         "product": product["name"], "total_amount": total_amount})
 
+    # [PLATFORM GUARDRAIL] Tự động map HTTP Code dựa trên Business Status
+    http_status = map_order_status_to_http(order_status)
+
+    # Giữ nguyên payload JSON để không break Contract với Web UI (Backward Compatible)
+    # Nhưng thay đổi HTTP Envelope để API Gateway và Prometheus hiểu đúng bản chất
     return jsonify({
         "order_id": order_id,
         "product": product["name"],
@@ -468,7 +481,7 @@ def process_order():
         "total_amount": total_amount,
         "payment": payment,
         "status": order_status,
-    })
+    }), http_status
 
 
 if __name__ == "__main__":
