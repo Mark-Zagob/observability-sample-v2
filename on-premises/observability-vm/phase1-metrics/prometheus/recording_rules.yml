@@ -81,3 +81,14 @@ groups:
       - record: instance:memory_usage_percent:5m
         expr: |
           (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+
+
+  - name: application_constants
+    interval: 15s
+    rules:
+      # Pool max size là hằng số (= 10) - inject vào Prometheus để tránh dùng Observable Gauge
+      - record: db_connection_pool_max
+        expr: vector(10)
+        labels:
+          job: "app-metrics"
+          service_name: "order-service"
