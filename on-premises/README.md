@@ -1,22 +1,69 @@
 # 🖥️ On-Premises — Production-Grade Observability & Reliability Lab
 
-> **Không phải toy project.** Đây là sandbox được thiết kế để rèn luyện tư duy System Design và SRE ở tiêu chuẩn production.  
-> Hệ thống E-commerce Microservices với full-stack observability (Metrics, Logs, Traces) và Incident Management chạy trên 2 VMs bằng Docker Compose.
+> **Không phải toy project.** Đây là sandbox được thiết kế để rèn luyện tư duy System Design, SRE và Reliability Engineering ở tiêu chuẩn production.
+> Hệ thống E-commerce Microservices (Python/Flask) với full-stack observability (Metrics, Logs, Traces) và Incident Management, chạy cô lập trên 2 VMs bằng Docker Compose.
 
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker) ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python) ![Observability](https://img.shields.io/badge/Observability-OTel%20%7C%20Prometheus%20%7C%20Loki%20%7C%20Tempo-orange) ![SRE](https://img.shields.io/badge/SRE-SLO%20%7C%20Error%20Budget%20%7C%20Chaos-red)
+
+## 🎯 Mục tiêu & Đối tượng
+- **Dành cho:** DevOps / SRE / Platform Engineer / Backend Developer muốn vượt khỏi mức "deploy & monitor cơ bản".
+- **Kết quả đạt được:**
+  - Đọc & thiết kế dashboard theo chuẩn RED/USE + Multi-Window Multi-Burn-Rate.
+  - Xử lý incident theo quy trình: Triage → SEV Assessment → Mitigation → Blameless Post-Mortem.
+  - Hiểu sâu internals của PostgreSQL, Kafka, Redis, OTel Collector qua Break/Test/Recovery.
+  - Áp dụng Python production patterns: Gunicorn tuning, OTel auto-instrumentation, connection pooling, RFC 7807, idempotency.
+
+---
+## ⚡ Quick Start & Prerequisites
+| Yêu cầu | Chi tiết |
+|---------|----------|
+| **Hardware** | Tối thiểu 8GB RAM, 4 vCPU (khuyến nghị 16GB/8 vCPU để chạy song song 2 VMs + Chaos) |
+| **Software** | Docker ≥ 24.0, Docker Compose ≥ 2.20, `curl`, `jq`, `make` (optional) |
+| **Network** | 2 VMs hoặc 2 Docker contexts: `applications-vm` (app stack) & `observability-vm` (monitoring stack) |
+
+```bash
+# 1. Clone & di chuyển vào thư mục gốc
+git clone <your-repo-url> && cd observability-lab
+
+# 2. Khởi tạo hạ tầng lưu trữ & observability
+cd observability-vm/storage && docker compose up -d
+cd ../phase1-metrics && docker compose up -d
+
+# 3. Deploy ứng dụng E-commerce
+cd ../../applications-vm && docker compose up -d
+
+# 4. Verify hệ thống
+curl -s http://localhost:5000/health | jq .
+# Mở Grafana: http://<observability-vm-ip>:3000 (admin/admin)
+```
+
+>⚠️ Safety First: Lab sử dụng Chaos Experiments có chủ đích. Luôn chạy trên môi trường cô lập. Dùng docker compose down -v để cleanup toàn bộ state khi cần reset.
 ---
 
 ## 🧠 Core Engineering & SRE Concepts
+Dự án không chỉ là "deploy code lên Docker", mà là nơi thực hành các patterns và trade-offs thực tế mà Senior/Staff Engineer phải đối mặt:
 
-Dự án này không chỉ là "deploy code lên Docker", mà là nơi thực hành các patterns và concepts thực tế mà các Senior/Staff Engineer phải đối mặt:
+| Khía cạnh | Patterns & Concepts | Production Trade-off / Why it matters |
+|-----------|---------------------|----------------------------------------|
+| **System Design** | Event-Driven (Kafka KRaft), Cache-Aside (Redis), Pessimistic Locking (`SELECT FOR UPDATE`), BFF, Idempotency Keys | Consistency vs Latency. Idempotency chống duplicate charge. Pessimistic lock tránh race condition khi stock thấp. |
+| **Python Engineering** | Gunicorn (`sync` vs `gevent`), `psycopg2` pool, OTel auto-instrumentation, RFC 7807 Problem Details, structured logging | Worker class ảnh hưởng throughput. Connection pool tránh DB exhaustion. RFC 7807 chuẩn hóa error contract cho client. |
+| **Reliability (SRE)** | SLI/SLO & Error Budgets, MWMBR Alerting (14.4x / 3x), Traffic Guards, Active Probing (Blackbox) | Chống phantom alerts khi traffic = 0. Burn rate giúp phát hiện SLO breach sớm hơn threshold tĩnh. |
+| **Observability** | 3 Pillars + Correlation (TraceID injected vào Logs/Metrics), Spanmetrics Connector, OTel Collector pipelines | Không correlation = blind debugging. Spanmetrics auto-generate RED metrics mà không cần instrument code. |
+| **Incident Mgmt** | SEV Matrix, Runbook-driven response, Blameless Post-Mortem, 5 Whys, Error Budget Policy | Giảm MTTR nhờ runbook chuẩn hóa. Post-mortem tập trung vào systemic gap, không đổ lỗi cá nhân. |
 
-| Khía cạnh | Concepts & Patterns được áp dụng |
-|---|---|
-| **System Design** | Event-Driven Architecture (Kafka KRaft), Cache-Aside (Redis), Pessimistic Locking (`SELECT FOR UPDATE`), BFF Pattern, Idempotency. |
-| **Reliability (SRE)** | SLI/SLO & Error Budgets, Multi-Window Multi-Burn-Rate (MWMBR) Alerting, Traffic Guards (chống Phantom Alerts), Active Probing (Blackbox). |
-| **Observability** | 3 Pillars + Correlation (TraceID trong Logs/Metrics), Tail-based Sampling, Auto RED Metrics (Spanmetrics Connector), Structured JSON Logging. |
-| **Incident Mgmt** | 12 Chaos Experiments, 24 Alert Runbooks, Blameless Post-Mortems, Break/Test/Recovery Drills. |
-| **Security & Ops** | Multi-stage Docker builds, Non-root users, Read-only filesystems, Network segmentation, Graceful shutdown (SIGTERM). |
+---
+## 📊 Observability Stack & Correlation Strategy
+Hệ thống áp dụng mô hình **3 Pillars + Correlation** chuẩn OpenTelemetry:
 
+| Component | Vai trò | Dữ liệu thu thập | Correlation Key |
+|-----------|---------|------------------|-----------------|
+| **OTel Collector** | Agent & Pipeline | Receives OTLP → Process → Export | `trace_id`, `span_id` |
+| **Prometheus** | Metrics Storage & Alerting | RED metrics, Business KPIs, Infra USE | `trace_id` (via exemplars) |
+| **Loki** | Log Aggregation | Structured JSON logs từ Flask/Gunicorn | `trace_id` (injected via OTel logging instrumentation) |
+| **Tempo** | Distributed Tracing | Full request lifecycle across services | `trace_id` (primary key) |
+| **Grafana** | Visualization & Incident UI | Dashboards, Explore, Alerting UI | Cross-datasource linking via `trace_id` |
+
+> 🔗 **Workflow thực tế:** Alert firing → Grafana Explore → Filter by `trace_id` → Jump to Tempo Trace → View Loki Logs cùng trace → Root cause trong < 3 phút.
 ---
 
 ## 🏗️ Kiến Trúc Hệ Thống
@@ -137,18 +184,20 @@ docker compose up -d
 
 ---
 
-## 📚 Learning Roadmap (6 Phases)
+## 🗺️ Lộ trình thực hành & Điều hướng tài liệu
+Repository được thiết kế theo lộ trình tăng dần về độ phức tạp và tư duy vận hành:
 
-Dự án được chia thành 6 phases, đi từ cơ bản đến nâng cao theo tiêu chuẩn SRE:
+| Giai đoạn | Tài liệu chính | Kỹ năng trọng tâm | Độ khó |
+|-----------|----------------|-------------------|--------|
+| **Phase 1-3** | `observability-vm/phase{1,2,3}/README.md` | Deploy stack, cấu hình OTel pipeline, dashboard cơ bản | ⭐ |
+| **Phase 4-5** | `applications-vm/` + `ARCHITECTURE.md` | Microservices communication, DB/Kafka internals, caching strategy | ⭐⭐ |
+| **Incident Drill** | `INCIDENT_SIMULATION_GUIDE.md` + `INCIDENT_RUNBOOK.md` | Đọc dashboard theo Incident Flow, Triage, SEV assessment, Escalation | ⭐⭐⭐ |
+| **Deep Internals** | `BREAK_TEST_RECOVERY.md` | Phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus qua CLI/Query | ⭐⭐⭐ |
+| **Post-Mortem** | `post-mortems/00-TEMPLATE.md` + `01-GOLDEN-EXAMPLE-*.md` | Viết Blameless RCA, 5 Whys, Action Items trackable | ⭐⭐ |
+| **Scale & Evolution** | `EXPANSION_PLAN.md` | Saga, CQRS, Circuit Breaker, TLS, Network Segmentation, SLO redesign | ⭐⭐⭐⭐ |
+| **Interview Prep** | `devops-question.md` & `devops-question-senior.md` | Trade-offs, System Design, SRE mindset, Production debugging | ⭐⭐⭐ |
 
-| Phase | Chủ đề | Level | Trạng thái |
-|---|---|---|---|
-| **Phase 1** | Metrics & Alerting — Prometheus, MWMBR Alerts, Blackbox | Cơ bản | ✅ |
-| **Phase 2** | Logging — Loki, Alloy Pipeline, Structured JSON | Cơ bản | ✅ |
-| **Phase 3** | Tracing — Tempo, OTel Collector, Tail-based Sampling | Trung cấp | ✅ |
-| **Phase 4** | SLO & Correlation — Error Budgets, Log→Trace linking | Nâng cao | ✅ |
-| **Phase 5** | App Instrumentation — Custom Metrics, RFC 7807 Errors | Nâng cao | ✅ |
-| **Phase 6** | Incident Mgmt — Chaos Simulations, Post-Mortems | Expert | ✅ |
+> 💡 **Reliability PM Note:** Đừng đợi code hoàn thiện mới nghĩ đến monitoring. Hãy đọc `EXPANSION_PLAN.md` để định nghĩa SLI/SLO và thiết kế Runbook cho các failure domain mới (Saga compensation, CQRS sync lag, circuit breaker open).
 
 ---
 
@@ -221,3 +270,13 @@ Repository này tập trung vào On-Premises / Docker Compose để hiểu sâu 
 - [../README.md](../README.md) — Tổng quan toàn bộ dự án
 - [../terraform/](../terraform/) — AWS Infrastructure as Code (Terraform)
 - [../terraform/devops-question-m1-iac-core.md](../terraform/devops-question-m1-iac-core.md) — DevOps Interview cho Terraform/AWS
+
+---
+## 🤝 Đóng góp & Feedback
+Repository này là môi trường học tập mở. Nếu bạn phát hiện gap trong runbook, đề xuất experiment mới, hoặc muốn chia sẻ post-mortem từ lab của bạn, hãy mở Issue hoặc PR.
+
+## 📜 License
+MIT License — Tự do sử dụng cho mục đích học tập, đào tạo nội bộ và phỏng vấn. Không bảo hành cho môi trường production thực tế.
+
+---
+> 🛡️ *"Reliability is the most important feature. If users can't access the system, nothing else matters."* — Google SRE Book
