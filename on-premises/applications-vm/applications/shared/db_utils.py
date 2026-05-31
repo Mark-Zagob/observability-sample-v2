@@ -70,13 +70,14 @@ class DatabasePool:
     """Lazy-initialized PostgreSQL connection pool with metrics support."""
 
     def __init__(self, db_url, minconn=2, maxconn=10, pool_active_counter=None,
-                 query_duration_histogram=None):
+                 query_duration_histogram=None, pool_wait_histogram=None): # <-- Thêm param
         self._params = parse_db_url(db_url)
         self._minconn = minconn
         self._maxconn = maxconn
         self._pool = None
         self._pool_active_counter = pool_active_counter
         self._query_duration_histogram = query_duration_histogram
+        self._pool_wait_histogram = pool_wait_histogram # <-- Gán vào self
 
     def _get_pool(self):
         if self._pool is None:
@@ -91,7 +92,16 @@ class DatabasePool:
     def execute(self, query, params=None, fetch=True):
         """Execute a query, return rows (fetch=True) or rowcount (fetch=False)."""
         pool = self._get_pool()
-        conn = pool.getconn()
+        
+        # --- BẮT ĐẦU ĐO THỜI GIAN CHỜ (QUEUE WAIT TIME) ---
+        wait_start = time.time()
+        conn = pool.getconn() # Nếu pool đầy (10/10), thread sẽ bị block (chờ) ở đây
+        wait_duration = time.time() - wait_start
+        
+        if self._pool_wait_histogram:
+            self._pool_wait_histogram.record(wait_duration, {"operation": "getconn"})
+        # --- KẾT THÚC ĐO THỜI GIAN CHỜ ---
+
         if self._pool_active_counter:
             self._pool_active_counter.add(1)
         start = time.time()

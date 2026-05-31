@@ -346,7 +346,8 @@ curl -X POST http://localhost:5003/start \
 |-----------|--------------------------------------|----------------|-------------------|
 | **DB Performance** | `DB Connection Pool Activity` | Active / Max connections | 1-3 / 10 |
 | **DB Performance** | `Avg Query Duration` | SELECT duration (ms) | 1-10ms |
-| **DB Performance** | `DB Connection Pool Utilization (%)` | % | < 30% |
+| **DB Performance** | `DB Connection Pool Utilization (%)` | % | ~ 0-10% (Thực tế rất thấp do query nhanh) |  
+| **DB Performance** | `DB Pool Wait Time (P95)` | P95 wait (ms) | < 1ms (Thời gian chờ lấy connection) |
 | **Cache Performance** | `Cache Hit Ratio (%)` *(gauge)* | Hit Ratio | > 80% |
 | **Cache Performance** | `Cache Operation Latency (p95)` *(timeseries)* | GET / SET latency | < 5ms |
 | **Cache Performance** | `Cache Operations per Second` | ops/s by operation & result | — |
@@ -710,8 +711,9 @@ curl -X POST http://localhost:5003/start \
 **Dashboard reading path:**
 ```
 App Performance → P95/P99 duration spike → Order Service (từ ~400ms lên 5-30s)
-  → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
-    → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
+  → DB Performance → DB Pool Wait Time (P95) tăng vọt lên hàng chục giây (Leading Indicator: báo hiệu threads đang xếp hàng chờ getconn() do pool đầy)
+    → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
+      → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
       → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
         → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
           → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
@@ -728,6 +730,7 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" → bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
 - [ ] **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
 - [ ] **SEV Assessment:** Với traffic `browse_heavy` rate 20 req/s, bạn phân SEV mấy? Nếu experiment này xảy ra lúc 3 AM với 0 traffic thì SEV thay đổi thế nào? (Đây là bài học quan trọng nhất về SEV — xem Context Matrix)
+- [ ] Leading vs Lagging Indicators: Metric `db_pool_wait_seconds` tăng TRƯỚC hay `db_query_duration_seconds` tăng TRƯỚC khi user nhận thấy timeout? Tại sao SRE nên nhìn vào Pool Wait Time thay vì chỉ nhìn Active Connections khi debug saturation?
 
 **Rollback:** Lock tự release sau 90s, hoặc kill session:
 ```bash

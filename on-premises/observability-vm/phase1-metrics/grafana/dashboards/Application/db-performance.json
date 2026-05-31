@@ -52,8 +52,66 @@
           "legendFormat": "Active Connections"
         },
         {
-          "expr": "db_connection_pool_max_ratio{job=\"app-metrics\"}",
+          "expr": "db_connection_pool_max{job=\"app-metrics\"}",
           "legendFormat": "Max Pool Size"
+        }
+      ]
+    },
+    {
+      "title": "DB Pool Wait Time (P95)",
+      "description": "Thời gian chờ để lấy connection từ pool (P95). Khi pool đầy, threads phải queue → wait time tăng vọt. Đây là Leading Indicator cho DB Saturation.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.1},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max", "lastNotNull"]
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_pool_wait_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "legendFormat": "P95 Wait Time",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(db_pool_wait_seconds_bucket{job=\"app-metrics\"}[5m])) by (le, operation))",
+          "legendFormat": "P50 Wait Time",
+          "refId": "B"
         }
       ]
     },
@@ -156,7 +214,7 @@
       },
       "targets": [
         {
-          "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max_ratio{job=\"app-metrics\"}",
+          "expr": "db_connection_pool_active{job=\"app-metrics\"} / db_connection_pool_max{job=\"app-metrics\"}",
           "legendFormat": "Pool Utilization",
           "refId": "A"
         }

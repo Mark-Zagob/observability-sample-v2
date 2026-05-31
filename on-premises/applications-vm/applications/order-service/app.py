@@ -73,6 +73,12 @@ db_query_duration = meter.create_histogram(
     unit="s",
 )
 
+db_pool_wait = meter.create_histogram(
+    name="db_pool_wait_seconds",
+    description="Time spent waiting to get a connection from the pool",
+    unit="s",
+)
+
 db_pool_active = meter.create_up_down_counter(
     name="db_connection_pool_active",
     description="Active database connections in pool",
@@ -124,7 +130,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
                   pool_active_counter=db_pool_active,
-                  query_duration_histogram=db_query_duration)
+                  query_duration_histogram=db_query_duration,
+                  pool_wait_histogram=db_pool_wait)  # <-- Thêm dòng này
 cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
                    cache_duration=cache_duration)
 
