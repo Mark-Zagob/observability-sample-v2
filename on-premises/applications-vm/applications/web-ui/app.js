@@ -589,12 +589,52 @@ function escHtml(str) {
     await loadProducts();
 })();
 
-// Auto-refresh every 30s
-setInterval(() => {
+// ============================================================
+// Auto-refresh with Page Visibility API
+// ============================================================
+// Problem: Khi user mở tab Web UI nhưng chuyển sang tab khác
+// (hoặc minimize browser), setInterval vẫn chạy → tạo phantom
+// traffic tới API Gateway → inflate metrics.
+//
+// Solution: Dùng Page Visibility API để PAUSE auto-refresh
+// khi tab bị ẩn (document.hidden === true).
+// ============================================================
+
+let autoRefreshTimer = null;
+
+function runAutoRefresh() {
     const active = document.querySelector('.nav-btn.active')?.dataset.tab;
     if (active === 'dashboard') refreshDashboard();
     if (active === 'events') loadEventsTab();
-}, 30000);
+}
+
+function startAutoRefresh() {
+    if (autoRefreshTimer) return; // Already running, skip
+    autoRefreshTimer = setInterval(runAutoRefresh, 30000);
+    console.log('▶️ Auto-refresh started (30s interval)');
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+        console.log('⏸️ Auto-refresh paused (tab hidden)');
+    }
+}
+
+// Pause khi tab ẩn, resume khi tab hiện lại
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopAutoRefresh();
+    } else {
+        // Tab vừa hiện lại → refresh NGAY LẬP TỨC để data mới nhất
+        runAutoRefresh();
+        startAutoRefresh();
+    }
+});
+
+// Start auto-refresh khi page load xong
+startAutoRefresh();
 
 // ============================================================
 // Events Tab — Kafka Workers Dashboard

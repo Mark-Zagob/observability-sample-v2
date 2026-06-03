@@ -62,6 +62,31 @@ app = Flask(__name__)
 FlaskInstrumentor().instrument_app(app)
 RequestsInstrumentor().instrument()
 
+@app.before_request
+def tag_traffic_source():
+    """Phân biệt synthetic traffic vs organic traffic.
+    
+    Synthetic = Blackbox Exporter probes, Traffic Generator load tests
+    Organic   = Real users từ browser/mobile
+    
+    Label này giúp SRE exclude synthetic traffic khỏi SLO calculation,
+    tránh phantom alerts và capacity planning sai lệch.
+    """
+    user_agent = flask_request.headers.get("User-Agent", "").lower()
+    
+    if "blackbox" in user_agent or "prometheus" in user_agent:
+        # Blackbox Exporter health probes
+        source = "synthetic_probe"
+    elif "python-requests" in user_agent:
+        # Traffic Generator uses python-requests library
+        source = "synthetic_loadtest"
+    elif "mozilla" in user_agent or "chrome" in user_agent or "safari" in user_agent:
+        source = "browser"
+    else:
+        source = "unknown"
+    
+    flask_request.environ["traffic_source"] = source
+
 ORDER_SERVICE = os.getenv("ORDER_SERVICE_URL", "http://order-service:5001")
 
 # --- Health checks ---
@@ -165,8 +190,17 @@ def create_order():
 
     # Record metrics
     duration = time.time() - start_time
-    request_counter.add(1, {"endpoint": "/order", "status": status})
-    request_duration.record(duration, {"endpoint": "/order", "status": status})
+    traffic_src = flask_request.environ.get("traffic_source", "unknown")
+    request_counter.add(1, {
+        "endpoint": "/order",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
+    request_duration.record(duration, {
+        "endpoint": "/order",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
 
     return result
 
@@ -196,8 +230,17 @@ def list_products():
             logger.error("Failed to fetch products", extra={"error": str(e)})
 
     duration = time.time() - start_time
-    request_counter.add(1, {"endpoint": "/products", "status": status})
-    request_duration.record(duration, {"endpoint": "/products", "status": status})
+    traffic_src = flask_request.environ.get("traffic_source", "unknown")
+    request_counter.add(1, {
+        "endpoint": "/products",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
+    request_duration.record(duration, {
+        "endpoint": "/products",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
 
     return jsonify(result)
 
@@ -222,8 +265,18 @@ def list_orders():
             logger.error("Failed to fetch orders", extra={"error": str(e)})
 
     duration = time.time() - start_time
-    request_counter.add(1, {"endpoint": "/orders", "status": status})
-    request_duration.record(duration, {"endpoint": "/orders", "status": status})
+    traffic_src = flask_request.environ.get("traffic_source", "unknown")
+    request_counter.add(1, {
+        "endpoint": "/orders",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
+    request_duration.record(duration, {
+        "endpoint": "/orders",
+        "status": status,
+        "traffic_source": traffic_src,
+    })
+
 
     return jsonify(result)
 

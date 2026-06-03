@@ -141,33 +141,32 @@ groups:
       - record: sli:api_gateway_availability:rate5m
         expr: |
           (
-            sum(rate(api_gateway_requests_total{status="success"}[5m]))
+            sum(rate(api_gateway_requests_total{status="success", traffic_source!~"synthetic_.*"}[5m]))
             /
-            sum(rate(api_gateway_requests_total[5m]))
+            sum(rate(api_gateway_requests_total{traffic_source!~"synthetic_.*"}[5m]))
           ) or vector(1)
 
       - record: sli:api_gateway_availability:rate30m
         expr: |
           (
-            sum(rate(api_gateway_requests_total{status="success"}[30m]))
+            sum(rate(api_gateway_requests_total{status="success", traffic_source!~"synthetic_.*"}[30m]))
             /
-            sum(rate(api_gateway_requests_total[30m]))
+            sum(rate(api_gateway_requests_total{traffic_source!~"synthetic_.*"}[30m]))
           ) or vector(1)
-
       - record: sli:api_gateway_availability:rate1h
         expr: |
           (
-            sum(rate(api_gateway_requests_total{status="success"}[1h]))
+            sum(rate(api_gateway_requests_total{status="success", traffic_source!~"synthetic_.*"}[1h]))
             /
-            sum(rate(api_gateway_requests_total[1h]))
+            sum(rate(api_gateway_requests_total{traffic_source!~"synthetic_.*"}[1h]))
           ) or vector(1)
 
       - record: sli:api_gateway_availability:rate6h
         expr: |
           (
-            sum(rate(api_gateway_requests_total{status="success"}[6h]))
+            sum(rate(api_gateway_requests_total{status="success", traffic_source!~"synthetic_.*"}[6h]))
             /
-            sum(rate(api_gateway_requests_total[6h]))
+            sum(rate(api_gateway_requests_total{traffic_source!~"synthetic_.*"}[6h]))
           ) or vector(1)
 
       # --- Latency SLI (P95 value for gauge display) ---

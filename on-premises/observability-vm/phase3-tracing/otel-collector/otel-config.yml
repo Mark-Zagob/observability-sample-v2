@@ -49,10 +49,14 @@ processors:
     traces:
       span:
         - 'attributes["http.route"] == "/health"'
+        - 'attributes["http.route"] == "/health/live"'     # ← THÊM
+        - 'attributes["http.route"] == "/health/ready"'    # ← THÊM
         - 'attributes["http.route"] == "/ready"'
         - 'attributes["http.route"] == "/healthz"'
         - 'attributes["url.path"] == "/health"'
         - 'attributes["url.path"] == "/ready"'
+        - 'attributes["url.path"] == "/health/live"'       # ← THÊM
+        - 'attributes["url.path"] == "/health/ready"'      # ← THÊM
         - 'attributes["url.path"] == "/healthz"'
 
   # ============================================================
