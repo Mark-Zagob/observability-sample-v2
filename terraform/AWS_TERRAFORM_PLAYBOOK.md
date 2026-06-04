@@ -2,7 +2,7 @@
 
 > **Action-oriented playbook** để deploy, vận hành, và học hỏi AWS infrastructure. Mỗi module là một "chapter" với Learning Outcomes, Hands-on Drills, và Troubleshooting Guide.
 
-🔗 **Related:** [README_AWS.md](README_AWS.md) | [ARCHITECTURE_AWS.md](ARCHITECTURE_AWS.md) | [FINOPS.md](FINOPS.md)
+🔗 **Related:** [README.md](README.md) | [ARCHITECTURE.md](ARCHITECTURE.md) | [FINOPS.md](./docs/FINOPS.md)
 
 ---
 
@@ -13,6 +13,20 @@ Deploy hệ thống observability lab lên AWS bằng Terraform theo production-
 - **Swap giữa 4 compute phases** (ECS/EKS) để học và so sánh
 - **Mỗi module = 1 learning unit** với drills & troubleshooting
 
+---
+### 🏛️ State Management & PR-Driven Workflow
+Để so sánh thực tế trade-offs giữa Self-managed và SaaS, lab này áp dụng **Dual-Backend Strategy**:
+| Environment | Backend | Rationale & Learning Value |
+|---|---|---|
+| `environments/shared/` | **S3 + DynamoDB + KMS** | Học cách thiết lập AWS-native state, fine-grained IAM policies, encrypt state file at-rest, và xử lý state lock thủ công khi có sự cố. |
+| `environments/dev/` | **Terraform Cloud (HCP)** | Trải nghiệm VCS integration, Remote Run (chạy plan/apply trên cloud của HashiCorp), Team RBAC, và Cost Estimation tự động trên PR. |
+
+**PR-Driven Infrastructure (Shift-Left):**
+Không chạy `terraform apply` từ laptop cá nhân. Mọi thay đổi hạ tầng phải tuân thủ quy trình:
+1. Dev tạo PR ➡️ GitHub Actions tự động chạy `terraform plan`.
+2. **OPA/Conftest** quét `plan.json` để chặn các vi phạm bảo mật (ví dụ: SG mở port 22, RDS không encrypt).
+3. Plan được comment trực tiếp vào PR ➡️ Principal SRE review & approve.
+4. Merge PR ➡️ Tự động trigger `terraform apply` (hoặc approve trên Terraform Cloud UI).
 ---
 
 ## 📊 Tiến độ tổng quan
@@ -587,21 +601,21 @@ Sau khi hoàn thành module này, bạn sẽ:
 
 ## Module 13: `cicd` 🔲
 
-### 📋 Specification
-
+📋 Specification
 | Resource | Config |
-|----------|--------|
-| OIDC Provider | Trust token.actions.githubusercontent.com |
-| IAM Role: ecr-push | Push images to ECR |
-| IAM Role: deploy | Update ECS services / kubectl apply |
-| Trust Policy | Scoped to repo + branch (main only) |
+|---|---|
+| OIDC Provider | Trust `token.actions.githubusercontent.com` |
+| IAM Role: `infra-plan` | Read-only access để chạy `terraform plan` |
+| IAM Role: `infra-apply` | Write access để chạy `terraform apply` (chỉ trigger khi merge) |
+| Trust Policy | Scoped to `repo:owner/repo:environment:prod` |
+| OPA Integration | GHA workflow tự động export `tfplan.json` và chạy `conftest test` |
+| PR Commenter | Bot tự động comment kết quả Plan & OPA violations vào Pull Request |
 
-### 🎯 Learning Outcomes
-
-- [ ] Setup OIDC federation giữa GitHub Actions và AWS
-- [ ] Understand OIDC trust policy (sub claim)
-- [ ] Grant least-privilege permissions cho CI/CD
-- [ ] Debug OIDC authentication failures
+🎯 Learning Outcomes
+[ ] Thiết kế OIDC federation với Least-Privilege (phân quyền Plan vs Apply)
+[ ] Tích hợp OPA/Conftest vào CI pipeline để chặn đứng (block) các infra anti-patterns trước khi merge
+[ ] Hiểu rõ luồng JWT token exchange giữa GitHub Actions và AWS STS
+[ ] Debug OIDC authentication failures qua CloudTrail
 
 ### 🧪 Hands-on Drills
 
@@ -795,6 +809,49 @@ Sau khi hoàn thành module này, bạn sẽ:
 | RDS replica | ~50% của primary | Stop replica khi không drill |
 | Route53 health check | $0.75/health check/month | Disable khi không dùng |
 
+---
+Module 18: `gitops-bootstrap` 🆕 NEW (The Bridge to Data Plane)
+📋 Specification
+| Resource | Config |
+|---|---|
+| ArgoCD | Helm chart deploy lên EKS (Namespace: `argocd`) |
+| External Secrets Operator (ESO) | Sync AWS Secrets Manager ➡️ K8s `Secret` objects |
+| AWS Load Balancer Controller | Tự động provision ALB/NLB từ K8s `Ingress` / `Service` |
+| Metrics Server | Bắt buộc cho HPA (Horizontal Pod Autoscaler) |
+| GitOps Repo Structure | App-of-Apps pattern (Root app quản lý các sub-apps) |
+
+🎯 Learning Outcomes
+[ ] Hiểu rõ ranh giới: **Terraform** tạo ra EKS Cluster (Control Plane), **GitOps** quản lý Workloads (Data Plane).
+[ ] Cấu hình ESO để ứng dụng không bao giờ hardcode secrets, tự động rotate khi Secrets Manager thay đổi.
+[ ] Thiết lập ArgoCD Auto-Sync & Self-Healing (tự động khôi phục nếu ai đó lỡ tay `kubectl delete` pod).
+[ ] Implement App-of-Apps pattern để quản lý 10 microservices declaratively.
+
+🧪 Hands-on Drills
+Drill 18.1: Bootstrap ArgoCD, login qua CLI và UI, setup SSO/Auth.
+Drill 18.2: Tạo một AWS Secret, dùng ESO sync xuống K8s, verify Pod mount được secret.
+Drill 18.3: **Chaos Drill:** Cố tình `kubectl edit deployment` đổi image tag trên cluster ➡️ Quan sát ArgoCD tự động "Self-Heal" (rollback) về đúng trạng thái trên Git trong < 3 phút.
+Drill 18.4: Cấu hình ArgoCD Sync Waves (đảm bảo DB migration job chạy TRƯỚC khi Deployment scale up).
+
+🔧 Troubleshooting
+| Issue | Cause | Solution |
+|---|---|---|
+| ArgoCD app stuck in `Progressing` | Health check của Custom Resource (CRD) chưa define | Thêm Lua script vào ArgoCD resource health config |
+| ESO không sync được secret | IAM Role (IRSA) của ESO thiếu quyền `secretsmanager:GetSecretValue` | Update IAM policy, check OIDC trust |
+| AWS LBC không tạo ALB | Subnet chưa tag đúng chuẩn `kubernetes.io/role/elb` | Thêm tags vào Terraform VPC module |
+
+💰 Cost & Optimization
+ArgoCD, ESO, AWS LBC: **FREE** (Open-source chạy trên EKS Node).
+---
+### 🔄 Day-2 Operations & Upgrade Strategies
+Hạ tầng Production sống ở Day-2. Playbook này yêu cầu thực hành các kịch bản bảo trì sau:
+
+| Operation | Strategy | Drill / Action |
+|---|---|---|
+| **EKS Cluster Upgrade** | Blue/Green Cluster hoặc In-place (với PDBs) | Upgrade EKS 1.29 ➡️ 1.30. Đo lường thời gian gián đoạn của API Gateway. |
+| **RDS Major Version** | Blue/Green Deployment (AWS native) | Upgrade PostgreSQL 15 ➡️ 16. Verify RDS Proxy transparent failover. |
+| **Certificate Rotation** | ACM Auto-renewal + ESO sync | ACM renew ➡️ ESO sync ➡️ ArgoCD restart Ingress (Zero downtime). |
+| **Configuration Drift** | ArgoCD Self-Healing + Terraform `plan` cron | Chạy script tự động phát hiện ai đó sửa Security Group trên Console và alert về Slack. |
+| **State Disaster** | S3 Versioning + DynamoDB PITR | Xóa nhầm `.tfstate` trên S3 ➡️ Restore từ S3 Versioning history. |
 ---
 
 ## 📊 FinOps — Hidden Costs

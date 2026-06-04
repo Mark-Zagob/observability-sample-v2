@@ -247,33 +247,48 @@ graph TB
 
 ---
 
-## 8. CI/CD Pipeline
+## 8. CI/CD Pipeline (Hybrid Delivery & PR-Driven IaC)
+Kiến trúc CI/CD được chia làm 2 luồng tách biệt dựa trên nguyên tắc "Separation of Concerns":
+1. **IaC Control Plane (PR-Driven):** Mọi thay đổi hạ tầng (VPC, RDS, EKS Cluster) phải qua Pull Request, tự động quét OPA Policy trước khi merge.
+2. **Workload Data Plane (Hybrid CD):** 
+   - **ECS (Push-based):** GitHub Actions trực tiếp update ECS Service (phù hợp để học Imperative Deployment & ECS internals).
+   - **EKS (Pull-based GitOps):** GitHub Actions chỉ đẩy Helm/Kustomize manifest lên Git Repo. ArgoCD trong cluster tự động kéo (pull) và sync (phù hợp để học Declarative State & Self-Healing).
 
 ```mermaid
 graph LR
-    DEV -->|push| GH["GitHub"]
-    GH -->|trigger| WF["GitHub Actions"]
-    WF -->|1. OIDC| STS["AWS STS"]
-    WF -->|2. Build| IMG["Docker"]
-    IMG -->|3. Push| ECR["ECR"]
-    WF -->|4. Deploy| DEPLOY{Phase?}
-    DEPLOY -->|8A/8B| ECS["ECS"]
-    DEPLOY -->|8C/8D| EKS["EKS"]
+    subgraph "1. IaC Control Plane (Terraform)"
+        PR[Pull Request] --> GHA_PLAN[GHA: TF Plan + OPA Conftest]
+        GHA_PLAN --> REVIEW[Principal SRE Review]
+        REVIEW --> MERGE[Merge to Main]
+        MERGE --> GHA_APPLY[GHA: TF Apply via OIDC]
+        GHA_APPLY --> AWS_INFRA[AWS Infra: VPC, EKS, RDS, IAM]
+    end
+
+    subgraph "2. Workload Data Plane (App Code)"
+        APP_PUSH[Push App Code] --> GHA_BUILD[GHA: Build & Push ECR]
+        GHA_BUILD --> ECS_PUSH[ECS: AWS CLI Update Service]
+        GHA_BUILD --> MANIFEST[Update Helm/Kustomize Git Repo]
+        MANIFEST --> ARGO[ArgoCD Detects Drift & Syncs]
+        ARGO --> EKS_PULL[EKS: Declarative GitOps]
+    end
 ```
 
 ---
 
-## 9. Observability (Dual-Stack) 🆕
+## 9. Observability (OTel-Native Bridge) 🆕
 
-| Signal | Self-hosted (Grafana Stack) | AWS-native |
-|--------|---------------------------|-----------|
-| App metrics | Prometheus (OTel) | CloudWatch Metrics |
-| App logs | Loki (JSON) | CloudWatch Logs |
-| Traces | Tempo (OTel) | X-Ray |
-| Dashboards | Grafana | CloudWatch Dashboards |
-| Infra metrics | Node Exporter | Container Insights |
-| DB performance | — | RDS Performance Insights |
-| Alerting | Alertmanager → Telegram | CloudWatch Alarms → SNS |
+Để tối ưu hóa việc học production-grade mà không sa đà vào việc làm "Storage Admin" (backup, scale storage cho Prometheus/Loki), hệ thống áp dụng pattern **Vendor-Neutral Instrumentation, Cloud-Native Backends**. Application code hoàn toàn "mù" về việc nó đang chạy trên AWS hay On-Prem.
+
+| Signal | Instrumentation (Code) | Pipeline (Agent) | Backend (Storage) | Visualization & Query |
+| --- | --- | --- | --- | --- |
+| **Metrics** | OTel SDK (OTLP) | ADOT (Sidecar/DaemonSet) | **Amazon Managed Prometheus (AMP)** | Amazon Managed Grafana (AMG) / PromQL |
+| **Logs** | Python `logging` / Stdout | ECS FireLens / EKS FluentBit | **CloudWatch Logs** | CloudWatch Logs Insights (JSON query) |
+| **Traces** | OTel SDK (OTLP) | ADOT (Sidecar/DaemonSet) | **AWS X-Ray** | X-Ray Service Map / Trace Groups |
+| **Dashboards** | Grafana JSON models | — | **Amazon Managed Grafana (AMG)** | AMG (IAM Role Auth, no hardcoded API keys) |
+
+**Trade-off / Learning Value:**
+*   **Decoupling:** Tách biệt "Telemetry Generation" và "Storage". Nếu ngày mai migrate sang GCP, chỉ cần đổi Backend config của OTel Collector, zero code changes.
+*   **SRE Focus:** Dành 100% thời gian để viết PromQL, Recording Rules, Alerting Rules và debug X-Ray Service Maps thay vì lo lắng về TSDB disk space hay Loki index shards.
 
 > **Learning Value:** So sánh pros/cons giữa self-hosted vs managed observability.
 
@@ -291,6 +306,23 @@ graph LR
 | AWS Config | Compliance auditing | P3 |
 
 ---
+## 11. IaC State Management & GitOps Boundary 🆕
+🆕 Section mới — Critical cho Platform Engineering mindset.
+
+**A. Dual Terraform Backends Strategy**
+Để so sánh thực tế trade-offs giữa Self-managed và SaaS, lab này áp dụng 2 backend khác nhau cho 2 tầng hạ tầng:
+| Environment | Backend | Rationale & Learning Value |
+| --- | --- | --- |
+| `environments/shared/` | **S3 + DynamoDB + KMS** | Học cách thiết lập AWS-native state, fine-grained IAM policies, encrypt state file at-rest, và xử lý state lock thủ công khi có sự cố. |
+| `environments/dev/` | **Terraform Cloud (HCP)** | Trải nghiệm VCS integration, Remote Run (chạy plan/apply trên cloud của HashiCorp), Team RBAC, và Cost Estimation tự động trên PR. |
+
+**B. The Control Plane vs Data Plane Boundary**
+Một anti-pattern phổ biến là dùng Terraform để quản lý cả EKS Cluster lẫn hàng trăm Kubernetes Deployments. Lab này áp dụng ranh giới chuẩn Enterprise:
+| Layer | Tool | Scope of Management | Blast Radius |
+| --- | --- | --- | --- |
+| **Control Plane** | **Terraform** | VPC, EKS Cluster, RDS, IAM Roles, OIDC, ArgoCD Bootstrap | Lỗi Terraform có thể làm sập Network/Database. Tốc độ thay đổi chậm (Daily/Weekly). |
+| **Data Plane** | **ArgoCD + ESO** | Deployments, Services, Ingress, HPA, ConfigMaps, K8s Secrets (sync từ AWS Secrets Manager) | Lỗi ArgoCD chỉ ảnh hưởng 1 microservice. Tốc độ thay đổi nhanh (Hourly/Minutely). Self-healing. |
+---
 
 ## Quick Reference
 
@@ -301,6 +333,7 @@ graph LR
 | Data | RDS, Redis, MSK, EFS, OpenSearch | Data | Multi-AZ, Backup, KMS, TLS |
 | Observability | Prometheus, Grafana, Loki, Tempo | Private | Dual-stack với CloudWatch |
 | Management | Bastion, SSM | Mgmt | No SSH, Session Manager |
-| CI/CD | OIDC, GitHub Actions | External | OIDC IAM roles |
-| State | Terraform state | — | S3 Backend, Native Lockfile |
+| CI/CD | OIDC, GitHub Actions, ArgoCD | External / Mgmt | OIDC IAM roles, Hybrid Push/Pull, OPA Policy-as-Code |
+| State | Terraform state | — | Dual-Backend: S3+DynamoDB (Shared) & HCP Terraform (Dev) |
+| Observability | OTel, AMP, X-Ray, CloudWatch | Private / Managed | OTel-Native Bridge, ADOT, AMP, AMG |
 | Secrets | Secrets Manager, SSM | — | Auto Rotation, KMS |

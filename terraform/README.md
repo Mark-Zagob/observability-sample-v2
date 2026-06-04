@@ -23,6 +23,14 @@ Sau khi hoàn thành lab này, bạn sẽ có khả năng:
 | 9 | **GitOps CI/CD** — GitHub Actions + OIDC + ECR + ECS/EKS | ⭐⭐⭐⭐ |
 
 ---
+### 🧠 Architectural Philosophy & Design Decisions
+| Decision | Rationale & Learning Value |
+|---|---|
+| **ECS-First Approach** | Dù EKS rất phổ biến, **ECS** vẫn là "workhorse" cho ~70% workload enterprise/SMB do operational overhead thấp hơn. Lab này master ECS (EC2 & Fargate launch types, Capacity Providers) trước để hiểu bản chất container orchestration trước khi tackle K8s control plane. |
+| **Hybrid CI/CD Strategy** | **CI** luôn là GitHub Actions (Build, Test, Push ECR). **CD** phụ thuộc ngữ cảnh: **Push-based** (GHA + AWS CLI/Terraform) cho ECS để hiểu imperative deployment, và **Pull-based GitOps** (ArgoCD) khi chuyển sang EKS để master declarative state reconciliation. |
+| **Dual Terraform Backends** | `shared/` dùng **S3 + DynamoDB** (AWS native, fine-grained IAM, KMS). `dev/` dùng **Terraform Cloud** (VCS integration, remote ops, team RBAC). Sự phân tách này giúp so sánh trade-offs giữa Self-managed vs SaaS state management dựa trên team size. |
+| **OTel-Native Observability** | App code chỉ emit OTLP (Vendor-neutral). AWS Managed Services (AMP, X-Ray, CloudWatch) làm backend. Tách biệt "Telemetry Generation" và "Storage" để chống vendor lock-in ở tầng application. |
+---
 
 ## 🗺️ How to Navigate (Dành cho người mới)
 
@@ -60,6 +68,16 @@ graph TB
 
 👉 Xem chi tiết: `ARCHITECTURE_AWS.md`
 
+---
+### 🔭 Observability Strategy: The "OTel-Native" Bridge
+Để tối ưu hóa việc học production-grade mà không "reinvent the wheel", chúng ta áp dụng pattern **Vendor-Neutral Code, Cloud-Native Backends**:
+*   **Instrumentation:** 100% OpenTelemetry (OTLP). App code không hardcode AWS SDK.
+*   **Pipeline:** AWS Distro for OpenTelemetry (ADOT) deploy dưới dạng ECS Sidecar hoặc EKS DaemonSet.
+*   **Backends:**
+    *   **Metrics ➡️ Amazon Managed Prometheus (AMP):** Học PromQL, Recording Rules, SigV4 auth mà không phải manage TSDB storage.
+    *   **Logs ➡️ CloudWatch Logs:** (qua FireLens cho ECS / FluentBit cho EKS) Master CloudWatch Logs Insights & Live Tail.
+    *   **Traces ➡️ AWS X-Ray:** Tận dụng Service Lens và Trace Groups cho distributed debugging.
+*   **Visualization:** Amazon Managed Grafana (AMG) kết nối trực tiếp với AMP, CloudWatch, X-Ray qua IAM Roles.
 ---
 
 ## 📊 Progress Tracking
@@ -117,6 +135,10 @@ graph TB
 - Terraform ≥ 1.7.0
 - AWS CLI configured (`aws configure`)
 - S3 backend bootstrapped (xem `bootstrap/`)
+> ⚠️ **State Management Note (Dual-Backend Setup):**
+> *   **Shared Infra (Network, DB, Security):** Sử dụng `S3 + DynamoDB`. Bạn **BẮT BUỘC** phải chạy module `bootstrap/` trước để tạo S3 bucket, DynamoDB lock table và KMS key.
+> *   **Dev/Workloads:** Sử dụng `Terraform Cloud` (HCP Terraform). Bạn cần chạy `terraform login` và map workspace trên HCP dashboard trước khi `terraform init`.
+> *   *Learning Goal:* So sánh UX, Security Model (IAM vs API Tokens) và Cost giữa AWS Native State và SaaS State.
 - OPA + conftest installed
 
 **Deploy shared infrastructure:**
