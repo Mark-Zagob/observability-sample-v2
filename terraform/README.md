@@ -2,7 +2,7 @@
 
 > **Không phải "bấm nút deploy lên cloud".** Đây là phòng thí nghiệm so sánh (Comparative Reliability Lab) giữa On-Premises Docker Compose và AWS Cloud-Native, được thiết kế để rèn luyện tư duy của **Staff/Principal SRE & Cloud Architect**.
 
-🔗 **Cross-Reference:** [On-Premises Baseline](../README.md) | [Expansion Roadmap](../EXPANSION_PLAN.md)
+🔗 **Cross-Reference:** [On-Premises Baseline](../on-premises/README.md) | [Expansion Roadmap](../on-premises/EXPANSION_PLAN.md)
 
 ---
 
