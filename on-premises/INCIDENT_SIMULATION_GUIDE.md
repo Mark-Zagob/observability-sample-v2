@@ -672,79 +672,140 @@ curl -X POST http://localhost:5003/start \
 
 ---
 
-## 🧪 Experiment 2: Database Saturation (High Latency)
+## 🧪 Experiment 2: Database Saturation (The Connection Pool Bottleneck)
+
 📖 **Runbook:** [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95) • [RB-21 HighErrorRate](INCIDENT_RUNBOOK.md#-rb-21-higherrorrate) • [RB-12 LatencyFastBurn](INCIDENT_RUNBOOK.md#-rb-12-apigatewaylatencyfastburn)
 
-**Giả thuyết:** Khi DB bị lock, P95 latency sẽ tăng đột ngột, connection pool sẽ bị exhaust, error rate sẽ tăng theo sau.
+🎯 **Mục tiêu:** Hiểu cách Connection Pool hoạt động dưới áp lực, phân biệt được **Leading Indicator** (Chỉ số dẫn dắt - biết trước sự cố) và **Lagging Indicator** (Chỉ số theo sau - sự cố đã xảy ra), và thực hành **Top-Down Triage**.
 
-> ⚠️ **QUAN TRỌNG:** Experiment này cần 3 terminal chạy song song. Table lock chỉ gây contention khi có traffic đang cố query table `products`. Nếu chạy lock mà không có traffic → dashboard sẽ không có data.
->
-> **Tại sao cần rate cao?** API Gateway và Order Service chạy gthread workers (2 workers × 8 threads = 16 concurrent requests). DB connection pool max = 10. Với rate đủ cao, 16 threads cùng cố lấy connection → pool 10/10 đầy → 6 threads còn lại phải queue chờ `getconn()` → latency stacking → timeout → errors cascade.
->
-> Với rate thấp (5 req/s), requests tuần tự nên pool chỉ nhích lên 1-2 → không thể hiện được saturation.
+---
 
-**Inject (3 terminals song song):**
+### 💡 SRE Deep-Dive: "The Sampling Artifact Illusion" *(Đọc trước khi làm)*
+
+Ở trạng thái Baseline (bình thường), bạn sẽ thấy panel **"DB Connection Pool Activity"** báo `0-1 / 10 connections`. Đừng hoảng hốt nghĩ rằng Pool bị hỏng hay App không dùng Pool!
+
+- **Bản chất:** Một query `SELECT * FROM products` chỉ mất ~5ms. Connection được mượn, thực thi, và trả về pool ngay lập tức.
+- **Prometheus Scrape:** Prometheus chỉ "chụp" (scrape) metrics mỗi 15 giây. Xác suất Prometheus chụp đúng khoảnh khắc 5ms connection đang active là cực kỳ thấp → Dashboard luôn báo `0`.
+- **Khi nào nó nhảy lên 10/10?** Khi query bị block (do Lock), connection bị "treo" > 15s, Prometheus chắc chắn sẽ chụp được trạng thái "đầy pool". Đây là cách Prometheus hoạt động.
+
+---
+
+### Phase 1: Baseline (Tạo steady state & Ghi nhận)
+
+Đảm bảo không có alert nào đang firing. Chạy traffic nhẹ để warm-up cache và tạo baseline:
 
 ```bash
-# Terminal 1: Flush product cache để request phải query DB ngay lập tức
-# (Nếu cache warm, browse requests sẽ hit cache → bypass DB → không thấy contention)
-docker exec redis redis-cli DEL "product:catalog"
-
-# Terminal 2: Tạo table lock trong 90s (command này sẽ block 90 giây)
-docker exec postgres psql -U app -d orders -c "
-  BEGIN;
-  LOCK TABLE products IN ACCESS EXCLUSIVE MODE;
-  SELECT pg_sleep(90);
-  COMMIT;
-"
-
-# Terminal 3: ĐỒNG THỜI → tạo traffic rate cao để gây contention
-# Rate 20 = ~20 req/s, trong đó ~70% gọi /products (browse_heavy + browse_then_buy)
-# → ~14 concurrent DB queries bị block → pool 10/10 exhaust
 curl -X POST http://localhost:5003/start \
   -H "Content-Type: application/json" \
-  -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}'
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
 ```
 
-**Timing:** lock=90s, traffic=120s → bạn sẽ thấy 3 phases trên dashboard:
-- **Phase contention (0-90s):** pool đầy, latency spike, errors cascade
-- **Phase recovery (90-120s):** lock release → pool giảm, latency trở lại, backlog xử lý
-- **Phase steady (sau 120s):** traffic stop → metrics stabilize
+Mở **DB Performance Dashboard**, ghi nhận:
 
-**Cache-aside interaction:** Order Service dùng Redis cache (TTL=60s) cho product catalog. Nếu cache warm → browse requests trả về từ cache, không query DB → không bị ảnh hưởng bởi lock. Bước flush cache ở Terminal 1 đảm bảo request đầu tiên phải query DB → block → các requests sau cũng phải query DB (vì cache chưa được set lại) → tạo contention thực sự.
+| Metric | Giá trị Baseline |
+|---|---|
+| Avg Query Duration | ~1–10ms (Rất nhanh) |
+| DB Pool Wait Time (P95) | < 1ms (Không phải chờ) |
+| Pool Saturation Status | 🟢 Healthy |
 
-**Dashboard reading path:**
-```
-App Performance → P95/P99 duration spike → Order Service (từ ~400ms lên 5-30s)
-  → DB Performance → Pool Saturation Status chuyển từ "Healthy" (Xanh) sang "EXHAUSTED" (Đỏ) (Leading Indicator sớm nhất)
-    → DB Performance → DB Pool Wait Time (P95) tăng vọt lên hàng chục giây (Threads đang xếp hàng chờ getconn())
-      → DB Performance → connection pool active tăng lên 8-10/10 (pool gần đầy hoặc đầy)
-        → DB Performance → query duration spike (SELECT bị block hàng giây thay vì ms)
-          → Tracing → mở 1 slow trace → span get_product_catalog chiếm 90%+ thời gian
-            → Bên trong có child span psycopg2 auto-instrumented (SELECT) bị block bởi lock
-              → Alerting → HighLatencyP95 firing, sau đó HighErrorRate khi requests timeout
-```
+---
 
-### 🎯 Kỳ vọng & Câu hỏi kiểm tra:
-Sau khi chạy experiment này, bạn phải trả lời được:
+### Phase 2: Inject Failure (Sử dụng Chaos Orchestrator)
 
-- [ ] **USE method:** DB saturation thể hiện ở metric nào? (connection pool utilization, query duration). Đây là U, S, hay E trong USE?
-- [ ] **Pool exhaustion:** Tại sao pool active tăng lên 8-10 thay vì chỉ 1-2? (vì gthread cho phép 8 threads/worker xử lý concurrent → 8 threads cùng lấy connection → pool đầy). Với sync workers (1 request/worker), pool chỉ bao giờ lên tối đa = số workers → đây là kiến thức quan trọng khi sizing connection pool.
-- [ ] **Trace reading:** Mở 1 slow trace → span nào chiếm % lớn nhất? Span đó thuộc service nào?
-- [ ] **Leading vs lagging:** Alert nào firing đầu tiên? `HighLatencyP95` hay `HighErrorRate`? Tại sao? (latency tăng trước → connection queue → timeout → error)
-- [ ] **Cache interaction:** Nếu KHÔNG flush cache trước khi lock, experiment sẽ khác thế nào? (browse requests hit cache → không bị ảnh hưởng → pool không đầy). Đây là lý do cache-aside pattern giúp giảm blast radius của DB issues.
-- [ ] **Ứng dụng production:** Khách hàng phàn nàn "đặt hàng chậm" → bạn mở dashboard nào đầu tiên? Tại sao không mở trực tiếp DB dashboard?
-- [ ] **Connection pool sizing:** Với 2 workers × 8 threads = 16 concurrent, nhưng pool max = 10. Điều gì xảy ra với 6 requests vượt quá pool? (chờ `getconn()` → thêm latency → có thể timeout). Trong production, công thức sizing pool là gì?
-- [ ] **SEV Assessment:** Với traffic `browse_heavy` rate 20 req/s, bạn phân SEV mấy? Nếu experiment này xảy ra lúc 3 AM với 0 traffic thì SEV thay đổi thế nào? (Đây là bài học quan trọng nhất về SEV — xem Context Matrix)
-- [ ] Leading vs Lagging Indicators: Metric `db_pool_wait_seconds` tăng TRƯỚC hay `db_query_duration_seconds` tăng TRƯỚC khi user nhận thấy timeout? Tại sao SRE nên nhìn vào Pool Wait Time thay vì chỉ nhìn Active Connections khi debug saturation?
+Thay vì gõ 3 terminal, tạo file `scripts/inject_db_saturation.sh` trên Applications VM và chạy nó. Script này mô phỏng một **Chaos Pipeline** thực thụ, đảm bảo timing hoàn hảo để đánh sập hệ thống.
 
-**Rollback:** Lock tự release sau 90s, hoặc kill session:
 ```bash
-docker exec postgres psql -U app -d orders -c "
-  SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-  WHERE state = 'active' AND query LIKE '%pg_sleep%';
-"
+#!/bin/bash
+# Chaos Orchestrator: DB Saturation Simulation
+
+echo "🔥 [1/4] Starting Heavy Traffic (20 req/s) to generate concurrent threads..."
+curl -s -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "browse_heavy", "rate": 20, "duration": 120}' > /dev/null &
+
+echo "⏳ [2/4] Waiting 3s for traffic to stabilize & hit Redis Cache..."
+sleep 3
+
+echo "💥 [3/4] Disarming Cache (Forcing all requests to hit DB)..."
+docker exec redis redis-cli DEL "product:catalog" > /dev/null
+
+echo "🔒 [4/4] Injecting DB Lock (90s)..."
+docker exec postgres psql -U app -d orders \
+  -c "BEGIN; LOCK TABLE products IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(90); COMMIT;" > /dev/null &
+
+echo "✅ Injection complete. Lock will auto-release in 90s. Go watch Grafana!"
 ```
+
+```bash
+chmod +x inject_db_saturation.sh && ./inject_db_saturation.sh
+```
+
+---
+
+### Phase 3: Observe & Triage (The Hourglass Method)
+
+Bây giờ, bạn hãy đóng vai **On-call SRE**. Alert `APIGatewayLatencyFastBurn` sẽ sớm rung chuông. Đi theo **Dashboard Reading Path** sau:
+
+| Thời điểm | Dashboard & Panel | Bạn sẽ thấy gì? | Ý nghĩa SRE (The "Why") |
+|---|---|---|---|
+| **T+05s** | DB Performance → Pool Saturation Status | 🟢 Xanh → 🟡 Vàng (Queueing) | **Leading Indicator.** Cache bị xóa, traffic ập vào DB. Pool bắt đầu có hàng đợi. |
+| **T+15s** | DB Performance → DB Pool Wait Time (P95) | Tăng vọt từ 1ms → 5s–10s | Threads của Gunicorn đang bị block ở `getconn()`. Chưa query, mới chỉ "xếp hàng" chờ lấy connection. |
+| **T+20s** | DB Performance → DB Connection Pool Activity | Nhảy vọt lên **10/10 (100%)** | Prometheus (scrape 15s) cuối cùng cũng "chụp" được trạng thái các connection đang bị treo do Lock. |
+| **T+30s** | App Performance → P95 Latency (Order Svc) | Tăng từ 400ms → 30s (Timeout) | **Lagging Indicator.** Users bắt đầu nhận thấy hệ thống "treo". Request timeout. |
+| **T+60s** | Alerting Overview → APIGatewayLatencyFastBurn | 🔴 **FIRING (Critical)** | SLO Latency bị vi phạm. Error Budget đang bị đốt cháy ở tốc độ **14.4x**. |
+| **T+90s** | DB Performance → All Panels | Đột ngột drop về Baseline | `pg_sleep(90)` kết thúc. Lock được giải phóng. 10 connections trả về pool. Hàng đợi được xử lý trong tích tắc. |
+
+---
+
+### Phase 4: Root Cause Analysis (Bottom-Up Internals)
+
+Sau khi hệ thống tự phục hồi (T+90s), mở code ra để tìm hiểu **TẠI SAO** hàng đợi lại dài như vậy.
+
+- Mở `docker-compose.yml` (hoặc `Dockerfile`) của `order-service`: thấy lệnh chạy `gunicorn --workers 2 --threads 8` → **16 concurrent requests**.
+- Mở `app.py`: thấy `DB_POOL_MAX = 10`.
+
+> 💡 **The "Aha!" Moment:**
+>
+> 1. Traffic Gen bơm 20 req/s → Gunicorn spawn ra **16 threads** cùng lúc.
+> 2. **10 threads đầu** lấy được connection → bị `LOCK TABLE` chặn đứng → treo connection.
+> 3. **6 threads còn lại** gọi `db_pool.getconn()` → Pool đã đầy → phải xếp hàng chờ (Queueing).
+> 4. Thời gian chờ (Wait Time) = Thời gian Lock (90s) → P95 Latency = 90s → Client Timeout (504 Gateway Timeout).
+
+---
+
+### 🎯 Kỳ vọng & Câu hỏi kiểm tra *(Checklist cho Junior SRE)*
+
+Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Incident Log):
+
+**1. Alerting Strategy**
+
+> Tại sao trong `alert_rules.yml` **KHÔNG CÓ** alert nào tên là `DBPoolExhausted` mà chỉ có `APIGatewayLatencyFastBurn`?
+
+💬 *Gợi ý:* SRE best-practice là alert theo **Symptom/User Impact**, không alert theo Root Cause. DB đầy nhưng nếu không có traffic thì không ai quan tâm.
+
+---
+
+**2. Leading vs Lagging**
+
+> Panel nào báo hiệu sự cố **TRƯỚC KHI** user phàn nàn?
+
+✅ *Đáp án:* **DB Pool Wait Time**.
+
+---
+
+**3. Capacity Planning**
+
+> Nếu muốn hệ thống chịu được 20 concurrent requests mà không bị queue, bạn sẽ sửa `DB_POOL_MAX` lên `20`, hay sửa Gunicorn `threads` xuống `10`? Tại sao?
+
+💬 *Gợi ý:* Tăng pool lên 20 có thể làm PostgreSQL bị quá tải CPU/RAM. Giảm thread có thể làm giảm throughput. Production thường dùng **PgBouncer**.
+
+---
+
+**4. SEV Assessment**
+
+> Lúc T+60s, Latency Fast Burn firing. Nhưng bạn biết traffic này là do Traffic Gen (không phải user thật). Bạn phân SEV mấy?
+
+✅ *Đáp án:* **SEV-4** hoặc **Not an Incident** — vì Blast Radius = 0 đối với user thật. Đây là bài học về **Context-Aware Alerting**.
 
 ---
 
