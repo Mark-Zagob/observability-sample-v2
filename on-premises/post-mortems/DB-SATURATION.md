@@ -1,7 +1,7 @@
 # Incident Log — DB Saturation (Connection Pool Bottleneck)
 
 **Start:** 2026-06-12 15:24:30 UTC+7  
-**Alert(s):** `HighLatencyP95`
+**Alert(s):** `HighLatencyP95`  
 **IC:** Dungtt (solo engineer)
 
 ---
