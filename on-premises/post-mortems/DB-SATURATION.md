@@ -89,8 +89,8 @@ System stable for 30 minutes before inject.
   - DB Connection Pool Activity : 10 đạt max fullsize
   - DB Pool Wait Time (P95): 25ms (tăng cao bất thường)
   🤔 Hypothesis #2: Database Postgres có vấn đề
-- `[10:27:50]` 🔔 Alert fired: HighLatencyP95 (api-gateway)
-- `[10:28:50]` 🔔 Alert fired: HighLatencyP95 (order service)
-- `[10:33:50]` 🔔 Alert resolved
+- `[15:27:50]` 🔔 Alert fired: HighLatencyP95 (api-gateway)
+- `[15:28:50]` 🔔 Alert fired: HighLatencyP95 (order service)
+- `[15:33:50]` 🔔 Alert resolved
 
 ---
