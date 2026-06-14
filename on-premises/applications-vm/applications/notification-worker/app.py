@@ -186,8 +186,10 @@ def consume_loop():
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": KAFKA_GROUP,
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": True,
-        "auto.commit.interval.ms": 5000,
+        "enable.auto.commit": os.getenv("KAFKA_AUTO_COMMIT", "True").lower() == "true",
+        "auto.commit.interval.ms": int(os.getenv("KAFKA_AUTO_COMMIT_INTERVAL", "5000")),
+        "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
+        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range") # 'range' là Eager mặc định
     })
     consumer.subscribe([KAFKA_TOPIC])
 

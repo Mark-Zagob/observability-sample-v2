@@ -364,6 +364,71 @@
         }
       ]
     }
+    ,
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "id": 105,
+      "title": "🛡️ SRE Deep-Dive: Rebalance & Pipeline Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "min": 0,
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
+      "id": 14,
+      "title": "Consumer Group Members (The Rebalance Detector)",
+      "description": "Số lượng thành viên trong nhóm. Nếu rớt về 0 -> Worker bị đá khỏi nhóm (Session Timeout) -> Rebalance Trap đang xảy ra!",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kafka_consumergroup_members{consumergroup=\"notification-workers\"}",
+          "legendFormat": "Active Members"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+      "id": 15,
+      "title": "Net Lag Growth Rate (Tốc độ tích tụ hàng tồn kho)",
+      "description": "Produce Rate - Consume Rate. Nếu > 0 (màu đỏ) -> Hàng đang ùn ứ (Worker chết/chậm). Nếu < 0 (màu xanh) -> Worker đang catch-up.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"order.events\"}[1m])) - sum(rate(kafka_consumergroup_current_offset{consumergroup=\"notification-workers\"}[1m]))",
+          "legendFormat": "Net Lag Growth (msg/s)"
+        }
+      ]
+    }
   ],
   "schemaVersion": 39,
   "tags": ["kafka", "event-driven", "workers"],
