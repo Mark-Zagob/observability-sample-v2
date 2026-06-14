@@ -813,7 +813,10 @@ Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Inci
 
 📖 **Runbook:** [RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
 
-🎯 **Mục tiêu:** Hiểu được bản chất của **Consumer Lag** (Leading Indicator), phân biệt được sự khác nhau giữa `docker stop` (Graceful) và `docker pause` (Network Partition/VM Freeze), và nhận diện được **The Rebalance Trap** (Bẫy cân bằng lại) trong Distributed Systems.
+🎯 **Mục tiêu:**
+- Hiểu được bản chất của **Consumer Lag** (Leading Indicator) và phân biệt được "Worker Chết" (Crash/Pause) vs "Worker Chậm" (Slow downstream).
+- Chứng kiến **The Rebalance Trap** (Bẫy cân bằng lại) — cơn ác mộng "Stop-the-World" trong Distributed Systems.
+- Nhận diện rủi ro **Data Loss / Duplicate Processing** do cơ chế Auto-Commit gây ra khi container bị freeze/crash.
 
 ---
 
@@ -872,7 +875,7 @@ echo "   docker unpause notification-worker"
 ```
 
 ```bash
-chmod +x inject_kafka_freeze.sh && ./inject_kafka_freeze.sh
+chmod +x scripts/inject_kafka_freeze.sh && ./scripts/inject_kafka_freeze.sh
 ```
 
 ---
@@ -885,10 +888,12 @@ Bây giờ, bạn hãy đóng vai **On-call SRE**. Đi theo **Dashboard Reading 
 |---|---|---|---|
 | **T+10s** | Kafka Overview → Consumer Group Lag | Nhảy vọt từ 0 → 100+ | **Leading Indicator.** Pipeline bị nghẽn. Ngưỡng 100 đã chạm, nhưng `for: 5m` chưa firing. |
 | **T+45s** | Kafka UI / Kafka Logs | `REBALANCE TRIGGERED` | **The Trap!** `session.timeout.ms` (45s) đã hết. Kafka Coordinator tuyên bố worker "chết" và thu hồi partitions. |
+| **T+45s** | Kafka Overview → Consumer Group Members | Rớt từ 1 → 0 | Bằng chứng của Rebalance! Broker đã đá worker ra khỏi nhóm. |
 | **T+60s** | App Performance → Notification Worker | Processing Rate = 0 | Worker bị đóng băng, không có span metrics mới được gửi về OTel Collector. |
-| **T+300s** | Alerting Overview | 🔴 `KafkaConsumerLagHigh` FIRING | Lag > 100 kéo dài 5 phút. SLO Latency của Email Delivery đang bị vi phạm nặng nề. |
+| **T+300s** | Alerting Overview | 🔴 `KafkaConsumerLagHigh` FIRING | Lag > 100 kéo dài 5 phút. SLO Latency của Email Delivery đang bị vi phạm. |
 | **T+360s** | Terminal | `docker unpause notification-worker` | Worker "tỉnh dậy". |
 | **T+365s** | Worker Logs (Loki) / Kafka UI | `RebalanceInProgressException` hoặc `CommitFailed` | Worker cố gắng commit offset cũ nhưng bị Kafka từ chối vì đã bị đá khỏi nhóm ở T+45s. Nó phải Rejoin. |
+| **T+365s** | Kafka Overview → Consumer Group Members | Nhảy từ 0 → 1 | Worker đã Rejoin thành công. |
 | **T+380s** | Kafka Overview → Consumer Lag | Lag giảm dốc đứng (Catch-up) | Worker xử lý với tốc độ tối đa để bù đắp lại ~3,600 messages bị tồn đọng. |
 
 ---
@@ -897,7 +902,7 @@ Bây giờ, bạn hãy đóng vai **On-call SRE**. Đi theo **Dashboard Reading 
 
 Sau khi hệ thống tự phục hồi, mở code ra để tìm hiểu **TẠI SAO** ta lại thấy Rebalance và rủi ro Duplicate Processing.
 
-Mở `notification-worker-app.py`: thấy `"enable.auto.commit": True`.
+Mở `notification-worker/app.py`: thấy `"enable.auto.commit": True`.
 
 > 💡 **The "Aha!" Moment (SRE vs Dev):**
 >
@@ -968,6 +973,75 @@ docker unpause notification-worker
 - **Consumer Lag** là nhịp tim của Event-Driven Architecture.
 - `docker pause` mô phỏng **Network Partition/Treo VM**, phơi bày các điểm yếu về Timeout và Rebalance mà `docker stop` che giấu.
 - SRE không chỉ nhìn Dashboard — SRE phải **đọc Code** (Auto-commit) để hiểu rủi ro mất dữ liệu (Data Durability).
+
+---
+
+## 🥊 Thử Thách Nâng Cao: 2 Hiệp Đấu SRE *(Dành cho Senior Track)*
+
+Sau khi đã chạy xong kịch bản cơ bản ở trên (**Hiệp 1: The Bleeding Edge**), hãy cấu hình lại hệ thống để chạy **Hiệp 2: The SRE Guardrails**.
+
+---
+
+### 🛡️ Hiệp 2: Bật "Cooperative Rebalancing" (Vũ khí bí mật)
+
+Trong Production, để tránh hiện tượng "Stop-the-World" (toàn bộ consumer group bị khựng lại khi 1 worker chết), các SRE Architect sẽ ép Dev bật chiến lược **Cooperative Rebalancing** (Incremental Rebalance).
+
+**Bước 1: Tinh chỉnh `docker-compose.yml` (Inject Guardrails qua Env Vars)**
+
+Mở `applications-vm/applications/docker-compose.yml`, tìm service `notification-worker` và thêm các biến môi trường sau:
+
+```yaml
+notification-worker:
+  # ... các cấu hình cũ ...
+  environment:
+    - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
+    - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+    # 🛡️ SRE GUARDRAILS INJECTION
+    - KAFKA_SESSION_TIMEOUT=45000
+    - KAFKA_ASSIGNMENT_STRATEGY=cooperative-sticky  # ← Bật vũ khí bí mật
+```
+
+**Bước 2: Sửa code `notification-worker/app.py` để đọc Env Vars**
+
+Tìm đoạn cấu hình Consumer và sửa thành:
+
+```python
+import os
+
+consumer = Consumer({
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "group.id": KAFKA_GROUP,
+    "auto.offset.reset": "earliest",
+    "enable.auto.commit": True,
+    "auto.commit.interval.ms": 5000,
+    "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
+    "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
+})
+```
+
+**Bước 3: Rebuild & Rerun**
+
+```bash
+cd applications-vm/applications
+docker compose up -d --build notification-worker
+# Chạy lại script inject_kafka_freeze.sh
+```
+
+---
+
+### 🔍 Sự khác biệt ngoạn mục bạn sẽ thấy ở Hiệp 2
+
+| | Hiệp 1 — Eager/Range | Hiệp 2 — Cooperative-Sticky |
+|---|---|---|
+| **Khi unpause** | Worker bị ném lỗi `CommitFailedException`, phải Rejoin từ đầu, gây thêm một đợt "khựng" | Worker tỉnh dậy và âm thầm nhận lại partition của mình — **không gây xáo trộn** |
+| **Dashboard** | Rebalance Storm, members dao động | Trơn tru, không có Rebalance Storm |
+
+---
+
+> 💡 **Bài học của SRE Architect:**
+>
+> Bạn không cần sửa code logic của Dev. Bạn chỉ cần thiết kế ra các **Guardrails** (thông qua Env Vars trong Docker Compose / K8s ConfigMap) để ép hệ thống phải tuân theo các Reliability Patterns chuẩn mực.
 
 ---
 
