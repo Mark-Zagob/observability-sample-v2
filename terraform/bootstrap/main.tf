@@ -31,50 +31,48 @@ resource "aws_kms_key" "state" {
   policy = jsonencode({
     Version = "2012-10-17"
     Id      = "state-key-policy"
-    Statement = [
-      # 1. Root Account - Full Control (Emergency Only)
-      {
-        Sid    = "Enable IAM User Permissions"
-        Effect = "Allow"
-        Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
-        Action   = "kms:*"
-        Resource = "*"
-      },
-      # 2. Key Administrators - Manage key, but CANNOT delete it
-      {
-        Sid    = "Allow Key Administration"
-        Effect = "Allow"
-        Principal = { AWS = var.key_administrator_arns }
-        Action = [
-          "kms:Create*",
-          "kms:Describe*",
-          "kms:Enable*",
-          "kms:List*",
-          "kms:Put*",
-          "kms:Update*",
-          "kms:Revoke*",
-          "kms:Disable*",
-          "kms:Get*",
-          "kms:Delete*", # Delete aliases, not the key itself
-          "kms:TagResource",
-          "kms:UntagResource"
-          # ❌ NO kms:ScheduleKeyDeletion
-        ]
-        Resource = "*"
-      },
-      # 3. Key Users (CI/CD, Terraform CLI) - Only Encrypt/Decrypt
-      {
-        Sid    = "Allow Key Usage for State"
-        Effect = "Allow"
-        Principal = { AWS = var.key_user_arns }
-        Action = [
-          "kms:Decrypt",
-          "kms:GenerateDataKey",
-          "kms:DescribeKey"
-        ]
-        Resource = "*"
-      }
-    ]
+    Statement = concat(
+      # 1. Root Account - Luôn luôn có (Hardcoded)
+      [
+        {
+          Sid       = "Enable IAM User Permissions"
+          Effect    = "Allow"
+          Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
+          Action    = "kms:*"
+          Resource  = "*"
+        }
+      ],
+      
+      # 2. Key Administrators - Chỉ thêm vào NẾU list không rỗng
+      length(var.key_administrator_arns) > 0 ? [
+        {
+          Sid       = "Allow Key Administration"
+          Effect    = "Allow"
+          Principal = { AWS = var.key_administrator_arns }
+          Action = [
+            "kms:Create*", "kms:Describe*", "kms:Enable*", "kms:List*",
+            "kms:Put*", "kms:Update*", "kms:Revoke*", "kms:Disable*",
+            "kms:Get*", "kms:Delete*", "kms:TagResource", "kms:UntagResource"
+          ]
+          Resource = "*"
+        }
+      ] : [], # Nếu rỗng thì trả về list rỗng, concat sẽ tự động bỏ qua
+
+      # 3. Key Users - Chỉ thêm vào NẾU list không rỗng
+      length(var.key_user_arns) > 0 ? [
+        {
+          Sid       = "Allow Key Usage for State"
+          Effect    = "Allow"
+          Principal = { AWS = var.key_user_arns }
+          Action = [
+            "kms:Decrypt",
+            "kms:GenerateDataKey",
+            "kms:DescribeKey"
+          ]
+          Resource = "*"
+        }
+      ] : []
+    )
   })
 }
 
@@ -144,19 +142,20 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 resource "aws_s3_bucket" "state" {
   bucket = local.bucket_name
   object_lock_enabled = true # 🛡️ CRITICAL: Enable WORM (Write Once, Read Many) at creation
+  force_destroy = true
   tags = {
     Name    = local.bucket_name
     Purpose = "terraform-state"
   }
 
   # Prevent accidental deletion of the state bucket
-  lifecycle {
-    prevent_destroy = true
-  }
+  # lifecycle {
+  #   prevent_destroy = true
+  # }
 }
 
-# 🛡️ Object Lock Configuration (Governance Mode)
-# Ngăn chặn Ransomware hoặc Insider xóa state file trong 30 ngày.
+#🛡️ Object Lock Configuration (Governance Mode)
+#Ngăn chặn Ransomware hoặc Insider xóa state file trong 30 ngày.
 resource "aws_s3_bucket_object_lock_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 
