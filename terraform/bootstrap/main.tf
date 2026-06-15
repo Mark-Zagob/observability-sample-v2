@@ -28,26 +28,54 @@ resource "aws_kms_key" "state" {
   deletion_window_in_days = 30
   enable_key_rotation     = true
 
-  # Key policy: only this account can use the key
   policy = jsonencode({
     Version = "2012-10-17"
+    Id      = "state-key-policy"
     Statement = [
+      # 1. Root Account - Full Control (Emergency Only)
       {
-        Sid    = "AllowRootAccount"
+        Sid    = "Enable IAM User Permissions"
         Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${local.account_id}:root"
-        }
+        Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
         Action   = "kms:*"
+        Resource = "*"
+      },
+      # 2. Key Administrators - Manage key, but CANNOT delete it
+      {
+        Sid    = "Allow Key Administration"
+        Effect = "Allow"
+        Principal = { AWS = var.key_administrator_arns }
+        Action = [
+          "kms:Create*",
+          "kms:Describe*",
+          "kms:Enable*",
+          "kms:List*",
+          "kms:Put*",
+          "kms:Update*",
+          "kms:Revoke*",
+          "kms:Disable*",
+          "kms:Get*",
+          "kms:Delete*", # Delete aliases, not the key itself
+          "kms:TagResource",
+          "kms:UntagResource"
+          # ❌ NO kms:ScheduleKeyDeletion
+        ]
+        Resource = "*"
+      },
+      # 3. Key Users (CI/CD, Terraform CLI) - Only Encrypt/Decrypt
+      {
+        Sid    = "Allow Key Usage for State"
+        Effect = "Allow"
+        Principal = { AWS = var.key_user_arns }
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ]
         Resource = "*"
       }
     ]
   })
-
-  tags = {
-    Name    = "${var.project_name}-terraform-state-cmk"
-    Purpose = "state-encryption"
-  }
 }
 
 resource "aws_kms_alias" "state" {
@@ -115,7 +143,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 #--------------------------------------------------------------
 resource "aws_s3_bucket" "state" {
   bucket = local.bucket_name
-
+  object_lock_enabled = true # 🛡️ CRITICAL: Enable WORM (Write Once, Read Many) at creation
   tags = {
     Name    = local.bucket_name
     Purpose = "terraform-state"
@@ -127,6 +155,18 @@ resource "aws_s3_bucket" "state" {
   }
 }
 
+# 🛡️ Object Lock Configuration (Governance Mode)
+# Ngăn chặn Ransomware hoặc Insider xóa state file trong 30 ngày.
+resource "aws_s3_bucket_object_lock_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+
+  rule {
+    default_retention {
+      mode = "GOVERNANCE" # Governance cho phép Root bypass nếu có header đặc biệt. COMPLIANCE thì Root cũng bó tay.
+      days = 30
+    }
+  }
+}
 # Versioning — rollback to previous state if needed
 resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id
@@ -169,12 +209,20 @@ resource "aws_s3_bucket_logging" "state" {
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 
+  depends_on = [aws_s3_bucket_object_lock_configuration.state]
   rule {
     id     = "cleanup-old-state-versions"
     status = "Enabled"
 
     filter {}
 
+    # Sau 30 ngày, chuyển state cũ sang Glacier Instant Retrieval (Rẻ hơn 60%)
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "GLACIER_IR"
+    }
+
+    # Xóa hẳn sau 90 ngày
     noncurrent_version_expiration {
       noncurrent_days = var.state_retention_days
     }
@@ -229,27 +277,66 @@ resource "aws_s3_bucket_policy" "state" {
 #--------------------------------------------------------------
 resource "aws_dynamodb_table" "locks" {
   name         = var.dynamodb_table_name
-  billing_mode = "PAY_PER_REQUEST" # On-demand — no capacity planning
-
-  hash_key = "LockID"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "LockID"
 
   attribute {
     name = "LockID"
     type = "S"
   }
 
-  # Point-in-Time Recovery — restore lock table if corrupted
   point_in_time_recovery {
     enabled = true
   }
 
-  # Encrypt with default AWS key (sufficient for lock metadata)
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = aws_kms_key.state.arn # Dùng chung KMS CMK cho đồng bộ
   }
+
+  # 🛡️ CRITICAL: Prevent accidental deletion via `terraform destroy`
+  deletion_protection_enabled = true 
 
   tags = {
     Name    = var.dynamodb_table_name
     Purpose = "terraform-state-locking"
   }
+}
+
+
+#--------------------------------------------------------------
+# 5. Real-Time Alerting (EventBridge + SNS)
+#--------------------------------------------------------------
+# Alert ngay lập tức nếu có ai đó cố tình xóa State Bucket
+resource "aws_sns_topic" "state_alerts" {
+  name = "${var.project_name}-state-security-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email_alert" {
+  topic_arn = aws_sns_topic.state_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email # Thêm var này vào variables.tf
+}
+
+resource "aws_cloudwatch_event_rule" "state_bucket_deletion" {
+  name        = "${var.project_name}-state-bucket-deletion-attempt"
+  description = "Alerts when someone tries to delete the state bucket or change its policy"
+
+  event_pattern = jsonencode({
+    source      = ["aws.s3"]
+    detail-type = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["s3.amazonaws.com"]
+      eventName   = ["DeleteBucket", "PutBucketPolicy", "PutBucketAcl"]
+      requestParameters = {
+        bucketName = [aws_s3_bucket.state.id]
+      }
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "sns_target" {
+  rule      = aws_cloudwatch_event_rule.state_bucket_deletion.name
+  target_id = "SendToSNS"
+  arn       = aws_sns_topic.state_alerts.arn
 }

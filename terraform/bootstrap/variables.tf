@@ -42,3 +42,22 @@ variable "state_retention_days" {
   type        = number
   default     = 90
 }
+
+variable "key_administrator_arns" {
+  description = "ARNs of IAM Roles/Users who can manage the KMS key (but not delete it)"
+  type        = list(string)
+  default     = [] # Sẽ truyền ARN của SRE Admin role vào đây
+}
+
+variable "key_user_arns" {
+  description = "ARNs of IAM Roles/Users who can use the KMS key to encrypt/decrypt state"
+  type        = list(string)
+  default     = [] # Sẽ truyền ARN của CI/CD role vào đây
+}
+
+
+variable "alert_email" {
+  description = "Email address to receive alerts about state management issues"
+  type        = string
+  default     = "" # Optional, can be used for SNS notifications in the future
+}
