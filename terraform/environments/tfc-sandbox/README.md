@@ -1,10 +1,10 @@
-# Dev Environment — Terraform Cloud Backend
+# TFC-sandbox Environment — Terraform Cloud Backend
 
 Test environment dùng Terraform Cloud để quản lý state.
 
 ## So sánh với Shared (S3 backend)
 
-| Aspect | shared/ (S3) | dev/ (TFC) |
+| Aspect | shared/ (S3) | tfc-sandbox/ (TFC) |
 |--------|-------------|-----------|
 | State storage | S3 bucket (self-managed) | Terraform Cloud (HashiCorp) |
 | State locking | DynamoDB | Built-in |
@@ -20,12 +20,12 @@ terraform login
 # → Opens browser → Generate API token → Paste token
 
 # 2. Create workspace in TFC UI
-# https://app.terraform.io → Workspaces → New → "obs-dev"
+# https://app.terraform.io → Workspaces → New → "obs-tfc-sandbox"
 # Workflow: CLI-driven
 # Execution Mode: Local (Settings → General)
 
 # 3. Init and apply
-cd terraform/environments/dev
+cd terraform/environments/tfc-sandbox
 terraform init
 terraform plan
 terraform apply
@@ -47,4 +47,4 @@ terraform apply
 
 ## VPC CIDR
 
-Dev dùng `10.1.0.0/16` để tránh conflict với shared (`10.0.0.0/16`).
+tfc-sandbox dùng `10.1.0.0/16` để tránh conflict với shared (`10.0.0.0/16`).
