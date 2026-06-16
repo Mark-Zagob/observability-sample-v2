@@ -44,8 +44,8 @@ module "network" {
   enable_flow_logs                  = var.enable_flow_logs
   flow_logs_retention_days          = 30                                  # Minimum per logging compliance policy
   flow_logs_cloudwatch_traffic_type = "REJECT"                            # Cost: only security events to CloudWatch
-  enable_flow_logs_s3               = true                                # Enable S3 destination (static, plan-time)
-  flow_logs_s3_bucket_arn           = module.logging-flow-logs.flow_logs_bucket_arn # ALL traffic to S3
+  enable_flow_logs_s3               = false                                # Enable S3 destination (static, plan-time)
+  #flow_logs_s3_bucket_arn           = module.logging-flow-logs.flow_logs_bucket_arn # ALL traffic to S3
 
   common_tags = {
     Module = "network"
