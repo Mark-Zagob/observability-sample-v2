@@ -1,5 +1,5 @@
 #--------------------------------------------------------------
-# Network Module — Outputs
+# Network Module — Outputs (3-Tier)
 #--------------------------------------------------------------
 
 # VPC
@@ -20,18 +20,13 @@ output "public_subnet_ids" {
 }
 
 output "private_subnet_ids" {
-  description = "List of private subnet IDs"
+  description = "List of private subnet IDs (includes Bastion host)"
   value       = try([for k in sort(keys(local.az_map)) : aws_subnet.private[k].id], [])
 }
 
 output "data_subnet_ids" {
   description = "List of data subnet IDs"
   value       = try([for k in sort(keys(local.az_map)) : aws_subnet.data[k].id], [])
-}
-
-output "mgmt_subnet_ids" {
-  description = "List of management subnet IDs"
-  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].id], [])
 }
 
 # Subnets — CIDRs
@@ -48,11 +43,6 @@ output "private_subnet_cidrs" {
 output "data_subnet_cidrs" {
   description = "List of data subnet CIDR blocks"
   value       = try([for k in sort(keys(local.az_map)) : aws_subnet.data[k].cidr_block], [])
-}
-
-output "mgmt_subnet_cidrs" {
-  description = "List of management subnet CIDR blocks"
-  value       = try([for k in sort(keys(local.az_map)) : aws_subnet.mgmt[k].cidr_block], [])
 }
 
 # Subnets — Maps (for_each-friendly access)
@@ -95,11 +85,6 @@ output "internet_gateway_id" {
 }
 
 # Route Tables (for external module consumption)
-output "mgmt_route_table_ids" {
-  description = "Map of AZ key → management route table ID"
-  value       = { for k, v in aws_route_table.mgmt : k => v.id }
-}
-
 output "private_route_table_ids" {
   description = "Map of AZ key → private route table ID"
   value       = { for k, v in aws_route_table.private : k => v.id }
@@ -114,4 +99,3 @@ output "data_route_table_id" {
   description = "ID of the data route table"
   value       = aws_route_table.data.id
 }
-

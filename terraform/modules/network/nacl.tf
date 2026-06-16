@@ -26,7 +26,6 @@ locals {
   all_private_cidrs = values(local.private_cidrs)
   all_public_cidrs  = values(local.public_cidrs)
   all_data_cidrs    = values(local.data_cidrs)
-  all_mgmt_cidrs    = values(local.mgmt_cidrs)
 }
 
 

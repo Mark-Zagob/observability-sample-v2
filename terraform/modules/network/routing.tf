@@ -24,6 +24,7 @@ resource "aws_route_table_association" "public" {
 
 #--------------------------------------------------------------
 # Route Tables: Private (→ NAT Gateway) — per AZ
+# Bastion host uses this route table (SSM + outbound HTTPS)
 #--------------------------------------------------------------
 resource "aws_route_table" "private" {
   for_each = local.az_map
@@ -66,33 +67,4 @@ resource "aws_route_table_association" "data" {
 
   subnet_id      = aws_subnet.data[each.key].id
   route_table_id = aws_route_table.data.id
-}
-
-#--------------------------------------------------------------
-# Route Tables: Mgmt (→ NAT Gateway) — per AZ
-# Separate route tables enable future NACL/routing differences
-#--------------------------------------------------------------
-resource "aws_route_table" "mgmt" {
-  for_each = local.az_map
-
-  vpc_id = aws_vpc.this.id
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-rt-mgmt-${each.value}"
-  })
-}
-
-resource "aws_route" "mgmt_nat" {
-  for_each = local.az_map
-
-  route_table_id         = aws_route_table.mgmt[each.key].id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.this[var.single_nat_gateway ? keys(local.nat_az_map)[0] : each.key].id
-}
-
-resource "aws_route_table_association" "mgmt" {
-  for_each = local.az_map
-
-  subnet_id      = aws_subnet.mgmt[each.key].id
-  route_table_id = aws_route_table.mgmt[each.key].id
 }

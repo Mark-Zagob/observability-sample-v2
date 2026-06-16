@@ -8,7 +8,7 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.this.id
   cidr_block              = local.public_cidrs[each.key]
   availability_zone       = each.value
-  map_public_ip_on_launch = false
+  map_public_ip_on_launch = false # ✅ Explicit control, no auto-assign
 
   tags = merge(var.common_tags, {
     Name                     = "${var.project_name}-public-${each.value}"
@@ -18,8 +18,9 @@ resource "aws_subnet" "public" {
 }
 
 #--------------------------------------------------------------
-# Private Subnets — /20 (ECS Tasks, EKS Pods, EC2 Nodes)
+# Private Subnets — /20 (ECS Tasks, EKS Pods, EC2 Nodes, Bastion)
 # Biggest subnets: EKS VPC CNI consumes 1 IP per pod
+# Bastion host now lives here (SSM Session Manager, no SSH)
 #--------------------------------------------------------------
 resource "aws_subnet" "private" {
   for_each = local.az_map
@@ -36,8 +37,9 @@ resource "aws_subnet" "private" {
 }
 
 #--------------------------------------------------------------
-# Data Subnets — /26 (RDS, ElastiCache, MSK, EFS)
+# Data Subnets — /24 (RDS, ElastiCache, MSK, EFS, OpenSearch)
 # No internet access — isolated tier
+# Increased from /26 to /24 for more IP headroom
 #--------------------------------------------------------------
 resource "aws_subnet" "data" {
   for_each = local.az_map
@@ -49,22 +51,5 @@ resource "aws_subnet" "data" {
   tags = merge(var.common_tags, {
     Name = "${var.project_name}-data-${each.value}"
     Tier = "data"
-  })
-}
-
-#--------------------------------------------------------------
-# Management Subnets — /27 (Bastion, VPN, CI Runners)
-# Has NAT for updates/pulls, but isolated SG/NACL from workloads
-#--------------------------------------------------------------
-resource "aws_subnet" "mgmt" {
-  for_each = local.az_map
-
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = local.mgmt_cidrs[each.key]
-  availability_zone = each.value
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-mgmt-${each.value}"
-    Tier = "mgmt"
   })
 }

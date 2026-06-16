@@ -1,18 +1,21 @@
 # Network Module
 
-Production-grade AWS VPC module with 4-tier subnet architecture, compact CIDR allocation, NAT Gateway HA options, and VPC Flow Logs.
+Production-grade AWS VPC module with 3-tier subnet architecture, compact CIDR allocation, NAT Gateway HA options, and VPC Flow Logs.
 
 ## Architecture
 
 ```
 VPC /16
-├── Private Subnets  /20 × 3 AZs  (EKS pods, ECS tasks, EC2)
+├── Private Subnets  /20 × 3 AZs  (EKS pods, ECS tasks, EC2, Bastion)
 ├── Public Subnets   /24 × 3 AZs  (ALB, NAT Gateway)
-├── Data Subnets     /26 × 3 AZs  (RDS, ElastiCache, MSK)
-└── Mgmt Subnets     /27 × 3 AZs  (Bastion, VPN, CI runners)
+└── Data Subnets     /24 × 3 AZs  (RDS, ElastiCache, MSK, OpenSearch)
 ```
 
-**CIDR Strategy:** VPC split into 2 halves (`/17`). First half dedicated to Private subnets (large IP pool for EKS VPC CNI). Second half subdivided for Public, Data, and Mgmt tiers with 6 × `/20` blocks reserved for future expansion.
+**CIDR Strategy:** VPC split into 2 halves (`/17`). First half dedicated to Private subnets (large IP pool for EKS VPC CNI). Second half subdivided for Public and Data tiers with 6 × `/20` blocks reserved for future expansion.
+
+**Refactor Note (v2.0):** Merged Mgmt tier into Private tier. Bastion host now uses SSM Session Manager (no SSH), reducing complexity and improving security.
+
+---
 
 ## Usage
 
@@ -26,7 +29,7 @@ module "network" {
   az_count           = 3
   single_nat_gateway = false  # true for cost-saving, false for HA
 
-  enable_flow_logs        = true
+  enable_flow_logs         = true
   flow_logs_retention_days = 30
 
   common_tags = {
@@ -36,7 +39,9 @@ module "network" {
 }
 ```
 
-## Inputs
+---
+
+## Variables
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|----------|
@@ -49,6 +54,8 @@ module "network" {
 | `flow_logs_retention_days` | CloudWatch log retention (valid CW values) | `number` | `7` | no |
 | `common_tags` | Tags applied to all resources | `map(string)` | `{}` | no |
 
+---
+
 ## Outputs
 
 | Name | Description |
@@ -56,9 +63,8 @@ module "network" {
 | `vpc_id` | VPC ID |
 | `vpc_cidr_block` | VPC CIDR block |
 | `public_subnet_ids` | List of public subnet IDs |
-| `private_subnet_ids` | List of private subnet IDs |
+| `private_subnet_ids` | List of private subnet IDs (includes Bastion) |
 | `data_subnet_ids` | List of data subnet IDs |
-| `mgmt_subnet_ids` | List of management subnet IDs |
 | `public_subnets` | Map of AZ key → public subnet attributes |
 | `private_subnets` | Map of AZ key → private subnet attributes |
 | `nat_gateway_ids` | NAT Gateway IDs |
@@ -66,15 +72,16 @@ module "network" {
 | `internet_gateway_id` | Internet Gateway ID |
 | `public_route_table_id` | Public route table ID |
 | `private_route_table_ids` | Map of AZ key → private route table ID |
-| `mgmt_route_table_ids` | Map of AZ key → mgmt route table ID |
 | `data_route_table_id` | Data route table ID |
+
+---
 
 ## File Structure
 
 ```
 network/
 ├── vpc.tf          # VPC + Internet Gateway
-├── subnets.tf      # 4-tier subnets (public, private, data, mgmt)
+├── subnets.tf      # 3-tier subnets (public, private, data)
 ├── routing.tf      # Route tables + associations
 ├── nat.tf          # EIPs + NAT Gateways
 ├── flow_logs.tf    # VPC Flow Logs + IAM
@@ -84,24 +91,32 @@ network/
 └── versions.tf     # Provider constraints
 ```
 
+---
+
 ## Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
 | `for_each` over `count` | Stable resource addressing — adding/removing AZs doesn't shift indices |
-| 4-tier subnet model | Separation of concerns: workloads, ingress, data, management |
+| 3-tier subnet model | Separation of concerns: workloads, ingress, data (Bastion merged into Private) |
 | `/20` for Private | EKS VPC CNI: 1 IP per pod → 4,096 IPs per AZ |
-| Compact CIDR packing | Data (`/26`) + Mgmt (`/27`) share one `/20` block → saves 8,192 IPs |
-| Per-AZ route tables | Private/Mgmt get per-AZ tables for AZ-aware NAT routing |
+| `/24` for Data | Increased from `/26` for more IP headroom (RDS, ElastiCache, MSK) |
+| Compact CIDR packing | Public + Data share one `/17` block → saves 32,768 IPs |
+| Per-AZ route tables | Private gets per-AZ tables for AZ-aware NAT routing |
 | Single shared Data RT | Data tier has no internet route — pure isolation |
+| Bastion in Private | SSM Session Manager (no SSH) → no need for separate Mgmt tier |
+
+---
 
 ## Cost Considerations
 
 | Resource | Single NAT | HA (3 NAT) |
-|----------|-----------|------------|
+|----------|-----------|-----------|
 | NAT Gateway | ~$1/day | ~$3/day |
 | EIP | Free (attached) | Free (attached) |
 | Flow Logs | ~$0.50/GB ingested | ~$0.50/GB |
+
+---
 
 ## Related Modules
 
