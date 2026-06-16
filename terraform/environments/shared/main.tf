@@ -69,7 +69,6 @@ module "vpc_endpoints" {
   route_table_ids = concat(
     [module.network.public_route_table_id],
     values(module.network.private_route_table_ids),
-    values(module.network.mgmt_route_table_ids),
     [module.network.data_route_table_id]
   )
 

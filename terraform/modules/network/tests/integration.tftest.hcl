@@ -18,7 +18,7 @@
 #   detached yet. To avoid this:
 #     - Tests 1-6: single_nat_gateway = true (no NAT state change)
 #     - Test 7: HA NAT (scale UP only — safe)
-#     - Tests 8-10: flow logs + output validation (back to single)
+#     - Tests 8-9: flow logs + output validation (back to single)
 #   The final teardown does a full destroy which handles cleanup
 #   more reliably than mid-run scale-down.
 #--------------------------------------------------------------
@@ -93,11 +93,6 @@ run "subnets_distributed_across_azs" {
     error_message = "Expected 2 data subnets for 2-AZ mode"
   }
 
-  assert {
-    condition     = length(output.mgmt_subnet_ids) == 2
-    error_message = "Expected 2 mgmt subnets for 2-AZ mode"
-  }
-
   # All subnet IDs must be valid AWS IDs
   assert {
     condition = alltrue([
@@ -138,13 +133,11 @@ run "cidr_blocks_are_unique" {
     condition = length(distinct(concat(
       output.public_subnet_cidrs,
       output.private_subnet_cidrs,
-      output.data_subnet_cidrs,
-      output.mgmt_subnet_cidrs
+      output.data_subnet_cidrs
     ))) == length(concat(
       output.public_subnet_cidrs,
       output.private_subnet_cidrs,
-      output.data_subnet_cidrs,
-      output.mgmt_subnet_cidrs
+      output.data_subnet_cidrs
     ))
     error_message = "All subnet CIDRs must be unique (no overlaps)"
   }
@@ -155,8 +148,7 @@ run "cidr_blocks_are_unique" {
       for cidr in concat(
         output.public_subnet_cidrs,
         output.private_subnet_cidrs,
-        output.data_subnet_cidrs,
-        output.mgmt_subnet_cidrs
+        output.data_subnet_cidrs
       ) : substr(cidr, 0, 5) == "10.99"
     ])
     error_message = "All subnet CIDRs must be within VPC CIDR 10.99.0.0/16"
@@ -197,7 +189,7 @@ run "single_nat_creates_one_gateway" {
 #--------------------------------------------------------------
 # 5. Route Tables — Verify Correct Associations
 #    Security audit: data subnets must NOT have internet route.
-#    Cloud devops: private/mgmt subnets must route via NAT.
+#    Cloud devops: private subnets must route via NAT.
 #    NOTE: Runs BEFORE HA NAT test to avoid scale-down race.
 #--------------------------------------------------------------
 
@@ -225,12 +217,6 @@ run "route_table_structure_correct" {
   assert {
     condition     = length(output.private_route_table_ids) == 2
     error_message = "Must have 1 private route table per AZ"
-  }
-
-  # Mgmt route tables: 1 per AZ
-  assert {
-    condition     = length(output.mgmt_route_table_ids) == 2
-    error_message = "Must have 1 mgmt route table per AZ"
   }
 }
 

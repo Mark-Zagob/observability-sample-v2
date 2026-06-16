@@ -27,11 +27,6 @@ output "data_subnet_ids" {
   value       = module.network.data_subnet_ids
 }
 
-output "mgmt_subnet_ids" {
-  description = "Management subnet IDs"
-  value       = module.network.mgmt_subnet_ids
-}
-
 output "nat_public_ips" {
   description = "NAT Gateway public IPs"
   value       = module.network.nat_public_ips

@@ -9,3 +9,7 @@ skip-check:
   - CKV_AWS_130
   # Log retention managed by OPA policy (prod=90d, non-prod=30d) (PE-010)
   - CKV_AWS_338
+  # VPC Flow Logs: S3 destination is optional (enable_flow_logs_s3 flag).
+  # When disabled, only CloudWatch destination is active — acceptable for
+  # non-production / lab environments. S3 archival enabled in production. (PE-040)
+  - CKV2_AWS_11

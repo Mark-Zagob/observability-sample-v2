@@ -48,9 +48,14 @@ module "network" {
   # NAT Gateway: true = 1 NAT (cost-saving), false = 1 per AZ (HA)
   single_nat_gateway = var.single_nat_gateway
 
-  # VPC Flow Logs
-  enable_flow_logs         = true
-  flow_logs_retention_days = 7
+  # VPC Flow Logs — CloudWatch (short-term alerting)
+  enable_flow_logs                    = true
+  flow_logs_retention_days            = 7
+  flow_logs_cloudwatch_traffic_type   = "REJECT"
+
+  # VPC Flow Logs — S3 (long-term archive, uncomment when bucket exists)
+  # enable_flow_logs_s3    = true
+  # flow_logs_s3_bucket_arn = "arn:aws:s3:::my-flow-logs-bucket"
 
   common_tags = {
     Module = "network"
@@ -71,7 +76,6 @@ module "network" {
 #   route_table_ids = concat(
 #     [module.network.public_route_table_id],
 #     values(module.network.private_route_table_ids),
-#     values(module.network.mgmt_route_table_ids),
 #     [module.network.data_route_table_id]
 #   )
 #

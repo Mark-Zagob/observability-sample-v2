@@ -37,11 +37,6 @@ run "subnet_count_matches_az_count" {
     condition     = length(aws_subnet.data) == var.az_count
     error_message = "Data subnet count must equal az_count"
   }
-
-  assert {
-    condition     = length(aws_subnet.mgmt) == var.az_count
-    error_message = "Mgmt subnet count must equal az_count"
-  }
 }
 
 #--------------------------------------------------------------
@@ -96,27 +91,15 @@ run "public_cidrs_are_slash_24" {
   }
 }
 
-run "data_cidrs_are_slash_26" {
+run "data_cidrs_are_slash_24" {
   command = plan
 
   assert {
     condition = alltrue([
       for k, v in aws_subnet.data :
-      endswith(v.cidr_block, "/26")
+      endswith(v.cidr_block, "/24")
     ])
-    error_message = "All data subnets must be /26"
-  }
-}
-
-run "mgmt_cidrs_are_slash_27" {
-  command = plan
-
-  assert {
-    condition = alltrue([
-      for k, v in aws_subnet.mgmt :
-      endswith(v.cidr_block, "/27")
-    ])
-    error_message = "All mgmt subnets must be /27"
+    error_message = "All data subnets must be /24 (increased from /26 for IP headroom)"
   }
 }
 
@@ -149,14 +132,6 @@ run "all_subnets_within_vpc_cidr" {
       can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
     ])
     error_message = "All data subnets must be within VPC CIDR"
-  }
-
-  assert {
-    condition = alltrue([
-      for k, v in aws_subnet.mgmt :
-      can(cidrhost(v.cidr_block, 0)) && substr(cidrhost(v.cidr_block, 0), 0, 4) == substr(cidrhost("10.0.0.0/16", 0), 0, 4)
-    ])
-    error_message = "All mgmt subnets must be within VPC CIDR"
   }
 }
 
@@ -202,8 +177,8 @@ run "flow_logs_enabled_creates_resources" {
   }
 
   assert {
-    condition     = length(aws_flow_log.this) == 1
-    error_message = "Enabling flow logs must create exactly 1 flow log"
+    condition     = length(aws_flow_log.cloudwatch) == 1
+    error_message = "Enabling flow logs must create exactly 1 CloudWatch flow log"
   }
 
   assert {
@@ -225,8 +200,8 @@ run "flow_logs_disabled_creates_nothing" {
   }
 
   assert {
-    condition     = length(aws_flow_log.this) == 0
-    error_message = "Disabling flow logs must not create any flow log resources"
+    condition     = length(aws_flow_log.cloudwatch) == 0
+    error_message = "Disabling flow logs must not create any CloudWatch flow log"
   }
 
   assert {
