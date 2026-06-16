@@ -107,8 +107,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
   bucket = aws_s3_bucket.logs.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256" # Log bucket uses SSE-S3 (simpler)
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.state.arn  # ← Reuse CMK
     }
+    bucket_key_enabled = true  # ← Reduce KMS API calls
   }
 }
 
