@@ -8,7 +8,7 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.this.id
   cidr_block              = local.public_cidrs[each.key]
   availability_zone       = each.value
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = merge(var.common_tags, {
     Name                     = "${var.project_name}-public-${each.value}"

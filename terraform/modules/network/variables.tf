@@ -23,7 +23,16 @@ variable "aws_region" {
 }
 
 variable "vpc_cidr" {
-  description = "CIDR block for VPC (must be /16)"
+  description = <<-EOT
+    CIDR block for VPC (must be /16).
+    
+    CIDR Allocation Strategy:
+    - First /17: Private subnets (EKS pods, /20 per AZ)
+    - Second /17: Public, Data, Mgmt tiers (compact packing)
+    - 6 × /20 blocks reserved for future expansion
+    
+    For DR: Use non-overlapping /16 (e.g., 10.1.0.0/16)
+  EOT
   type        = string
   default     = "10.0.0.0/16"
 
