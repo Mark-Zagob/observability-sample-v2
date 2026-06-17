@@ -114,3 +114,21 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
+#--------------------------------------------------------------
+# Dynamic Tag Injection (For EKS, Compliance, or Cost Allocation)
+#--------------------------------------------------------------
+variable "additional_subnet_tags" {
+  description = "Map of subnet tier to additional tags. Used for EKS discovery (AWS Load Balancer Controller), compliance, or cost allocation."
+  type        = map(map(string))
+  default = {
+    public  = {}
+    private = {}
+    data    = {}
+  }
+  
+  validation {
+    condition     = alltrue([for tier in keys(var.additional_subnet_tags) : contains(["public", "private", "data"], tier)])
+    error_message = "Only 'public', 'private', and 'data' tiers are supported for additional tags."
+  }
+}

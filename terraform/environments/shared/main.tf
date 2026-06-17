@@ -50,6 +50,14 @@ module "network" {
   common_tags = {
     Module = "network"
   }
+  # additional_subnet_tags = {
+  #   public = {
+  #     "kubernetes.io/cluster/my-eks-cluster" = "shared"
+  #   }
+  #   private = {
+  #     "kubernetes.io/cluster/my-eks-cluster" = "shared"
+  #   }
+  # }
 }
 
 #--------------------------------------------------------------

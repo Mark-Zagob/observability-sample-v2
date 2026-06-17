@@ -10,11 +10,15 @@ resource "aws_subnet" "public" {
   availability_zone       = each.value
   map_public_ip_on_launch = false # ✅ Explicit control, no auto-assign
 
-  tags = merge(var.common_tags, {
-    Name                     = "${var.project_name}-public-${each.value}"
-    Tier                     = "public"
-    "kubernetes.io/role/elb" = "1"
-  })
+  tags = merge(
+    var.common_tags,
+    {
+      Name                     = "${var.project_name}-public-${each.value}"
+      Tier                     = "public"
+      "kubernetes.io/role/elb" = "1"
+    },
+    lookup(var.additional_subnet_tags, "public", {}) # <-- Inject tags động
+  )
 }
 
 #--------------------------------------------------------------
@@ -29,11 +33,15 @@ resource "aws_subnet" "private" {
   cidr_block        = local.private_cidrs[each.key]
   availability_zone = each.value
 
-  tags = merge(var.common_tags, {
-    Name                              = "${var.project_name}-private-${each.value}"
-    Tier                              = "private"
-    "kubernetes.io/role/internal-elb" = "1"
-  })
+  tags = merge(
+    var.common_tags,
+    {
+      Name                              = "${var.project_name}-private-${each.value}"
+      Tier                              = "private"
+      "kubernetes.io/role/internal-elb" = "1"
+    },
+    lookup(var.additional_subnet_tags, "private", {}) # <-- Inject tags động
+  )
 }
 
 #--------------------------------------------------------------
@@ -48,8 +56,12 @@ resource "aws_subnet" "data" {
   cidr_block        = local.data_cidrs[each.key]
   availability_zone = each.value
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-data-${each.value}"
-    Tier = "data"
-  })
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.project_name}-data-${each.value}"
+      Tier = "data"
+    },
+    lookup(var.additional_subnet_tags, "data", {}) # <-- Inject tags động
+  )
 }
