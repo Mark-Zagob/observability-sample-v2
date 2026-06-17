@@ -156,8 +156,7 @@ terraform plan 2>&1 | grep -B 2 -A 5 "flow_log"
 
 # Phase 2: Resource Deletion & Recovery (Medium Risk)
 
-> 🟡 **Risk: MEDIUM** — Resources are deleted but contain no persistent data.
-> Terraform re-creates them on next apply. Expect brief connectivity impact.
+> 🟡 **Risk: MEDIUM** — Resources are deleted but contain no persistent data. Terraform re-creates them on next apply. Expect brief connectivity impact.
 
 ---
 
@@ -168,6 +167,7 @@ terraform plan 2>&1 | grep -B 2 -A 5 "flow_log"
 **Hypothesis:** Deleting NAT Gateway causes private subnets to lose internet. Terraform recreates it.
 
 **Steady State:**
+
 ```bash
 NAT_ID=$(aws ec2 describe-nat-gateways \
   --filter "Name=state,Values=available" \
@@ -176,30 +176,50 @@ echo "NAT: $NAT_ID"
 ```
 
 **Inject:**
+
 ```bash
 aws ec2 delete-nat-gateway --nat-gateway-id $NAT_ID
 # Wait 30 seconds for state to change to "deleting"
 ```
 
 **Observe:**
+
 ```bash
-terraform plan 2>&1 | grep -c "will be created"
-# Question: How many resources? Just NAT or routes too?
-# Question: Does Terraform also recreate the EIP?
+# 1. Check Route Table status in AWS (Notice the "blackhole" state)
+aws ec2 describe-route-tables \
+  --filters "Name=tag:Name,Values=*rt-private*" \
+  --query "RouteTables[*].Routes[?DestinationCidrBlock=='0.0.0.0/0'].{State:State,NatGatewayId:NatGatewayId}" \
+  --output table
+
+# 2. Check EIP status (It is NOT deleted, just disassociated)
+aws ec2 describe-addresses --filters "Name=tag:Name,Values=*nat-eip*" \
+  --query "Addresses[*].{PublicIp:PublicIp,InstanceId:InstanceId,AssociationId:AssociationId}"
+
+# 3. Run Terraform Plan
+terraform plan 2>&1 | grep -E "(nat_gateway|route|eip)"
+# Question: Does Terraform want to recreate the EIP? (No, EIP still exists in AWS)
+# Question: What happens to the `aws_route`? (It will show `~ update in-place` to point to the NEW NAT Gateway ID)
 ```
 
 **Recover:**
+
 ```bash
 terraform apply
-# Time it: NAT Gateway creation takes ~2-3 minutes
+# Time it: NAT Gateway creation takes ~2-3 minutes. During this time, Private Subnet has NO internet.
 ```
 
 **Learn:**
-- [ ] Recovery time = ___ minutes. Acceptable for production?
-- [ ] With `single_nat_gateway = false` (3 NATs), would losing 1 NAT cause total outage? (No — other AZs unaffected)
-- [ ] What monitoring alert would detect "NAT Gateway deleted"?
+
+- [ ] **The Blackhole Effect:** When NAT GW is deleted out-of-band, AWS doesn't delete the route. It marks the route state as `blackhole`. Traffic from Private Subnet hits the route table and is silently dropped.
+- [ ] **EIP Orphan & FinOps:** Deleting NAT GW does NOT delete the EIP. The EIP becomes "unassociated". Since Feb 2024, AWS charges for ALL public IPv4 addresses (~$3.6/month). Terraform will re-associate the existing EIP with the new NAT GW, preventing EIP recreation cost.
+- [ ] **E-commerce Blast Radius:** What actually breaks?
+  - ECS/EKS nodes in Private Subnet cannot pull images from public DockerHub/ECR.
+  - Shipping Worker cannot call external Payment Gateways (Stripe/PayPal).
+  - Notification Worker cannot send webhooks/emails via external SMTP.
+- [ ] **Monitoring:** What CloudWatch metric detects this? (`NatGateway` → `ErrorPortAllocation` or `PacketsDropCount`).
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** Manual detection — engineer notices connectivity issues → checks NAT → runs `terraform apply`
 - [ ] **Team 10–20:** CloudWatch alarm on `NatGateway` → `ErrorPortAllocation` metric → PagerDuty → on-call runs apply
 - [ ] **Team 50+:** EventBridge rule detects `DeleteNatGateway` API call → Lambda triggers automated `terraform apply` or creates incident ticket
@@ -216,6 +236,7 @@ terraform apply
 > ⚠️ This will break NAT Gateway (it needs IGW). Expect cascade.
 
 **Inject:**
+
 ```bash
 IGW_ID=$(aws ec2 describe-internet-gateways \
   --filters "Name=attachment.vpc-id,Values=$(terraform output -raw vpc_id)" \
@@ -228,19 +249,33 @@ aws ec2 delete-internet-gateway --internet-gateway-id $IGW_ID
 ```
 
 **Observe:**
+
 ```bash
 terraform plan 2>&1 | grep -c "will be created"
 # Question: How many resources affected? (IGW + routes pointing to IGW)
 # Question: Is NAT Gateway also affected? (Yes — NAT needs IGW for internet)
 ```
 
-**Recover:** `terraform apply`
+**Recover:**
+
+```bash
+terraform apply
+```
 
 **Learn:**
-- [ ] Blast radius: IGW deletion affected ___ resources
-- [ ] This is why Phase 1 drift detection matters — catch before it cascades
+
+- [ ] **The Detach Prerequisite:** AWS API strictly forbids deleting an IGW while it is attached to a VPC. You MUST `detach-internet-gateway` first. Terraform handles this automatically via its dependency graph, but manual CLI requires 2 steps.
+- [ ] **Cascade Failure (The Domino Effect):**
+  1. IGW deleted → Public Subnet loses internet (ALB goes dark, Web UI unreachable).
+  2. NAT Gateway relies on IGW for its own outbound path → NAT loses internet.
+  3. Private Subnet relies on NAT → Private Subnet loses internet.
+  
+  *Result: Total VPC internet blackout (both Inbound and Outbound).*
+- [ ] **Blast Radius:** IGW deletion affects `aws_internet_gateway` + `aws_route.public_internet` (becomes blackhole) + implicitly breaks NAT Gateway.
+- [ ] **Security & Auditing:** This is a Severity-1 Incident. In Production, `ec2:DeleteInternetGateway` and `ec2:DetachInternetGateway` should be DENIED by SCP (Service Control Policy) for all IAM roles except the Break-Glass/Incident-Response role. CloudTrail is your only way to find out WHO ran the command.
 
 **Team-size perspective:**
+
 - [ ] **All teams:** IGW deletion = total VPC internet outage. This is a severity-1 incident at any team size.
 - [ ] **Team 10+:** AWS CloudTrail logs who called `DeleteInternetGateway` — essential for post-mortem
 - [ ] **Team 50+:** SCP (Service Control Policy) should DENY `ec2:DeleteInternetGateway` for all accounts except break-glass roles
@@ -254,6 +289,7 @@ terraform plan 2>&1 | grep -c "will be created"
 **Hypothesis:** Deleting the log group causes flow log delivery to fail silently. Historical logs are permanently lost.
 
 **Steady State:**
+
 ```bash
 LOG_GROUP="/vpc/flow-logs"
 aws logs describe-log-groups --log-group-name-prefix $LOG_GROUP \
@@ -261,6 +297,7 @@ aws logs describe-log-groups --log-group-name-prefix $LOG_GROUP \
 ```
 
 **Inject:**
+
 ```bash
 aws logs delete-log-group --log-group-name "$(aws logs describe-log-groups \
   --log-group-name-prefix '/vpc/flow-logs' \
@@ -268,6 +305,7 @@ aws logs delete-log-group --log-group-name "$(aws logs describe-log-groups \
 ```
 
 **Observe:**
+
 ```bash
 terraform plan 2>&1 | grep -C 3 "log_group"
 # Question: Does Terraform want to recreate just the log group or the flow log too?
@@ -275,6 +313,7 @@ terraform plan 2>&1 | grep -C 3 "log_group"
 ```
 
 **Verify dual-destination resilience:**
+
 ```bash
 # CloudWatch logs are GONE. But S3 flow logs should be INTACT:
 BUCKET=$(aws s3api list-buckets \
@@ -288,14 +327,31 @@ aws s3 ls s3://$BUCKET/AWSLogs/ --recursive | tail -5
 # This is the ROI of dual-destination architecture.
 ```
 
-**Recover:** `terraform apply`
+**Recover:**
+
+```bash
+terraform apply
+```
 
 **Learn:**
-- [ ] CloudWatch logs: **permanently lost**. S3 logs: **still intact** ← dual-destination proof
-- [ ] What CloudWatch alarm would detect "log group deleted"?
-- [ ] Should log groups have `prevent_destroy`? Trade-off?
+
+- [ ] **The Silent Failure:** When the Log Group is deleted, the `aws_flow_log` resource in AWS is NOT deleted. It remains "Active" but its delivery status becomes `FAILED` because the destination ARN no longer exists. Terraform will recreate the Log Group, but you lose all historical logs in CloudWatch.
+- [ ] **Dual-Destination ROI:** This exercise proves why we designed S3 as a secondary destination in `flow_logs.tf`. CloudWatch is ephemeral (for real-time alerting), S3 is immutable (for forensic/compliance). Hackers often delete CloudWatch logs to cover their tracks, but they rarely notice or cannot delete the centralized S3 log archive in a separate AWS Account.
+- [ ] **Production Best Practice (`prevent_destroy`):** In a real Production module, stateful resources (Log Groups, S3 Buckets, RDS) MUST have a lifecycle rule to prevent accidental deletion:
+
+```hcl
+  resource "aws_cloudwatch_log_group" "flow_logs" {
+    # ...
+    lifecycle {
+      prevent_destroy = true
+    }
+  }
+```
+
+  If this rule exists, `terraform destroy` or CLI deletion will be blocked, saving you from a resume-generating event.
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** CloudWatch loss is acceptable if S3 archive exists for forensics
 - [ ] **Team 10–20:** Alert on missing log groups via AWS Config rule `cloudwatch-log-group-encrypted`
 - [ ] **Team 50+:** Centralized log account — log groups are in a separate account that app teams cannot delete
@@ -306,13 +362,12 @@ aws s3 ls s3://$BUCKET/AWSLogs/ --recursive | tail -5
 
 **Time:** 10 min | **Interview Q:** Q34 (blast radius isolation)
 
-**Hypothesis:** `terraform destroy -target=module.network` will show cascade destruction
-of ALL dependent modules (vpc-endpoints, security, database) because they reference
-`module.network` outputs.
+**Hypothesis:** `terraform destroy -target=module.network` will show cascade destruction of ALL dependent modules (vpc-endpoints, security, database) because they reference `module.network` outputs.
 
 > ⚠️ **DO NOT APPLY** — observe plan output only.
 
 **Observe:**
+
 ```bash
 cd environments/shared
 
@@ -328,11 +383,17 @@ terraform plan -destroy -target=module.network 2>&1 | grep -c "will be destroyed
 ```
 
 **Learn:**
-- [ ] Blast radius of destroying network = ___ total resources (across all modules)
-- [ ] This proves why `logging-flow-logs` is a separate module — S3 bucket survives VPC destruction
-- [ ] `-target` is dangerous because it bypasses normal dependency safety
+
+- [ ] **The Dependency Graph:** Terraform reads `main.tf` and builds a DAG (Directed Acyclic Graph).
+  - `module.network` outputs `vpc_id` and `subnet_ids`.
+  - `module.security` and `module.database` consume these outputs.
+  - Therefore, destroying Network FORCES Terraform to destroy Security and Database to maintain a valid state.
+- [ ] **State Isolation Proof:** Notice that `module.logging-flow-logs` (S3 Bucket) is NOT in the destroy list. Why? Because Network depends on Logging (for the bucket ARN), not the other way around. The S3 bucket survives the VPC destruction. This is the core value of modular design and state isolation.
+- [ ] **The Danger of `-target`:** Using `terraform destroy -target=...` bypasses Terraform's safety checks. In CI/CD pipelines, `-target` should be strictly forbidden (via OPA/Sentinel policies) because it can leave the AWS environment in a half-broken, inconsistent state that the next `terraform apply` might struggle to reconcile.
+- [ ] **Architecture Insight:** If you want to destroy the VPC without destroying the Database (e.g., migrating to a new VPC), you CANNOT do it in one step. You must first decouple the dependencies, or use `terraform state mv` / `terraform state rm` to manage the lifecycle manually.
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** `-target` is acceptable for experienced engineers in non-prod
 - [ ] **Team 10–20:** CI/CD pipeline should REJECT any plan containing `-target` flag
 - [ ] **Team 50+:** Separate state files per module — destroying network state CANNOT cascade to database state
@@ -351,30 +412,43 @@ terraform plan -destroy -target=module.network 2>&1 | grep -c "will be destroyed
 
 **Time:** 15 min | **Interview Q:** Q36
 
+> ⚠️ **Architecture Catch:** Our `backend.tf` uses `use_lockfile = true` (Terraform 1.10+ S3 native locking). It does **NOT** use DynamoDB for locking anymore! Terraform creates a `.tflock` file in the S3 bucket.
+
 **Inject:**
+
 ```bash
-# Simulate stuck lock
-aws dynamodb put-item --table-name terraform-locks --item '{
-  "LockID": {"S": "obs-lab-terraform-state/shared/terraform.tfstate"},
-  "Info": {"S": "{\"ID\":\"fake-lock\",\"Operation\":\"OperationTypeApply\",\"Who\":\"ghost\"}"}
-}'
+# Simulate a stuck lock by uploading a fake .tflock file to S3
+STATE_BUCKET="obs-terraform-state-730335245469" # Adjust to your bucket
+cat <<EOF > /tmp/fake.tflock
+{"ID":"fake-lock-id-123","Operation":"OperationTypeApply","Who":"ghost","Version":"1.10.0"}
+EOF
+aws s3 cp /tmp/fake.tflock s3://$STATE_BUCKET/shared/terraform.tfstate.tflock
 ```
 
 **Observe:**
+
 ```bash
 cd environments/shared
-terraform plan  # Should fail with "Error acquiring state lock"
+terraform plan
+# Should fail with "Error acquiring state lock"
+# Notice the error message mentions the S3 .tflock file, not DynamoDB.
 ```
 
 **Recover:**
+
 ```bash
-terraform force-unlock fake-lock
-terraform plan  # Should work now
+# Option A: Use Terraform's built-in force-unlock (reads the ID from the error message)
+terraform force-unlock fake-lock-id-123
+
+# Option B: Manually delete the lock file via AWS CLI (if force-unlock fails)
+aws s3 rm s3://$STATE_BUCKET/shared/terraform.tfstate.tflock
 ```
 
 **Learn:**
-- [ ] What if a REAL apply is running when you force-unlock? (State corruption risk)
-- [ ] How to verify no one is running apply? (Check DynamoDB, ask team, CI/CD dashboard)
+
+- [ ] **S3 Native Locking vs DynamoDB:** TF 1.10+ replaced DynamoDB with S3 `.tflock` files. This reduces infrastructure footprint (no DynamoDB table to manage/pay for) and relies on S3's strong consistency.
+- [ ] What if a REAL apply is running when you force-unlock? (State corruption risk — two applies writing to state simultaneously, causing serial number conflicts).
+- [ ] How to verify no one is running apply? (Check CI/CD pipeline status, ask team, check S3 bucket CloudTrail events for `PutObject` on `.tflock`).
 
 ---
 
@@ -383,6 +457,7 @@ terraform plan  # Should work now
 **Time:** 20 min | **Interview Q:** Q39
 
 **Steady State:**
+
 ```bash
 cd environments/shared
 terraform state pull > /tmp/state-backup-ex32.json
@@ -390,32 +465,50 @@ terraform state list | grep "flow_log"
 ```
 
 **Inject:**
+
 ```bash
 terraform state rm 'module.network.aws_flow_log.cloudwatch["vpc"]'
 ```
 
 **Observe:**
+
 ```bash
 terraform plan 2>&1 | grep -C 3 "flow_log"
 # Terraform wants to CREATE a new flow log — but the old one still exists in AWS!
 ```
 
-**Recover:**
+**Recover (Approach A: Imperative CLI — The "Old" Way):**
+
 ```bash
 FLOW_LOG_ID=$(aws ec2 describe-flow-logs \
   --filter "Name=log-destination-type,Values=cloud-watch-logs" \
   --query "FlowLogs[0].FlowLogId" --output text)
-
 terraform import 'module.network.aws_flow_log.cloudwatch["vpc"]' $FLOW_LOG_ID
-terraform plan  # Should show "No changes"
+```
+
+**Recover (Approach B: Declarative `import` block — Terraform 1.5+ BEST PRACTICE):**
+
+```hcl
+# 1. Add this block temporarily to main.tf or a migration.tf file
+import {
+  to = module.network.aws_flow_log.cloudwatch["vpc"]
+  id = "fl-xxxxxxxxxxxxxxxxx" # Replace with actual Flow Log ID from AWS Console
+}
+# 2. Run terraform plan -> It will show "Import" instead of "Create"
+# 3. Run terraform apply -> State is updated safely
+# 4. DELETE the import block after successful apply.
 ```
 
 **Learn:**
-- [ ] What if you applied without importing? (Duplicate flow log created)
-- [ ] Some resources cannot be imported — which ones? (Check Terraform docs)
-- [ ] Prevention: who should have permission to run `terraform state rm`?
+
+- [ ] What if you applied without importing? (Terraform creates a DUPLICATE flow log. AWS allows multiple flow logs on the same VPC, causing duplicate logs in CloudWatch and doubling the cost).
+- [ ] **The GitOps Shift:** Why is the `import {}` block (Approach B) preferred over `terraform import` CLI for teams?
+  - *CLI:* Imperative "ClickOps" — changes state locally without a PR. Dev/Staging/Prod environments will drift.
+  - *Import Block:* Declarative, reviewable in Pull Request, and reproducible across all environments via CI/CD.
+- [ ] Prevention: who should have permission to run `terraform state rm`? (Only Break-Glass roles. Normal devs should use `import` blocks via PRs).
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** `state rm` is a known risk — all engineers should understand `import`. Document the recovery in a runbook.
 - [ ] **Team 10–20:** Restrict `state` subcommands to senior engineers. CI/CD pipeline is the only path to `apply` — no local state access.
 - [ ] **Team 50+:** State bucket has MFA Delete enabled. `state rm` requires break-glass IAM role with CloudTrail audit. Automated alert on any `state rm` operation.
@@ -427,6 +520,7 @@ terraform plan  # Should show "No changes"
 **Time:** 25 min | **Interview Q:** Q49
 
 **Steady State:**
+
 ```bash
 STATE_BUCKET="obs-lab-terraform-state"  # adjust to your bucket
 cd environments/shared
@@ -434,44 +528,50 @@ terraform state list | wc -l  # note count: ___
 ```
 
 **Inject:**
+
 ```bash
 echo '{"version":4,"resources":[]}' > /tmp/corrupt.json
 aws s3 cp /tmp/corrupt.json s3://$STATE_BUCKET/shared/terraform.tfstate
 ```
 
 **Observe:**
+
 ```bash
 terraform state list    # Empty! All resources "lost"
 terraform plan          # Wants to CREATE everything — DO NOT APPLY!
 ```
 
 **Recover:**
+
 ```bash
-# List state file versions
+# 1. List state file versions
 aws s3api list-object-versions --bucket $STATE_BUCKET \
   --prefix "shared/terraform.tfstate" \
   --query "Versions[].{Version:VersionId,Date:LastModified,Size:Size}" \
   --output table
 
-# Restore last good version
+# 2. Restore last good version
 GOOD_VERSION="<pick-version-before-corrupt>"
 aws s3api get-object --bucket $STATE_BUCKET \
   --key "shared/terraform.tfstate" \
   --version-id $GOOD_VERSION /tmp/good-state.json
 
+# 3. Push the restored state back to S3 (Overwrite the corrupted one)
 aws s3 cp /tmp/good-state.json s3://$STATE_BUCKET/shared/terraform.tfstate
 
-# Verify
+# 4. Verify
 terraform state list | wc -l  # Should match original count
 terraform plan                 # Should show "No changes"
 ```
 
 **Learn:**
-- [ ] What if S3 versioning was NOT enabled? (Unrecoverable without backup)
-- [ ] Should you add lifecycle rules to delete old state versions? (No — they are your backup)
-- [ ] How to detect state corruption in CI before damage? (Compare resource count)
+
+- [ ] **State Lineage & Serial:** How does Terraform know the restored file is valid? Every state file has a `lineage` (unique UUID generated on creation) and a `serial` (increments on every apply). If you manually edit a state file and push it, Terraform will reject it unless you use `terraform state push -force` to override the serial check. S3 Versioning bypasses this by restoring the exact original bytes.
+- [ ] What if S3 versioning was NOT enabled? (Unrecoverable without an external backup. This is why `bootstrap` module MUST enforce versioning).
+- [ ] Team 50+: Terraform Cloud/Enterprise has a "State Version History" UI with a 1-click "Rollback" button, eliminating the need for AWS CLI gymnastics.
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** S3 versioning is your only safety net. Recovery is manual — know the AWS CLI commands by heart.
 - [ ] **Team 10–20:** Automate state backup to a separate S3 bucket (cross-account). Add CI step: `terraform state list | wc -l` as a health check before every apply.
 - [ ] **Team 50+:** Terraform Cloud/Enterprise with built-in state versioning and rollback UI. State bucket has Object Lock (compliance mode) to prevent even admins from deleting versions.
@@ -482,7 +582,8 @@ terraform plan                 # Should show "No changes"
 
 **Time:** 15 min | **Interview Q:** Q12, Q35
 
-**Observe only (do not apply):**
+**Observe only** (do not apply):
+
 ```bash
 # Our CHANGELOG documents: aws_flow_log.this → aws_flow_log.cloudwatch
 # This was a rename. Without migration, Terraform would:
@@ -505,9 +606,9 @@ moved {
 ```
 
 **Learn:**
-- [ ] Why is `moved` block preferred over `state mv` for teams? (Declarative, reviewable in PR)
-- [ ] Can `moved` blocks be removed after apply? (Yes, after all environments have applied)
-- [ ] What about `count` → `for_each` migration? (Same technique, more complex addresses)
+
+- [ ] **Declarative vs Imperative:** `moved {}` block is Declarative (GitOps). `state mv` is Imperative (ClickOps).
+- [ ] In a CI/CD pipeline, if you use `state mv` locally, the pipeline's state will drift from your local state. The next `terraform apply` in CI/CD will try to recreate the resource and fail. `moved {}` block is checked into Git, so the CI/CD pipeline understands the rename and applies it safely to all environments.
 
 ---
 
@@ -515,13 +616,12 @@ moved {
 
 **Time:** 20 min | **Interview Q:** Q12, Q35, Q39
 
-> ⚠️ This exercise is based on a **real incident** that occurred in this project
-> when `module "logging"` was renamed to `module "logging-flow-logs"` without
-> proper state migration.
+> ⚠️ This exercise is based on a **real incident** that occurred in this project when `module "logging"` was renamed to `module "logging-flow-logs"` without proper state migration.
 
 **Background:**
 
 Renaming a module in `main.tf` without a `moved` block or `state mv` causes Terraform to:
+
 1. Schedule **destruction** of all resources under the old module name
 2. Schedule **creation** of all resources under the new module name
 3. If apply runs → S3 bucket destroyed + recreated → **all flow log archives permanently lost**
@@ -545,23 +645,28 @@ module "logging-flow-logs" {
 **What happened:**
 
 1. `terraform apply -target=module.network` → error:
-   ```
+
+```
    Error: creating S3 Bucket: BucketAlreadyOwnedByYou (409)
-   ```
+```
+
    State had resources at BOTH `module.logging` and `module.logging-flow-logs`.
 
 2. Adding a `moved` block failed:
-   ```
+
+```
    Warning: Unresolved resource instance address changes
    module.logging could not move to module.logging-flow-logs
-   ```
+```
+
    Because `module.logging-flow-logs` already had partial data sources in state.
 
 **Recovery (what we actually did):**
+
 ```bash
 # 1. Check state — confirm both module names exist
 terraform state list | grep -E "module\.(logging|logging-flow-logs)"
-# module.logging.aws_s3_bucket.flow_logs          ← old (has the real bucket)
+# module.logging.aws_s3_bucket.flow_logs                     ← old (has the real bucket)
 # module.logging-flow-logs.data.aws_caller_identity.current  ← new (only data sources)
 
 # 2. Remove old module entry from state (bucket stays in AWS)
@@ -578,36 +683,37 @@ terraform plan  # Should show no destroy/create for S3 bucket
 **Prevention — correct approaches:**
 
 ```hcl
-# Approach A: moved block (BEFORE any apply)
+# Approach A: moved block (BEFORE any apply - Safest for CI/CD)
 moved {
   from = module.logging
   to   = module.logging-flow-logs
 }
-# terraform plan → "module.logging has moved to module.logging-flow-logs"
 ```
 
 ```bash
-# Approach B: state mv (imperative, before changing code)
+# Approach B: state mv (Imperative - ONLY for local emergency fixes)
 terraform state mv 'module.logging' 'module.logging-flow-logs'
-# Then rename in main.tf
 ```
 
 **Learn:**
-- [ ] Why did `moved` block fail in our case? (Destination already had objects from a partial apply)
-- [ ] Which is safer: `moved` block or `state mv`? (`moved` — declarative, reviewable in PR, works across all environments)
-- [ ] What if the S3 bucket had been destroyed? (All flow log archives permanently lost — no recovery)
-- [ ] How to prevent blind `terraform apply` from destroying stateful resources?
+
+- [ ] Why did `moved` block fail in our real incident? (Because a partial `apply` had already created data sources under the NEW module name in the state file. Terraform's `moved` block refuses to overwrite existing state addresses to prevent data loss).
+- [ ] **The Golden Rule of State:** NEVER rename modules or resources directly in `main.tf` without preparing a migration strategy (`moved` block) FIRST.
+- [ ] Team 10-20: CI/CD pipeline should have an OPA/Sentinel policy that scans PRs for module renames and forces the author to include a corresponding `moved {}` block.
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** Always run `terraform plan` and **read the output** before apply. If you see `destroy` on S3/RDS → STOP.
 - [ ] **Team 10–20:** CI/CD pipeline should have a **guard rule**: block apply if plan contains `destroy` on stateful resources (S3 buckets, RDS instances, KMS keys). Example OPA rule:
-  ```rego
+
+```rego
   deny[msg] {
     input.resource_changes[_].type == "aws_s3_bucket"
     input.resource_changes[_].change.actions[_] == "delete"
     msg := "Destroying S3 bucket requires manual approval"
   }
-  ```
+```
+
 - [ ] **Team 50+:** Separate state files per module layer. Renaming a module in the "logging" state cannot cascade to "network" state. Combined with SCP denying `s3:DeleteBucket` except break-glass roles.
 
 ---
