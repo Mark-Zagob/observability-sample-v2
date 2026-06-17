@@ -39,20 +39,16 @@ modules/network/
 
 > 🟢 **Risk: LOW** — You only modify existing resources, Terraform restores them.
 
----
-
 ## Ex 1.1: Console Drift — Route Table Tag
 
 **File:** `routing.tf` | **Time:** 15 min | **Interview Q:** Q38
 
 **Hypothesis:** Modifying a route table tag via Console will be detected by `terraform plan`.
 
-> **Note:** This module uses separate `aws_route` resources (not inline `route {}` blocks
-> inside `aws_route_table`). This means Terraform only tracks routes it created — manually
-> added routes are invisible to `terraform plan`. Tag changes, however, are always detected
-> because `aws_route_table` itself is in state.
+> **Note:** This module uses separate `aws_route` resources (not inline `route {}` blocks inside `aws_route_table`). This means Terraform only tracks routes it created — manually added routes are invisible to `terraform plan`. Tag changes, however, are always detected because `aws_route_table` itself is in state.
 
 **Steady State:**
+
 ```bash
 # Find private route tables (tag Name contains "rt-private")
 aws ec2 describe-route-tables \
@@ -64,26 +60,36 @@ aws ec2 describe-route-tables \
 **Inject:** In AWS Console → VPC → Route Tables → find any `*-rt-private-*` route table → Tags tab → edit the `Name` tag → change value to `hacked-private-rt`
 
 **Observe:**
+
 ```bash
+# 1. Inspect what Terraform "thinks" the resource looks like in state (State Inspection)
+terraform state show 'module.network.aws_route_table.private["a"]'
+
+# 2. Run plan to detect drift (Using exact project filter to avoid noise)
 cd environments/shared
 terraform plan 2>&1 | grep -C 3 "route_table"
-# Question: Does Terraform detect the tag change?
-# Question: What symbol does it show — `~` (update) or `-/+` (replace)?
-# Question: Does the plan show ONLY the tag change, or other attributes too?
+
+# Question: Does Terraform detect the tag change? (Yes, tags are tracked in state)
+# Question: What symbol does it show — `~` (update) or `-/+` (replace)? (~ update in-place)
+# Question: If a Dev added a new VPC Peering route via Console, would Terraform delete it?
 ```
 
 **Recover:**
+
 ```bash
 terraform apply  # Terraform restores the original tag Name
 ```
 
 **Learn:**
+
 - [ ] Was the drift detected as `~` (update in-place)? (Yes — tags are always in-place)
-- [ ] Why doesn't Terraform detect manually added routes? (Because `aws_route` is a separate resource — only routes in state are tracked)
-- [ ] What if you used inline `route {}` blocks instead? (Then ALL route changes would be detected — but inline is not recommended for complex routing)
-- [ ] How to automate drift detection? (`terraform plan -detailed-exitcode` returns exit code 2 when drift exists)
+- [ ] **Disjoint vs Inline Management:** Why does this module use separate `aws_route` resources instead of inline `route {}` blocks inside `aws_route_table`?
+  - *Inline:* Terraform assumes "sole ownership". If someone adds a route via Console, Terraform will DELETE it on next apply.
+  - *Disjoint (`aws_route`):* Terraform only manages routes it created. It "coexists" with routes added by other teams (e.g., VPC Peering, Transit Gateway). This is the Enterprise Best Practice.
+- [ ] How to automate drift detection in CI/CD? (`terraform plan -detailed-exitcode` returns exit code 2 when drift exists, useful for GitHub Actions/GitLab CI pipelines).
 
 **Team-size perspective:**
+
 - [ ] **Team 3–5:** Who detects this drift? (Engineer notices during next `plan`)
 - [ ] **Team 10–20:** Scheduled drift detection in CI (e.g., nightly `plan` → Slack alert)
 - [ ] **Team 50+:** AWS Config rule + auto-remediation via SSM
@@ -99,6 +105,7 @@ terraform apply  # Terraform restores the original tag Name
 **Inject:** Console → VPC → select VPC → Actions → Edit DNS hostnames → **Disable**
 
 **Observe:**
+
 ```bash
 terraform plan 2>&1 | grep -C 3 "dns"
 # Question: What attribute changed?
@@ -106,7 +113,19 @@ terraform plan 2>&1 | grep -C 3 "dns"
 # (Hint: RDS endpoint resolution, VPC endpoint private DNS)
 ```
 
-**Recover:** `terraform apply`
+**Recover:**
+
+```bash
+terraform apply
+```
+
+**Learn:**
+
+- [ ] Was the drift detected as `~` (update in-place)? (Yes, VPC attributes update in-place)
+- [ ] **Downstream Impact (The Hidden Blast Radius):** Disabling DNS hostnames/support doesn't just break EC2 hostnames. It breaks the **AmazonProvidedDNS** (`169.254.169.253`).
+  - *AWS Managed Services:* RDS, MSK (Kafka), OpenSearch endpoints will fail to resolve.
+  - *VPC Interface Endpoints:* The "Private DNS" feature (which resolves `s3.ap-southeast-2.amazonaws.com` to the VPC endpoint's private IP) **REQUIRES** both DNS flags to be enabled. Disabling them forces S3/DynamoDB traffic out to the Public Internet (causing NAT Gateway data transfer costs or outright failures).
+  - *Internal AWS Calls:* Services like Secrets Manager, SSM, or CloudWatch Logs rely on internal DNS. The Shipping Worker will fail to fetch DB passwords or push logs.
 
 ---
 
@@ -116,7 +135,8 @@ terraform plan 2>&1 | grep -C 3 "dns"
 
 **Hypothesis:** You cannot change a flow log's traffic type in-place — AWS requires delete + recreate.
 
-**Observe only (no Console change needed):**
+**Observe only** (no Console change needed):
+
 ```bash
 # Change traffic type in main.tf
 # flow_logs_cloudwatch_traffic_type = "ALL"  (was "REJECT")
@@ -126,9 +146,11 @@ terraform plan 2>&1 | grep -B 2 -A 5 "flow_log"
 ```
 
 **Learn:**
-- [ ] Why does traffic_type change force replacement? (AWS API limitation)
-- [ ] What happens to log continuity during replacement? (gap of ~1-2 minutes)
-- [ ] How does the CHANGELOG document this as a breaking change?
+
+- [ ] **Immutable Infrastructure Attribute:** `traffic_type` is a *ForceNew* attribute. The AWS API does not support in-place updates for this specific field.
+- [ ] **The Compliance Gap (Forensic Blindspot):** When Terraform executes `-/+ forces replacement`, it **Deletes** the old flow log and **Creates** a new one. During that 1-2 minute gap, VPC Flow Logs are completely blind. If a breach occurs exactly then, you have no forensic data.
+- [ ] **Dual-Destination ROI:** This is exactly why Compliance Policies (SOC2, PCI-DSS) mandate Dual-Destination (CloudWatch + S3) as designed in our `flow_logs.tf`. S3 acts as an "immutable fallback" that is completely decoupled from the CloudWatch Log Group's lifecycle.
+- [ ] How does the CHANGELOG document this as a breaking change? (Any change to `traffic_type` requires a maintenance window acknowledgment due to the forensic blindspot).
 
 ---
 
