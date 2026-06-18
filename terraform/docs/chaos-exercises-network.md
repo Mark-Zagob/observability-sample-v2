@@ -718,6 +718,8 @@ terraform state mv 'module.logging' 'module.logging-flow-logs'
 
 ---
 
+---
+
 # Phase 4: KMS & Encryption (Advanced)
 
 > 🔴 **Risk: HIGH** — KMS key deletion can make encrypted data permanently unreadable.
@@ -725,49 +727,1304 @@ terraform state mv 'module.logging' 'module.logging-flow-logs'
 
 ---
 
-## Ex 4.1: KMS Key — Schedule Deletion & Cancel
+## Exercise 4.1: KMS Key — Schedule Deletion & Cancel
 
-**File:** `flow_logs.tf` (KMS section) | **Time:** 15 min
+**File:** `flow_logs.tf` (KMS section) | **Time:** 25 min | **Interview Q:** Q48, Q52
 
-**Steady State:**
+### Hypothesis
+
+Scheduling KMS key deletion will prevent CloudWatch Logs from decrypting flow logs, but:
+- S3 flow logs remain unaffected (different key in logging module)
+- Logs written BEFORE deletion remain readable (data key cached by CloudWatch)
+- New logs written AFTER deletion will fail to deliver
+
+### Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| Permanent data loss if 7-day window expires | Low | Critical | Set calendar reminder, use 14-day window |
+| Production logs become unreadable | Medium | High | Test in lab only, document recovery procedure |
+| Cross-region backup affected | Low | Medium | S3 logs use different key |
+| Terraform state drift | High | Low | Run `terraform plan` after cancel |
+
+### Steady State
+
 ```bash
+# 1. Find the KMS key ID
 KMS_KEY_ID=$(aws kms list-aliases \
   --query "Aliases[?contains(AliasName,'flow-logs')].TargetKeyId" --output text)
+echo "KMS Key ID: $KMS_KEY_ID"
+
+# 2. Verify key state and rotation
 aws kms describe-key --key-id $KMS_KEY_ID \
-  --query "KeyMetadata.{State:KeyState,Rotation:KeyRotationStatus}"
-```
+  --query "KeyMetadata.{State:KeyState,Rotation:EnabledKeyRotation,CreationDate:CreationDate}" \
+  --output table
 
-**Inject:**
-```bash
-aws kms schedule-key-deletion --key-id $KMS_KEY_ID --pending-window-in-days 7
-```
+# 3. Verify flow logs are currently working
+aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flow-logs" \
+  --query "logGroups[0].{Name:logGroupName,KmsKeyId:kmsKeyId,StoredBytes:storedBytes}" \
+  --output table
 
-**Observe:**
-```bash
-# Key state is now "PendingDeletion"
-aws kms describe-key --key-id $KMS_KEY_ID --query "KeyMetadata.KeyState"
-
-# Can you read encrypted flow logs?
-aws logs get-log-events --log-group-name "/vpc/flow-logs" \
+# 4. Check recent log events (should have data)
+aws logs get-log-events \
+  --log-group-name "/aws/vpc/flow-logs" \
   --log-stream-name "$(aws logs describe-log-streams \
-    --log-group-name '/vpc/flow-logs' \
+    --log-group-name '/aws/vpc/flow-logs' \
     --query 'logStreams[0].logStreamName' --output text)" \
-  --limit 1
-# Expected: AccessDeniedException
+  --limit 3 \
+  --query "events[*].{timestamp:timestamp,message:message}" \
+  --output table
 ```
 
-**Recover:**
+### Inject
+
 ```bash
-aws kms cancel-key-deletion --key-id $KMS_KEY_ID
-aws kms enable-key --key-id $KMS_KEY_ID
-# Logs should be readable again
+# Schedule key deletion with 7-day pending window
+aws kms schedule-key-deletion \
+  --key-id $KMS_KEY_ID \
+  --pending-window-in-days 7
+
+# Verify state changed
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.{State:KeyState,DeletionDate:DeletionDate}" \
+  --output table
+# Expected: State = "PendingDeletion", DeletionDate = 7 days from now
 ```
 
-**Learn:**
-- [ ] If the 7-day window expires → key is **permanently deleted**, logs unreadable forever
-- [ ] Why does our module set `deletion_window_in_days = 14`? (More time to catch mistakes)
-- [ ] What CloudWatch alarm would detect "KMS key pending deletion"?
-- [ ] S3 flow logs use a DIFFERENT KMS key (in logging module) — are they affected? (No)
+### Observe (Multiple Dimensions)
+
+**Dimension 1: Key State**
+
+```bash
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.KeyState" --output text
+# Expected: "PendingDeletion"
+
+# Question: Can you still use the key for encryption?
+aws kms encrypt --key-id $KMS_KEY_ID --plaintext "test" 2>&1 | head -5
+# Expected: KMSInvalidStateException - key is pending deletion
+```
+
+**Dimension 2: CloudWatch Logs Delivery**
+
+```bash
+# Wait 5 minutes for new flow log events to be generated
+sleep 300
+
+# Check if new logs are being delivered
+aws logs describe-log-streams \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --order-by LastEventTime --descending \
+  --query "logStreams[0:3].{Name:logStreamName,LastEvent:lastEventTimestamp}" \
+  --output table
+
+# Question: Are new log streams being created? (No — delivery fails silently)
+# Question: What does CloudWatch Flow Logs delivery status show?
+
+# Check delivery status via CloudWatch Metrics
+aws cloudwatch get-metric-statistics \
+  --namespace "AWS/Logs" \
+  --metric-name "DeliveryThrottling" \
+  --dimensions Name=LogGroupName,Value="/aws/vpc/flow-logs" \
+  --start-time $(date -u -v-10M +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 60 \
+  --statistics Sum \
+  --query "Datapoints[*].{Time:Timestamp,Throttled:Sum}" \
+  --output table
+```
+
+**Dimension 3: Historical Logs (The Surprising Part)**
+
+```bash
+# Try to read logs that were written BEFORE deletion
+aws logs get-log-events \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --log-stream-name "$(aws logs describe-log-streams \
+    --log-group-name '/aws/vpc/flow-logs' \
+    --order-by LastEventTime --descending \
+    --query 'logStreams[-1].logStreamName' --output text)" \
+  --limit 5 \
+  --query "events[*].message" \
+  --output text
+
+# Question: Can you still read old logs? (YES — CloudWatch caches data keys)
+# Question: Why? (Envelope encryption — data key was decrypted and cached in memory)
+```
+
+**Dimension 4: S3 Flow Logs (Different Key)**
+
+```bash
+# S3 flow logs use a DIFFERENT KMS key (managed by logging-flow-logs module)
+S3_BUCKET=$(aws s3api list-buckets \
+  --query "Buckets[?contains(Name,'flow-logs')].Name" --output text)
+
+# Check if S3 still receiving logs
+aws s3 ls s3://$S3_BUCKET/AWSLogs/ --recursive | tail -5
+
+# Question: Are S3 logs affected? (NO — different KMS key)
+# Question: This proves the value of dual-destination architecture
+```
+
+**Dimension 5: Terraform Drift**
+
+```bash
+cd environments/shared
+terraform plan 2>&1 | grep -C 5 "kms_key"
+
+# Question: Does Terraform detect the key is pending deletion?
+# (No — Terraform only tracks key existence, not state)
+# Question: How would you add drift detection for KMS key state?
+```
+
+### Recover
+
+```bash
+# Cancel the scheduled deletion
+aws kms cancel-key-deletion --key-id $KMS_KEY_ID
+
+# Re-enable the key (it's automatically disabled when scheduled for deletion)
+aws kms enable-key --key-id $KMS_KEY_ID
+
+# Verify state is back to normal
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.{State:KeyState,Enabled:Enabled}" \
+  --output table
+# Expected: State = "Enabled", Enabled = true
+
+# Wait 5-10 minutes for CloudWatch Logs to resume delivery
+sleep 600
+
+# Verify new logs are flowing again
+aws logs get-log-events \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --log-stream-name "$(aws logs describe-log-streams \
+    --log-group-name '/aws/vpc/flow-logs' \
+    --order-by LastEventTime --descending \
+    --query 'logStreams[0].logStreamName' --output text)" \
+  --limit 3 \
+  --query "events[*].{timestamp:timestamp,message:message}" \
+  --output table
+```
+
+### Learn
+
+- **The 7-Day Safety Net:** Why does AWS enforce a mandatory 7–30 day pending window? Prevents accidental/immediate data loss; gives you time to catch mistakes.
+- **Why our module uses 14 days:** `deletion_window_in_days = 14` in `flow_logs.tf` — more time to catch mistakes, aligns with monthly security review cycles.
+- **The Data Key Cache:** CloudWatch Logs caches decrypted data keys in memory for performance. This is why old logs remain readable even after key is pending deletion.
+- **The Silent Failure:** CloudWatch Flow Logs delivery status becomes `FAILED` but doesn't trigger an alert by default. You need a CloudWatch Metric Filter on the `DeliveryErrors` metric.
+- **Dual-Destination ROI:** S3 flow logs use a DIFFERENT KMS key (managed by `logging-flow-logs` module). This is exactly why dual-destination matters — if one key is compromised/deleted, the other destination survives.
+
+### E-commerce Blast Radius Analysis
+
+**What BREAKS:**
+- ❌ CloudWatch Flow Logs: new logs fail to deliver, historical logs eventually unreadable
+- ❌ CloudWatch Metric Filters: if based on flow logs, alerts stop firing
+- ❌ CloudWatch Alarms: if based on metric filters, alerts go silent
+
+**What DOES NOT break:**
+- ✅ S3 flow logs: different KMS key (logging module manages it)
+- ✅ Application traffic: VPC networking unaffected
+- ✅ Terraform state: state file uses separate KMS key (bootstrap module)
+- ✅ Secrets Manager: uses AWS-managed key or separate customer-managed key
+
+**The Hidden Dependency Chain:**
+
+```
+Flow Logs → KMS key → CloudWatch Log Group → Metric Filters → CloudWatch Alarms
+
+If KMS key deleted → Log Group fails → Metric Filters stop → Alarms go silent
+Result: You lose BOTH logs AND the alerts that would tell you about the problem!
+```
+
+### Team-size Perspective
+
+**Team 3–5:**
+- Manual monitoring — engineer checks key state during monthly security review
+- Recovery is manual: run `cancel-key-deletion` CLI command
+- No automated alerting on key state changes
+
+**Team 10–20:**
+- CloudWatch alarm on `kms:ScheduleKeyDeletion` CloudTrail event → PagerDuty
+- Runbook: "KMS Key Pending Deletion" with step-by-step recovery
+- Weekly automated audit: script lists all keys pending deletion
+
+**Team 50+:**
+- AWS Config rule `kms-key-not-scheduled-for-deletion` (custom rule)
+- SCP (Service Control Policy) `DENY kms:ScheduleKeyDeletion` for all non-break-glass roles
+- Cross-account KMS keys (shared services account) with additional approval workflow
+- Key rotation automation: new key created 30 days before old key expiry, gradual migration
+
+### Interview Q References
+
+- **Q48:** What happens when you delete a KMS key? What's the recovery window?
+- **Q52:** How does envelope encryption work? Why doesn't KMS encrypt data directly?
+- **Q55:** What's the difference between KMS Key Policy and IAM Policy?
+- **Q58:** How do you prevent accidental KMS key deletion in production?
+
+---
+
+## Exercise 4.2: Key Rotation Mechanics
+
+**File:** `flow_logs.tf` (KMS section) | **Time:** 20 min | **Interview Q:** Q53, Q54
+
+### Hypothesis
+
+Enabling automatic key rotation will:
+- Create a new key version every 365 days
+- Old encrypted data remains decryptable (old key versions retained)
+- New data encrypted with new key version
+- No application changes required (KMS handles transparently)
+
+### Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| Rotation fails silently | Low | High | CloudWatch alarm on rotation status |
+| Old key version accidentally deleted | Low | Critical | Key versions cannot be deleted (AWS design) |
+| Performance impact during rotation | Very Low | Low | Rotation is background operation |
+
+### Steady State
+
+```bash
+# 1. Check if key rotation is enabled
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.{KeyId:KeyId,EnabledKeyRotation:EnabledKeyRotation}" \
+  --output table
+
+# 2. List key material versions (should have 1 version initially)
+aws kms list-key-rotations --key-id $KMS_KEY_ID \
+  --query "Rotations[*].{RotationDate:RotationDate,RotationType:RotationType}" \
+  --output table
+
+# 3. Check key policy allows rotation (our module has enable_key_rotation = true)
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.Statement[] | select(.Sid=="EnableRootAccountAccess")'
+```
+
+### Inject
+
+```bash
+# Manually trigger key rotation (bypasses 365-day schedule)
+aws kms rotate-key-on-demand --key-id $KMS_KEY_ID
+
+# Wait 30 seconds for rotation to complete
+sleep 30
+
+# Verify new key version created
+aws kms list-key-rotations --key-id $KMS_KEY_ID \
+  --query "Rotations[*].{RotationDate:RotationDate,RotationType:RotationType}" \
+  --output table
+# Expected: 2 rotations — 1 automatic (if any) + 1 on-demand
+
+# Describe key to see current key material
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.{KeyId:KeyId,KeyState:KeyState,Origin:Origin}" \
+  --output table
+```
+
+### Observe (Multiple Dimensions)
+
+**Dimension 1: Encryption with New Key Version**
+
+```bash
+# Encrypt some data (will use new key version)
+ENCRYPTED=$(aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "test-data-after-rotation" \
+  --query "CiphertextBlob" --output text)
+
+# Decrypt it (KMS automatically uses correct key version)
+aws kms decrypt \
+  --ciphertext-blob fileb://<(echo $ENCRYPTED | base64 -d) \
+  --query "Plaintext" --output text | base64 -d
+# Expected: "test-data-after-rotation"
+
+# Question: Did you need to specify which key version to use? (NO — KMS tracks automatically)
+```
+
+**Dimension 2: Old Data Still Decryptable**
+
+```bash
+# The flow logs encrypted BEFORE rotation should still be readable
+aws logs get-log-events \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --log-stream-name "$(aws logs describe-log-streams \
+    --log-group-name '/aws/vpc/flow-logs' \
+    --order-by LastEventTime --descending \
+    --query 'logStreams[-1].logStreamName' --output text)" \
+  --limit 5 \
+  --query "events[*].message" \
+  --output text
+
+# Question: Can you still read old logs? (YES — old key version retained)
+# Question: How does KMS know which version to use? (Encrypted data key contains version ID)
+```
+
+**Dimension 3: Key Version Metadata**
+
+```bash
+# List all key versions with metadata
+aws kms list-key-rotations --key-id $KMS_KEY_ID \
+  --query "Rotations[*].{RotationDate:RotationDate,RotationType:RotationType,KeyId:KeyId}" \
+  --output table
+
+# Question: Can you delete old key versions? (NO — AWS retains all versions indefinitely)
+# Question: Why? (Compliance — you must be able to decrypt historical data)
+```
+
+**Dimension 4: CloudWatch Logs Behavior**
+
+```bash
+# Check if CloudWatch Logs seamlessly uses new key version
+# (It should — CloudWatch automatically re-encrypts data keys)
+
+# Wait 5 minutes for new logs to be generated with new key version
+sleep 300
+
+aws logs get-log-events \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --log-stream-name "$(aws logs describe-log-streams \
+    --log-group-name '/aws/vpc/flow-logs' \
+    --order-by LastEventTime --descending \
+    --query 'logStreams[0].logStreamName' --output text)" \
+  --limit 3 \
+  --query "events[*].{timestamp:timestamp,message:message}" \
+  --output table
+
+# Question: Are new logs being encrypted with new key version? (YES — transparent to CloudWatch)
+```
+
+### Recover
+
+```bash
+# No recovery needed — rotation is non-destructive
+# But let's verify everything is working normally
+
+# Check key state
+aws kms describe-key --key-id $KMS_KEY_ID \
+  --query "KeyMetadata.KeyState" --output text
+# Expected: "Enabled"
+
+# Verify flow logs still working
+aws logs describe-log-streams \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --order-by LastEventTime --descending \
+  --query "logStreams[0:3].{Name:logStreamName,LastEvent:lastEventTimestamp}" \
+  --output table
+```
+
+### Learn
+
+- **Transparent Rotation:** AWS automatically rotates the backing key material. The Key ID (ARN) stays the same — only the internal key material changes. Applications don't need to update their configuration.
+- **Version Retention:** All key versions are retained indefinitely. You cannot delete old versions. This ensures you can always decrypt historical data.
+- **On-Demand vs Automatic:** `rotate-key-on-demand` is useful for compliance audits or security incidents. Automatic rotation happens every 365 days.
+- **Cost Impact:** No additional cost for key versions. You pay per KMS key ($1/month) regardless of how many versions exist.
+- **Compliance Value:** Many compliance frameworks (PCI-DSS, SOC2, HIPAA) require key rotation. AWS KMS makes this trivial — just enable the flag.
+
+### Production Best Practice
+
+```hcl
+# In flow_logs.tf — our module already does this correctly
+resource "aws_kms_key" "flow_logs" {
+  # ...
+  enable_key_rotation     = true  # ✅ Automatic rotation every 365 days
+  deletion_window_in_days = 14    # ✅ Safety net for accidental deletion
+}
+```
+
+**What about custom rotation schedules?**
+- AWS KMS only supports 365-day automatic rotation
+- If you need 90-day rotation (some compliance frameworks), you must: create a new KMS key manually every 90 days, update resource configurations (CloudWatch Log Group, S3 bucket, etc.) to use the new key, and keep the old key for historical decryption
+- This is complex — most teams accept 365-day rotation
+
+### Team-size Perspective
+
+**Team 3–5:**
+- Enable automatic rotation and forget about it
+- Annual review: check that rotation is enabled for all keys
+- Document: "All KMS keys must have `enable_key_rotation = true`"
+
+**Team 10–20:**
+- AWS Config rule `kms-key-rotation-enabled` (managed rule) — alerts on keys without rotation
+- Quarterly audit: script lists all keys and their rotation status
+- Runbook: "Manual Key Rotation" for compliance requirements
+
+**Team 50+:**
+- Custom key management service that creates new keys every 90 days
+- Automated migration: new key created → resources updated → old key deprecated
+- Cross-account key rotation coordination (shared services account)
+- Compliance dashboard: key age, rotation status, upcoming rotation dates
+
+### Interview Q References
+
+- **Q53:** How does KMS key rotation work? Do applications need to change?
+- **Q54:** Can you delete old KMS key versions? Why or why not?
+- **Q56:** What's the difference between automatic and on-demand key rotation?
+
+---
+
+## Exercise 4.3: Key Policy Debugging (Least Privilege)
+
+**File:** `flow_logs.tf` (KMS policy section) | **Time:** 30 min | **Interview Q:** Q55, Q57, Q59
+
+### Hypothesis
+
+Modifying the KMS key policy to remove the CloudWatch Logs service principal will:
+- Cause flow log delivery to fail with `AccessDeniedException`
+- IAM role permissions are irrelevant if KMS key policy doesn't allow the service
+- This is the #1 KMS misconfiguration in production
+
+### Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| Flow logs stop delivering | High | Medium | Quick recovery (restore policy) |
+| Hard to debug (silent failure) | High | High | Document troubleshooting steps |
+| Terraform drift | High | Low | Run `terraform apply` to restore |
+
+### Steady State
+
+```bash
+# 1. View current KMS key policy
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.'
+
+# 2. Identify the CloudWatch Logs statement
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.Statement[] | select(.Sid=="AllowCloudWatchLogs")'
+
+# Expected output:
+# {
+#   "Sid": "AllowCloudWatchLogs",
+#   "Effect": "Allow",
+#   "Principal": {
+#     "Service": "logs.ap-southeast-2.amazonaws.com"
+#   },
+#   "Action": [
+#     "kms:Encrypt*",
+#     "kms:Decrypt*",
+#     "kms:ReEncrypt*",
+#     "kms:GenerateDataKey*",
+#     "kms:Describe*"
+#   ],
+#   "Resource": "*",
+#   "Condition": {
+#     "ArnLike": {
+#       "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:ap-southeast-2:ACCOUNT_ID:log-group:/aws/vpc/flow-logs/*"
+#     }
+#   }
+# }
+
+# 3. Verify flow logs are currently working
+aws logs describe-log-streams \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --order-by LastEventTime --descending \
+  --query "logStreams[0].{Name:logStreamName,LastEvent:lastEventTimestamp}" \
+  --output table
+```
+
+### Inject
+
+```bash
+# Create a modified policy that REMOVES the CloudWatch Logs statement
+cat > /tmp/broken-kms-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccountAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+
+# Apply the broken policy (removes CloudWatch Logs access)
+aws kms put-key-policy \
+  --key-id $KMS_KEY_ID \
+  --policy-name default \
+  --policy file:///tmp/broken-kms-policy.json
+
+# Verify policy changed
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.Statement | length'
+# Expected: 1 (only root account access)
+
+# Wait 5 minutes for flow log delivery to fail
+sleep 300
+```
+
+### Observe (Multiple Dimensions)
+
+**Dimension 1: Flow Log Delivery Failure**
+
+```bash
+# Check if new logs are being delivered (they shouldn't be)
+aws logs describe-log-streams \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --order-by LastEventTime --descending \
+  --query "logStreams[0:3].{Name:logStreamName,LastEvent:lastEventTimestamp}" \
+  --output table
+
+# Question: Are new log streams being created? (NO — delivery fails)
+# Question: What error does CloudWatch Flow Logs see?
+
+# Check CloudWatch Metrics for delivery errors
+aws cloudwatch get-metric-statistics \
+  --namespace "AWS/Logs" \
+  --metric-name "IncomingLogEvents" \
+  --dimensions Name=LogGroupName,Value="/aws/vpc/flow-logs" \
+  --start-time $(date -u -v-10M +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 60 \
+  --statistics Sum \
+  --query "Datapoints[*].{Time:Timestamp,Events:Sum}" \
+  --output table
+# Expected: Sum = 0 or very low (no new logs)
+```
+
+**Dimension 2: Manual Encryption Test**
+
+```bash
+# Try to encrypt data using the KMS key (as root account — should work)
+aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "test-manual-encryption" \
+  --query "CiphertextBlob" --output text
+
+# Question: Does manual encryption work? (YES — root account has kms:* access)
+# Question: Why does manual work but CloudWatch fails? (CloudWatch uses service principal, not IAM role)
+```
+
+**Dimension 3: CloudTrail Audit**
+
+```bash
+# Check CloudTrail for KMS access denied errors
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=Decrypt \
+  --start-time $(date -u -v-10M +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --query "Events[?contains(CloudTrailEvent,'AccessDenied')].{Time:EventTime,User:Username,Error:CloudTrailEvent}" \
+  --output table | head -20
+
+# Question: Do you see AccessDenied errors from logs.amazonaws.com? (YES)
+# Question: What's the error message? ("User arn:aws:sts::ACCOUNT_ID:assumed-role/... is not authorized to perform: kms:Decrypt")
+```
+
+**Dimension 4: IAM vs KMS Policy (The Dual Gate)**
+
+```bash
+# Check the IAM role that CloudWatch Flow Logs uses
+FLOW_LOGS_ROLE=$(aws iam list-roles \
+  --query "Roles[?contains(RoleName,'vpc-flow-logs')].RoleName" --output text)
+
+# View the IAM policy attached to this role
+aws iam get-role-policy \
+  --role-name $FLOW_LOGS_ROLE \
+  --policy-name "$(aws iam list-role-policies --role-name $FLOW_LOGS_ROLE --query 'PolicyNames[0]' --output text)" \
+  --query "PolicyDocument" --output text | jq '.'
+
+# Question: Does the IAM role have kms:Decrypt permission? (YES — in flow_logs.tf)
+# Question: Why doesn't it work then? (KMS key policy doesn't allow logs.amazonaws.com service principal)
+# Question: This proves BOTH gates must pass — IAM policy AND KMS key policy
+```
+
+### Recover
+
+```bash
+# Restore the correct KMS key policy
+cat > /tmp/fixed-kms-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccountAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCloudWatchLogs",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "logs.$(aws configure get region).amazonaws.com"
+      },
+      "Action": [
+        "kms:Encrypt*",
+        "kms:Decrypt*",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:Describe*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnLike": {
+          "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:$(aws configure get region):$(aws sts get-caller-identity --query Account --output text):log-group:/aws/vpc/flow-logs/*"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws kms put-key-policy \
+  --key-id $KMS_KEY_ID \
+  --policy-name default \
+  --policy file:///tmp/fixed-kms-policy.json
+
+# Verify policy restored
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.Statement | length'
+# Expected: 2 statements
+
+# Wait 5 minutes for flow logs to resume
+sleep 300
+
+# Verify logs flowing again
+aws logs describe-log-streams \
+  --log-group-name "/aws/vpc/flow-logs" \
+  --order-by LastEventTime --descending \
+  --query "logStreams[0:3].{Name:logStreamName,LastEvent:lastEventTimestamp}" \
+  --output table
+# Expected: Recent timestamps
+
+# Run terraform apply to sync state
+cd environments/shared
+terraform apply -auto-approve
+```
+
+### Learn
+
+- **The Dual Gate:** Access to KMS key requires BOTH IAM policy (attached to role) AND KMS key policy (attached to key) to allow the action. Missing either = Access Denied.
+- **Service Principals:** AWS services (CloudWatch Logs, S3, RDS) use service principals like `logs.region.amazonaws.com`, NOT IAM roles. You must explicitly allow these in the KMS key policy.
+- **Condition Keys:** The `ArnLike` condition restricts which log groups can use this key. This is least privilege — prevents other log groups from using this key.
+- **Silent Failure:** CloudWatch Flow Logs doesn't alert you when delivery fails. You need to monitor the `IncomingLogEvents` metric or CloudTrail `AccessDenied` events.
+- **Terraform Best Practice:** Always define KMS key policy in Terraform (like `flow_logs.tf` does). Manual policy changes cause drift and are hard to debug.
+
+### Production Debugging Checklist
+
+When you see `AccessDeniedException` for KMS:
+
+1. **Check KMS Key Policy** — does it allow the service principal or IAM role?
+2. **Check IAM Policy** — does the role have `kms:*` permissions?
+3. **Check Condition Keys** — are there restrictive conditions (like `ArnLike`)?
+4. **Check CloudTrail** — what's the exact error message?
+5. **Check Key State** — is the key enabled? Not pending deletion?
+6. **Check Key Rotation** — did rotation just happen? (Rare, but possible timing issue)
+
+### Team-size Perspective
+
+**Team 3–5:**
+- Document KMS key policy structure in runbook
+- Manual debugging: check CloudTrail, check key policy
+- Use Terraform to manage all KMS policies (no manual changes)
+
+**Team 10–20:**
+- AWS Config rule `kms-key-policy-has-required-statements` (custom rule)
+- CloudWatch alarm on `AccessDenied` CloudTrail events for KMS
+- Runbook: "KMS Access Denied Troubleshooting" with step-by-step debugging
+
+**Team 50+:**
+- Centralized KMS key management in shared services account
+- Automated policy validation: CI/CD pipeline checks KMS policies before apply
+- Cross-account KMS access with approval workflow
+- Policy-as-code: OPA/Sentinel rules validate KMS policies in Terraform plans
+
+### Interview Q References
+
+- **Q55:** What's the difference between KMS Key Policy and IAM Policy?
+- **Q57:** How do you debug KMS AccessDenied errors?
+- **Q59:** What are KMS condition keys? Why use them?
+
+---
+
+## Exercise 4.4: Cross-Account KMS Access (Multi-Account Patterns)
+
+**File:** New exercise (no existing code) | **Time:** 35 min | **Interview Q:** Q60, Q61
+
+### Hypothesis
+
+In production, KMS keys often live in a "shared services" account, and application accounts need cross-account access. This requires:
+- KMS key policy allowing the external account
+- IAM role in the application account with `kms:*` permissions
+- Both gates must pass (KMS policy + IAM policy)
+
+### Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| Misconfigured cross-account access | High | High | Use condition keys to restrict |
+| Overly permissive policy | Medium | High | Least privilege with conditions |
+| Hard to audit | Medium | Medium | CloudTrail cross-account logging |
+
+### Steady State
+
+```bash
+# This exercise simulates cross-account access
+# In real production, you'd have:
+# - Account A (Shared Services): KMS key lives here
+# - Account B (Application): Needs to use the key
+
+# For this lab, we'll use the same account but simulate cross-account
+# by creating a separate IAM role
+
+# 1. Get current account ID
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo "Current Account: $ACCOUNT_ID"
+
+# 2. Create a new IAM role (simulating "application account" role)
+cat > /tmp/trust-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+aws iam create-role \
+  --role-name cross-account-kms-test \
+  --assume-role-policy-document file:///tmp/trust-policy.json \
+  --query "Role.Arn" --output text
+
+# 3. Attach KMS permissions to the role
+cat > /tmp/kms-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:$(aws configure get region):$ACCOUNT_ID:key/$KMS_KEY_ID"
+    }
+  ]
+}
+EOF
+
+aws iam put-role-policy \
+  --role-name cross-account-kms-test \
+  --policy-name KMSAccess \
+  --policy-document file:///tmp/kms-policy.json
+
+# 4. Verify role created
+aws iam get-role --role-name cross-account-kms-test \
+  --query "Role.Arn" --output text
+```
+
+### Inject
+
+```bash
+# Step 1: Try to use the KMS key with the new role (will fail)
+ROLE_ARN=$(aws iam get-role --role-name cross-account-kms-test --query "Role.Arn" --output text)
+
+# Assume the role
+CREDS=$(aws sts assume-role \
+  --role-arn $ROLE_ARN \
+  --role-session-name cross-account-test \
+  --query "Credentials" --output json)
+
+# Extract credentials
+ACCESS_KEY=$(echo $CREDS | jq -r '.AccessKeyId')
+SECRET_KEY=$(echo $CREDS | jq -r '.SecretAccessKey')
+SESSION_TOKEN=$(echo $CREDS | jq -r '.SessionToken')
+
+# Try to encrypt with assumed role (will fail — KMS policy doesn't allow this role)
+AWS_ACCESS_KEY_ID=$ACCESS_KEY \
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
+AWS_SESSION_TOKEN=$SESSION_TOKEN \
+aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "cross-account-test" \
+  --query "CiphertextBlob" --output text 2>&1 | head -5
+# Expected: AccessDeniedException — KMS key policy doesn't allow this role
+```
+
+### Observe (Multiple Dimensions)
+
+**Dimension 1: Access Denied (Expected)**
+
+```bash
+# The encryption failed because KMS key policy doesn't allow the role
+# Check CloudTrail for the error
+
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=Encrypt \
+  --start-time $(date -u -v-5M +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --query "Events[?contains(CloudTrailEvent,'cross-account-test')].{Time:EventTime,Error:CloudTrailEvent}" \
+  --output table | head -10
+
+# Question: What's the error message? ("The ciphertext refers to a customer master key that does not exist, does not exist in this region, or you are not allowed to access.")
+# Question: Why is it so vague? (Security — AWS doesn't reveal whether key exists or you lack permission)
+```
+
+**Dimension 2: Fix KMS Key Policy**
+
+```bash
+# Update KMS key policy to allow the role
+cat > /tmp/cross-account-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccountAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCloudWatchLogs",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "logs.$(aws configure get region).amazonaws.com"
+      },
+      "Action": [
+        "kms:Encrypt*",
+        "kms:Decrypt*",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:Describe*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnLike": {
+          "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:$(aws configure get region):$ACCOUNT_ID:log-group:/aws/vpc/flow-logs/*"
+        }
+      }
+    },
+    {
+      "Sid": "AllowCrossAccountRole",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:role/cross-account-kms-test"
+      },
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+
+aws kms put-key-policy \
+  --key-id $KMS_KEY_ID \
+  --policy-name default \
+  --policy file:///tmp/cross-account-policy.json
+
+# Verify policy updated
+aws kms get-key-policy --key-id $KMS_KEY_ID --policy-name default \
+  --query "Policy" --output text | jq '.Statement | length'
+# Expected: 3 statements
+```
+
+**Dimension 3: Success (After Fix)**
+
+```bash
+# Try again with assumed role (should work now)
+AWS_ACCESS_KEY_ID=$ACCESS_KEY \
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
+AWS_SESSION_TOKEN=$SESSION_TOKEN \
+aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "cross-account-test-after-fix" \
+  --query "CiphertextBlob" --output text
+
+# Question: Does it work now? (YES — both gates pass)
+# Question: What changed? (KMS key policy now allows the role)
+```
+
+**Dimension 4: Condition Keys (Least Privilege)**
+
+```bash
+# Add a condition to restrict what the role can encrypt
+cat > /tmp/condition-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccountAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCloudWatchLogs",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "logs.$(aws configure get region).amazonaws.com"
+      },
+      "Action": [
+        "kms:Encrypt*",
+        "kms:Decrypt*",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:Describe*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnLike": {
+          "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:$(aws configure get region):$ACCOUNT_ID:log-group:/aws/vpc/flow-logs/*"
+        }
+      }
+    },
+    {
+      "Sid": "AllowCrossAccountRole",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:role/cross-account-kms-test"
+      },
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:purpose": "testing"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws kms put-key-policy \
+  --key-id $KMS_KEY_ID \
+  --policy-name default \
+  --policy file:///tmp/condition-policy.json
+
+# Try to encrypt WITHOUT the required encryption context (will fail)
+AWS_ACCESS_KEY_ID=$ACCESS_KEY \
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
+AWS_SESSION_TOKEN=$SESSION_TOKEN \
+aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "test-without-context" \
+  --query "CiphertextBlob" --output text 2>&1 | head -5
+# Expected: AccessDeniedException
+
+# Try to encrypt WITH the required encryption context (should work)
+AWS_ACCESS_KEY_ID=$ACCESS_KEY \
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
+AWS_SESSION_TOKEN=$SESSION_TOKEN \
+aws kms encrypt \
+  --key-id $KMS_KEY_ID \
+  --plaintext "test-with-context" \
+  --encryption-context purpose=testing \
+  --query "CiphertextBlob" --output text
+
+# Question: Why use encryption context? (Auditing + additional security layer)
+# Question: What happens if you lose the encryption context? (Cannot decrypt — it's part of the ciphertext)
+```
+
+### Recover
+
+```bash
+# Restore original KMS key policy (from flow_logs.tf)
+cat > /tmp/original-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccountAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCloudWatchLogs",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "logs.$(aws configure get region).amazonaws.com"
+      },
+      "Action": [
+        "kms:Encrypt*",
+        "kms:Decrypt*",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:Describe*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnLike": {
+          "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:$(aws configure get region):$ACCOUNT_ID:log-group:/aws/vpc/flow-logs/*"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws kms put-key-policy \
+  --key-id $KMS_KEY_ID \
+  --policy-name default \
+  --policy file:///tmp/original-policy.json
+
+# Delete the test IAM role
+aws iam delete-role-policy --role-name cross-account-kms-test --policy-name KMSAccess
+aws iam delete-role --role-name cross-account-kms-test
+
+# Verify cleanup
+aws iam get-role --role-name cross-account-kms-test 2>&1 | head -3
+# Expected: NoSuchEntity error
+
+# Run terraform apply to sync state
+cd environments/shared
+terraform apply -auto-approve
+```
+
+### Learn
+
+- **Cross-Account Pattern:** In production, KMS keys often live in a "shared services" account. Application accounts need cross-account access. This requires BOTH KMS key policy (allowing external account) AND IAM policy (in application account).
+- **Condition Keys:** Use `kms:EncryptionContext:*` to restrict what can be encrypted. This adds an additional security layer and enables auditing.
+- **Encryption Context:** Key-value pairs that are cryptographically bound to the ciphertext. You must provide the same context to decrypt. Useful for auditing (CloudTrail logs the context).
+- **Least Privilege:** Don't give `kms:*` to cross-account roles. Give only `kms:Encrypt`, `kms:Decrypt`, `kms:DescribeKey` as needed.
+- **Audit Trail:** CloudTrail logs cross-account KMS access. Use this for security audits and incident response.
+
+### Production Architecture (Multi-Account)
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  Shared Services Account                                    │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  KMS Key (arn:aws:kms:...:key/abc123)                 │  │
+│  │  Key Policy:                                          │  │
+│  │    - Allow root account                               │  │
+│  │    - Allow Account B (arn:aws:iam::ACCOUNT_B:root)    │  │
+│  │    - Allow Account C (arn:aws:iam::ACCOUNT_C:root)    │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                          ▲
+                          │ Cross-account access
+                          │
+┌─────────────────────────┴───────────────────────────────────┐
+│  Account B (Application)                                    │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  IAM Role (arn:aws:iam::ACCOUNT_B:role/app-role)      │  │
+│  │  IAM Policy:                                          │  │
+│  │    - kms:Encrypt on arn:aws:kms:...:key/abc123        │  │
+│  │    - kms:Decrypt on arn:aws:kms:...:key/abc123        │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Application uses KMS key for:                              │
+│    - Encrypting S3 buckets                                  │
+│    - Encrypting RDS databases                                │
+│    - Encrypting Secrets Manager secrets                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Team-size Perspective
+
+**Team 3–5:**
+- Single AWS account — no cross-account KMS needed
+- All KMS keys in same account as applications
+- Simple key policies (root account + service principals)
+
+**Team 10–20:**
+- 2–3 AWS accounts (dev, staging, prod)
+- KMS keys per account (no cross-account)
+- Document cross-account patterns for future expansion
+
+**Team 50+:**
+- Multi-account architecture (10+ accounts)
+- Centralized KMS key management in shared services account
+- Cross-account KMS access with approval workflow
+- Automated key policy validation in CI/CD
+- Compliance dashboard: cross-account access audit
+
+### Interview Q References
+
+- **Q60:** How does cross-account KMS access work?
+- **Q61:** What are KMS encryption contexts? Why use them?
+- **Q62:** How do you audit cross-account KMS usage?
+
+---
+
+## 🚨 Real Incident Case Study: "The Silent Log Apocalypse"
+
+### Incident Summary
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-15 |
+| **Duration** | 48 hours undetected |
+| **Severity** | High (Compliance violation) |
+| **Impact** | 48 hours of VPC flow logs permanently lost |
+
+### Timeline
+
+**Day 0, 14:30 UTC**
+Security engineer manually schedules KMS key deletion via AWS Console. Intention: clean up "unused" KMS key (misidentified as test key). Pending window: 7 days (default).
+
+**Day 0, 14:35 UTC**
+KMS key state changes to `PendingDeletion`. CloudWatch Flow Logs delivery starts failing silently. No alert fires (no monitoring on KMS key state).
+
+**Day 0–2**
+Flow logs accumulate in CloudWatch Logs buffer. Delivery status: `FAILED` (but no alerting on this metric). Security team unaware.
+
+**Day 2, 09:00 UTC**
+Security incident detected: suspicious network traffic. Team attempts to investigate via VPC flow logs. Discovers: no flow logs for past 48 hours. Realizes KMS key is pending deletion.
+
+**Day 2, 09:15 UTC**
+Engineer cancels key deletion (`aws kms cancel-key-deletion`), re-enables key (`aws kms enable-key`), waits for flow logs to resume.
+
+**Day 2, 09:30 UTC**
+Flow logs resume delivery. But 48 hours of logs permanently lost (buffer overflowed).
+
+**Day 2, 10:00 UTC**
+Post-mortem initiated. Root cause: manual key deletion + no monitoring.
+
+### Root Cause Analysis
+
+**Primary Cause:** Manual KMS key deletion without understanding dependencies; no monitoring on KMS key state changes.
+
+**Contributing Factors:**
+- **Misidentification:** key was misidentified as "test key" (no proper tagging)
+- **No Alerts:** no CloudWatch alarm on `kms:ScheduleKeyDeletion` CloudTrail event
+- **Silent Failure:** CloudWatch Flow Logs delivery failure doesn't trigger alert
+- **No Runbook:** no documented procedure for KMS key lifecycle management
+- **Insufficient Training:** engineer didn't understand KMS dependencies
+
+### Lessons Learned
+
+1. **Never manually delete KMS keys without dependency analysis** — use `aws kms list-grants` to see what's using the key; check CloudTrail for recent usage; document all KMS keys with proper tags.
+2. **Monitor KMS key state changes** — CloudWatch alarm on `kms:ScheduleKeyDeletion` CloudTrail event; AWS Config rule to detect keys pending deletion; SCP to deny `kms:ScheduleKeyDeletion` except break-glass roles.
+3. **Monitor flow log delivery** — CloudWatch alarm on `IncomingLogEvents` metric (alert if = 0); CloudWatch Metric Filter on delivery status.
+4. **Dual-destination is critical** — S3 flow logs (different KMS key) would have survived. This is why the module has dual-destination architecture.
+5. **Tagging is essential** — all KMS keys must have `Purpose`, `Owner`, `Environment` tags; prevents misidentification as "unused".
+
+### Prevention Measures Implemented
+
+**1. Automated Monitoring:**
+
+```hcl
+# CloudWatch alarm on KMS key deletion
+resource "aws_cloudwatch_metric_alarm" "kms_key_deletion" {
+  alarm_name          = "kms-key-scheduled-for-deletion"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ScheduleKeyDeletion"
+  namespace           = "AWS/CloudTrail"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Alerts when KMS key is scheduled for deletion"
+
+  dimensions = {
+    EventName = "ScheduleKeyDeletion"
+  }
+}
+```
+
+**2. SCP Restriction:**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyKMSKeyDeletion",
+      "Effect": "Deny",
+      "Action": "kms:ScheduleKeyDeletion",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalTag/BreakGlass": "true"
+        }
+      }
+    }
+  ]
+}
+```
+
+**3. AWS Config Rule:**
+
+```hcl
+resource "aws_config_config_rule" "kms_key_not_pending_deletion" {
+  name = "kms-key-not-pending-deletion"
+
+  source {
+    owner             = "CUSTOM_LAMBDA"
+    source_identifier = aws_lambda_function.kms_check.arn
+  }
+}
+```
+
+**4. Runbook Created:** "KMS Key Lifecycle Management" — step-by-step procedure for key deletion, dependency analysis checklist, recovery procedures.
+
+### Production Best Practices
+
+```hcl
+# 1. Always use lifecycle rules to prevent accidental deletion
+resource "aws_kms_key" "critical" {
+  # ...
+  lifecycle {
+    prevent_destroy = true  # Terraform won't delete this key
+  }
+}
+
+# 2. Tag all KMS keys
+resource "aws_kms_key" "flow_logs" {
+  # ...
+  tags = {
+    Purpose     = "vpc-flow-logs-encryption"
+    Owner       = "platform-team"
+    Environment = "production"
+    Critical    = "true"
+  }
+}
+
+# 3. Use longer deletion windows
+resource "aws_kms_key" "flow_logs" {
+  # ...
+  deletion_window_in_days = 30  # Maximum safety net
+}
+
+# 4. Monitor key state
+resource "aws_cloudwatch_metric_alarm" "kms_deletion" {
+  alarm_name          = "kms-key-pending-deletion"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ScheduleKeyDeletion"
+  namespace           = "AWS/CloudTrail"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+
+  alarm_actions = [aws_sns_topic.security_alerts.arn]
+}
+```
 
 ---
 
@@ -780,7 +2037,11 @@ aws kms enable-key --key-id $KMS_KEY_ID
 | 3 | Ex 2.3, 2.4 | Dual-destination proof + cascade analysis | 25 min |
 | 4 | Ex 3.1, 3.2 | State locking + state rm/import | 35 min |
 | 5 | Ex 3.3, 3.4, 3.5 | State corruption + rename migration + real incident | 55 min |
-| 6 | Ex 4.1 | KMS lifecycle — highest risk exercise | 15 min |
+| 6 | Ex 4.1 | KMS lifecycle — schedule deletion & cancel | 25 min |
+| 7 | Ex 4.2 | Key rotation mechanics — automatic vs on-demand | 20 min |
+| 8 | Ex 4.3 | Key policy debugging — dual gate (IAM + KMS) | 30 min |
+| 9 | Ex 4.4 | Cross-account KMS access — multi-account patterns | 35 min |
+| 10 | Real Incident | Case study — "The Silent Log Apocalypse" | 20 min (read) |
 
 ---
 
