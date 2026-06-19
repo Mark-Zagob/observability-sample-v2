@@ -79,27 +79,31 @@ run "reject_empty_vpc_id" {
 }
 
 #--------------------------------------------------------------
-# 3. Variable Validation — app_port
+# 3. Variable Validation — app_ports
 #--------------------------------------------------------------
 
-run "reject_zero_app_port" {
+run "reject_zero_port_in_app_ports" {
   command = plan
 
   variables {
-    app_port = 0
+    app_ports = {
+      bad-service = 0
+    }
   }
 
-  expect_failures = [var.app_port]
+  expect_failures = [var.app_ports]
 }
 
-run "reject_port_above_65535" {
+run "reject_port_above_65535_in_app_ports" {
   command = plan
 
   variables {
-    app_port = 70000
+    app_ports = {
+      bad-service = 70000
+    }
   }
 
-  expect_failures = [var.app_port]
+  expect_failures = [var.app_ports]
 }
 
 #--------------------------------------------------------------
@@ -138,8 +142,13 @@ run "default_values_are_sensible" {
   command = plan
 
   assert {
-    condition     = var.app_port == 8080
-    error_message = "Default app_port must be 8080"
+    condition     = length(var.app_ports) == 4
+    error_message = "Default app_ports must have 4 entries (web-ui, api-gateway, order-service, payment-service)"
+  }
+
+  assert {
+    condition     = var.app_ports["web-ui"] == 8080
+    error_message = "Default web-ui port must be 8080"
   }
 
   assert {
@@ -150,11 +159,6 @@ run "default_values_are_sensible" {
   assert {
     condition     = var.generate_ssh_key == true
     error_message = "Default generate_ssh_key must be true"
-  }
-
-  assert {
-    condition     = var.app_health_check_port == 0
-    error_message = "Default app_health_check_port must be 0 (same as app_port)"
   }
 
   assert {

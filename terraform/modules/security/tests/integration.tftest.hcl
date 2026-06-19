@@ -45,7 +45,12 @@ run "setup_vpc" {
 
 variables {
   project_name = "inttest-sec"
-  app_port     = 8080
+  app_ports = {
+    web-ui          = 8080
+    api-gateway     = 5000
+    order-service   = 5001
+    payment-service = 5002
+  }
   common_tags = {
     Environment = "integration-test"
     ManagedBy   = "terraform-test"

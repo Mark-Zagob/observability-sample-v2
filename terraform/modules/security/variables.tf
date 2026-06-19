@@ -36,25 +36,19 @@ variable "vpc_cidr_block" {
 # Application Configuration
 #--------------------------------------------------------------
 
-variable "app_port" {
-  description = "Application container port (used in App SG ingress from ALB)"
-  type        = number
-  default     = 8080
-
-  validation {
-    condition     = var.app_port > 0 && var.app_port <= 65535
-    error_message = "app_port must be between 1 and 65535."
+variable "app_ports" {
+  description = "Map of service names to their container ports (used in ALB→App SG rules)"
+  type        = map(number)
+  default = {
+    web-ui          = 8080
+    api-gateway     = 5000
+    order-service   = 5001
+    payment-service = 5002
   }
-}
-
-variable "app_health_check_port" {
-  description = "Health check port if different from app_port (0 = same as app_port)"
-  type        = number
-  default     = 0
 
   validation {
-    condition     = var.app_health_check_port >= 0 && var.app_health_check_port <= 65535
-    error_message = "app_health_check_port must be between 0 and 65535."
+    condition     = alltrue([for port in values(var.app_ports) : port > 0 && port <= 65535])
+    error_message = "All ports in app_ports must be between 1 and 65535."
   }
 }
 

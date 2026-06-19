@@ -98,28 +98,29 @@ output "db_secret_arn" {
   value       = module.database.db_secret_arn
 }
 
-# Backup outputs
-output "backup_vault_arn" {
-  description = "Primary backup vault ARN"
-  value       = module.backup.vault_arn
-}
+# Backup outputs (DISABLED — re-enable with module "backup")
+# output "backup_vault_arn" {
+#   description = "Primary backup vault ARN"
+#   value       = module.backup.vault_arn
+# }
+#
+# output "backup_vault_dr_arn" {
+#   description = "DR region backup vault ARN"
+#   value       = module.backup.vault_dr_arn
+# }
+#
+# output "backup_plan_arn" {
+#   description = "Backup plan ARN"
+#   value       = module.backup.plan_arn
+# }
+#
+# output "backup_sns_topic_arn" {
+#   description = "SNS topic ARN for backup notifications (reusable by other modules)"
+#   value       = module.backup.sns_topic_arn
+# }
+#
+# output "backup_selection_tag" {
+#   description = "Tag key/value to add to resources for backup protection"
+#   value       = module.backup.selection_tag
+# }
 
-output "backup_vault_dr_arn" {
-  description = "DR region backup vault ARN"
-  value       = module.backup.vault_dr_arn
-}
-
-output "backup_plan_arn" {
-  description = "Backup plan ARN"
-  value       = module.backup.plan_arn
-}
-
-output "backup_sns_topic_arn" {
-  description = "SNS topic ARN for backup notifications (reusable by other modules)"
-  value       = module.backup.sns_topic_arn
-}
-
-output "backup_selection_tag" {
-  description = "Tag key/value to add to resources for backup protection"
-  value       = module.backup.selection_tag
-}

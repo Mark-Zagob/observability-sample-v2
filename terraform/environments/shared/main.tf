@@ -99,13 +99,17 @@ module "security" {
   vpc_id         = module.network.vpc_id
   vpc_cidr_block = module.network.vpc_cidr_block
 
-  # Application
-  app_port = var.app_port
+  # Application — multi-port for 6 microservices
+  app_ports = var.app_ports
 
   # Bastion
   enable_bastion    = var.enable_bastion
   allowed_ssh_cidrs = var.allowed_ssh_cidrs
   generate_ssh_key  = var.generate_ssh_key
+
+  # KMS key for ECS secret decryption (wired from database module)
+  # Uncomment after database module is deployed:
+  # kms_key_arn = module.database.kms_key_arn
 
   # Port maps: sử dụng defaults từ module
   # Override nếu cần: db_ports = { postgres = 5432 }
@@ -157,47 +161,48 @@ module "database" {
 
 #--------------------------------------------------------------
 # Module 6: Backup (AWS Backup + Cross-Region Copy)
-# Centralized backup for all resources tagged Backup=true.
-# Must be deployed early to protect existing infrastructure.
+# DISABLED — Re-enable khi có workload chạy thật
+# Iron Rule: No Infra without Workload
+# Codebase giữ nguyên tại modules/backup/
 #--------------------------------------------------------------
-module "backup" {
-  source = "../../modules/backup"
-
-  providers = {
-    aws    = aws
-    aws.dr = aws.dr
-  }
-
-  project_name = var.project_name
-  environment  = var.environment
-
-  # Vault configuration
-  vault_lock_mode = var.backup_vault_lock_mode
-
-  # Daily backup: 35 days retention
-  daily_schedule       = "cron(0 3 * * ? *)"
-  daily_retention_days = var.backup_daily_retention_days
-
-  # Monthly backup: 365 days retention, cold storage after 30d
-  enable_monthly_plan             = var.backup_enable_monthly_plan
-  monthly_retention_days          = var.backup_monthly_retention_days
-  monthly_cold_storage_after_days = 30
-
-  # Cross-region copy (DR Tier 1)
-  enable_cross_region_copy         = var.backup_enable_cross_region_copy
-  cross_region_copy_retention_days = var.backup_cross_region_retention_days
-
-  # Notifications
-  notification_email       = var.backup_notification_email
-  enable_cloudwatch_alarms = var.backup_enable_cloudwatch_alarms
-
-  # Compliance reporting (SOC2/HIPAA)
-  enable_backup_reports = true
-
-  common_tags = {
-    Module = "backup"
-  }
-}
+# module "backup" {
+#   source = "../../modules/backup"
+#
+#   providers = {
+#     aws    = aws
+#     aws.dr = aws.dr
+#   }
+#
+#   project_name = var.project_name
+#   environment  = var.environment
+#
+#   # Vault configuration
+#   vault_lock_mode = var.backup_vault_lock_mode
+#
+#   # Daily backup: 35 days retention
+#   daily_schedule       = "cron(0 3 * * ? *)"
+#   daily_retention_days = var.backup_daily_retention_days
+#
+#   # Monthly backup: 365 days retention, cold storage after 30d
+#   enable_monthly_plan             = var.backup_enable_monthly_plan
+#   monthly_retention_days          = var.backup_monthly_retention_days
+#   monthly_cold_storage_after_days = 30
+#
+#   # Cross-region copy (DR Tier 1)
+#   enable_cross_region_copy         = var.backup_enable_cross_region_copy
+#   cross_region_copy_retention_days = var.backup_cross_region_retention_days
+#
+#   # Notifications
+#   notification_email       = var.backup_notification_email
+#   enable_cloudwatch_alarms = var.backup_enable_cloudwatch_alarms
+#
+#   # Compliance reporting (SOC2/HIPAA)
+#   enable_backup_reports = true
+#
+#   common_tags = {
+#     Module = "backup"
+#   }
+# }
 
 #--------------------------------------------------------------
 # Module 7: Cache (ElastiCache Redis) — sẽ thêm sau

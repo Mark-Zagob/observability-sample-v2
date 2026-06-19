@@ -56,10 +56,15 @@ variable "enable_interface_endpoints" {
 #--------------------------------------------------------------
 # Security
 #--------------------------------------------------------------
-variable "app_port" {
-  description = "Application container port"
-  type        = number
-  default     = 8080
+variable "app_ports" {
+  description = "Map of service names to container ports"
+  type        = map(number)
+  default = {
+    web-ui          = 8080
+    api-gateway     = 5000
+    order-service   = 5001
+    payment-service = 5002
+  }
 }
 
 variable "enable_bastion" {

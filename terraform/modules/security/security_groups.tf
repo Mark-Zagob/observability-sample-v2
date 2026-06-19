@@ -61,26 +61,17 @@ resource "aws_security_group_rule" "alb_ingress_https" {
 }
 
 # --- ALB Outbound ---
+# One rule per service port (for_each over app_ports map)
 
 resource "aws_security_group_rule" "alb_egress_to_app" {
-  security_group_id        = aws_security_group.alb.id
-  type                     = "egress"
-  description              = "Forward traffic to App containers"
-  protocol                 = "tcp"
-  from_port                = var.app_port
-  to_port                  = var.app_port
-  source_security_group_id = aws_security_group.application.id
-}
-
-resource "aws_security_group_rule" "alb_egress_to_app_health" {
-  count = var.app_health_check_port > 0 && var.app_health_check_port != var.app_port ? 1 : 0
+  for_each = var.app_ports
 
   security_group_id        = aws_security_group.alb.id
   type                     = "egress"
-  description              = "Health check to App containers"
+  description              = "Forward to ${each.key} (port ${each.value})"
   protocol                 = "tcp"
-  from_port                = var.app_health_check_port
-  to_port                  = var.app_health_check_port
+  from_port                = each.value
+  to_port                  = each.value
   source_security_group_id = aws_security_group.application.id
 }
 
@@ -89,9 +80,9 @@ resource "aws_security_group_rule" "alb_egress_to_app_health" {
 # 2. Application Security Group
 ########################################################################
 # Purpose: ECS Fargate containers (app tier)
-# Inbound:  app_port from ALB SG, SSH from Bastion SG
+# Inbound:  app_ports from ALB SG, service-to-service, SSH from Bastion
 # Outbound: DB ports to Data SG, 443 to Internet (APIs),
-#           2049 to EFS SG, monitoring ports to Observability SG
+#           service-to-service, 2049 to EFS SG, OTLP to Observability SG
 ########################################################################
 
 resource "aws_security_group" "application" {
@@ -110,27 +101,41 @@ resource "aws_security_group" "application" {
 }
 
 # --- App Inbound ---
+# One rule per service port from ALB
 
 resource "aws_security_group_rule" "app_ingress_from_alb" {
+  for_each = var.app_ports
+
   security_group_id        = aws_security_group.application.id
   type                     = "ingress"
-  description              = "App port from ALB"
+  description              = "${each.key} from ALB (port ${each.value})"
   protocol                 = "tcp"
-  from_port                = var.app_port
-  to_port                  = var.app_port
+  from_port                = each.value
+  to_port                  = each.value
   source_security_group_id = aws_security_group.alb.id
 }
 
-resource "aws_security_group_rule" "app_ingress_health_from_alb" {
-  count = var.app_health_check_port > 0 && var.app_health_check_port != var.app_port ? 1 : 0
+# --- App ↔ App (Service-to-Service) ---
+# API Gateway → Order Service → Payment Service (Cloud Map DNS, HTTP)
 
+resource "aws_security_group_rule" "app_ingress_from_app" {
   security_group_id        = aws_security_group.application.id
   type                     = "ingress"
-  description              = "Health check port from ALB"
+  description              = "Service-to-service within App tier (port 5000-5005)"
   protocol                 = "tcp"
-  from_port                = var.app_health_check_port
-  to_port                  = var.app_health_check_port
-  source_security_group_id = aws_security_group.alb.id
+  from_port                = 5000
+  to_port                  = 5005
+  source_security_group_id = aws_security_group.application.id
+}
+
+resource "aws_security_group_rule" "app_egress_to_app" {
+  security_group_id        = aws_security_group.application.id
+  type                     = "egress"
+  description              = "Service-to-service within App tier (port 5000-5005)"
+  protocol                 = "tcp"
+  from_port                = 5000
+  to_port                  = 5005
+  source_security_group_id = aws_security_group.application.id
 }
 
 resource "aws_security_group_rule" "app_ingress_ssh_from_bastion" {
@@ -430,14 +435,14 @@ resource "aws_security_group_rule" "obs_egress_https" {
   cidr_blocks       = ["0.0.0.0/0"]
 }
 
-# Scrape app metrics
+# Scrape app metrics (covers all service ports)
 resource "aws_security_group_rule" "obs_egress_scrape_app" {
   security_group_id        = aws_security_group.observability.id
   type                     = "egress"
-  description              = "Prometheus scrape App containers"
+  description              = "Prometheus scrape App containers (port 5000-8080)"
   protocol                 = "tcp"
-  from_port                = var.app_port
-  to_port                  = var.app_port
+  from_port                = min(values(var.app_ports)...)
+  to_port                  = max(values(var.app_ports)...)
   source_security_group_id = aws_security_group.application.id
 }
 
