@@ -41,10 +41,8 @@ resource "aws_ecs_service" "this" {
   }
 
   # Rolling deployment — wait for new tasks to be healthy before stopping old
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 100
-  }
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
 
   # Wait for ALB health check before considering deployment successful
   health_check_grace_period_seconds = var.enable_load_balancer ? 60 : null

@@ -124,3 +124,42 @@ output "db_secret_arn" {
 #   value       = module.backup.selection_tag
 # }
 
+# ECR outputs
+output "ecr_repository_urls" {
+  description = "Map of service name to ECR repository URL"
+  value       = module.ecr.repository_urls
+}
+
+# ACM outputs
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN"
+  value       = module.acm.certificate_arn
+}
+
+# Loadbalancer outputs
+output "alb_dns_name" {
+  description = "ALB DNS name"
+  value       = module.loadbalancer.alb_dns_name
+}
+
+output "app_url" {
+  description = "Application URL (domain → ALB)"
+  value       = "https://${var.domain_name}"
+}
+
+# ECS Cluster outputs
+output "ecs_cluster_name" {
+  description = "ECS Cluster name"
+  value       = module.ecs_cluster.cluster_name
+}
+
+output "ecs_namespace" {
+  description = "Cloud Map namespace for service discovery"
+  value       = module.ecs_cluster.namespace_name
+}
+
+# Payment Service outputs
+output "payment_service_log_group" {
+  description = "Payment service CloudWatch log group"
+  value       = module.payment_service.log_group_name
+}

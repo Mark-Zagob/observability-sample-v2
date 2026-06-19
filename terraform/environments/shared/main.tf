@@ -205,7 +205,239 @@ module "database" {
 # }
 
 #--------------------------------------------------------------
-# Module 7: Cache (ElastiCache Redis) — sẽ thêm sau
+# Module 7: ECR (Container Repositories)
+#--------------------------------------------------------------
+module "ecr" {
+  source = "../../modules/ecr"
+
+  project_name     = var.project_name
+  repository_names = var.ecr_repository_names
+
+  image_tag_mutability = "MUTABLE" # Lab — switch to IMMUTABLE for production
+  scan_on_push         = true
+  max_tagged_images    = 10
+  untagged_expiry_days = 7
+
+  common_tags = {
+    Module = "ecr"
+  }
+}
+
+#--------------------------------------------------------------
+# Module 8: ACM (TLS Certificate + DNS Validation)
+#--------------------------------------------------------------
+module "acm" {
+  source = "../../modules/acm"
+
+  domain_name = var.domain_name
+  zone_id     = data.aws_route53_zone.main.zone_id
+
+  common_tags = {
+    Module = "acm"
+  }
+}
+
+# Data source: existing Route 53 Hosted Zone
+data "aws_route53_zone" "main" {
+  name         = var.hosted_zone_name
+  private_zone = false
+}
+
+#--------------------------------------------------------------
+# Module 9: Loadbalancer (ALB + HTTPS + Target Groups)
+#--------------------------------------------------------------
+module "loadbalancer" {
+  source = "../../modules/loadbalancer"
+
+  project_name          = var.project_name
+  vpc_id                = module.network.vpc_id
+  public_subnet_ids     = module.network.public_subnet_ids
+  alb_security_group_id = module.security.alb_security_group_id
+  acm_certificate_arn   = module.acm.certificate_arn
+
+  # Services exposed via ALB (add as you onboard)
+  services = var.alb_services
+
+  enable_deletion_protection = false # Lab — true for production
+
+  common_tags = {
+    Module = "loadbalancer"
+  }
+}
+
+# Route 53 A record: domain → ALB
+# (Placed here to avoid circular dependency between acm ↔ loadbalancer)
+resource "aws_route53_record" "app" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "A"
+
+  alias {
+    name                   = module.loadbalancer.alb_dns_name
+    zone_id                = module.loadbalancer.alb_zone_id
+    evaluate_target_health = true
+  }
+}
+
+#--------------------------------------------------------------
+# Module 10: ECS Cluster + Cloud Map
+#--------------------------------------------------------------
+module "ecs_cluster" {
+  source = "../../modules/compute/ecs-cluster"
+
+  project_name   = var.project_name
+  vpc_id         = module.network.vpc_id
+  namespace_name = "ecommerce.local"
+
+  enable_container_insights = true
+
+  common_tags = {
+    Module = "ecs-cluster"
+  }
+}
+
+#--------------------------------------------------------------
+# Module 11+: ECS Services (one module call per microservice)
+# Onboard step-by-step — uncomment as you progress through Steps
+#--------------------------------------------------------------
+
+# Step 1: Payment Service (stateless, no ALB, Cloud Map only)
+module "payment_service" {
+  source = "../../modules/compute/ecs-service"
+
+  project_name   = var.project_name
+  service_name   = "payment-service"
+  cluster_id     = module.ecs_cluster.cluster_id
+  image          = "${module.ecr.repository_urls["payment-service"]}:latest"
+  container_port = 5002
+  aws_region     = var.aws_region
+
+  # Networking
+  subnets         = module.network.private_subnet_ids
+  security_groups = [module.security.application_security_group_id]
+
+  # IAM
+  execution_role_arn = module.security.ecs_task_execution_role_arn
+  task_role_arn      = module.security.ecs_task_role_arn
+
+  # No ALB — internal service only (Cloud Map discovery)
+  enable_load_balancer = false
+
+  # Cloud Map: payment-service.ecommerce.local
+  enable_service_discovery = true
+  namespace_id             = module.ecs_cluster.namespace_id
+
+  # Task sizing (lab — minimal)
+  cpu    = 256
+  memory = 512
+
+  # App config
+  environment = {
+    SERVICE_NAME = "payment-service"
+    PORT         = "5002"
+    DB_HOST      = module.database.rds_address
+    DB_PORT      = tostring(module.database.rds_port)
+    DB_NAME      = module.database.rds_db_name
+  }
+  secrets = {
+    DB_SECRET = module.database.db_secret_arn
+  }
+
+  common_tags = {
+    Module = "ecs-service"
+    Step   = "1"
+  }
+}
+
+# Step 2: Order Service (uncomment when ready)
+# module "order_service" {
+#   source         = "../../modules/compute/ecs-service"
+#   project_name   = var.project_name
+#   service_name   = "order-service"
+#   cluster_id     = module.ecs_cluster.cluster_id
+#   image          = "${module.ecr.repository_urls["order-service"]}:latest"
+#   container_port = 5001
+#   aws_region     = var.aws_region
+#   subnets         = module.network.private_subnet_ids
+#   security_groups = [module.security.application_security_group_id]
+#   execution_role_arn = module.security.ecs_task_execution_role_arn
+#   task_role_arn      = module.security.ecs_task_role_arn
+#   enable_load_balancer = false
+#   enable_service_discovery = true
+#   namespace_id             = module.ecs_cluster.namespace_id
+#   cpu    = 256
+#   memory = 512
+#   environment = {
+#     SERVICE_NAME        = "order-service"
+#     PORT                = "5001"
+#     DB_HOST             = module.database.rds_address
+#     DB_PORT             = tostring(module.database.rds_port)
+#     DB_NAME             = module.database.rds_db_name
+#     PAYMENT_SERVICE_URL = "http://payment-service.ecommerce.local:5002"
+#   }
+#   secrets = { DB_SECRET = module.database.db_secret_arn }
+#   common_tags = { Module = "ecs-service", Step = "2" }
+# }
+
+# Step 3: API Gateway (uncomment when ready)
+# module "api_gateway" {
+#   source         = "../../modules/compute/ecs-service"
+#   project_name   = var.project_name
+#   service_name   = "api-gateway"
+#   cluster_id     = module.ecs_cluster.cluster_id
+#   image          = "${module.ecr.repository_urls["api-gateway"]}:latest"
+#   container_port = 5000
+#   aws_region     = var.aws_region
+#   subnets         = module.network.private_subnet_ids
+#   security_groups = [module.security.application_security_group_id]
+#   execution_role_arn = module.security.ecs_task_execution_role_arn
+#   task_role_arn      = module.security.ecs_task_role_arn
+#   enable_load_balancer = true
+#   target_group_arn     = module.loadbalancer.target_group_arns["api-gateway"]
+#   enable_service_discovery = true
+#   namespace_id             = module.ecs_cluster.namespace_id
+#   cpu    = 256
+#   memory = 512
+#   environment = {
+#     SERVICE_NAME      = "api-gateway"
+#     PORT              = "5000"
+#     ORDER_SERVICE_URL = "http://order-service.ecommerce.local:5001"
+#   }
+#   common_tags = { Module = "ecs-service", Step = "3" }
+# }
+
+# Step 4: Web UI (uncomment when ready)
+# module "web_ui" {
+#   source         = "../../modules/compute/ecs-service"
+#   project_name   = var.project_name
+#   service_name   = "web-ui"
+#   cluster_id     = module.ecs_cluster.cluster_id
+#   image          = "${module.ecr.repository_urls["web-ui"]}:latest"
+#   container_port = 8080
+#   aws_region     = var.aws_region
+#   subnets         = module.network.private_subnet_ids
+#   security_groups = [module.security.application_security_group_id]
+#   execution_role_arn = module.security.ecs_task_execution_role_arn
+#   task_role_arn      = module.security.ecs_task_role_arn
+#   enable_load_balancer = true
+#   target_group_arn     = module.loadbalancer.target_group_arns["web-ui"]
+#   enable_service_discovery = true
+#   namespace_id             = module.ecs_cluster.namespace_id
+#   cpu    = 256
+#   memory = 512
+#   environment = {
+#     SERVICE_NAME    = "web-ui"
+#     PORT            = "8080"
+#     API_GATEWAY_URL = "http://api-gateway.ecommerce.local:5000"
+#   }
+#   common_tags = { Module = "ecs-service", Step = "4" }
+# }
+
+# Step 5-6: Notification/Inventory Workers (Kafka consumers — future)
+# Cần MSK/Redis modules trước
+
+#--------------------------------------------------------------
+# Module: Cache (ElastiCache Redis) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "cache" {
 #   source = "../../modules/cache"
@@ -213,7 +445,7 @@ module "database" {
 # }
 
 #--------------------------------------------------------------
-# Module 8: Streaming (MSK Kafka) — sẽ thêm sau
+# Module: Streaming (MSK Kafka) — sẽ thêm sau
 #--------------------------------------------------------------
 # module "streaming" {
 #   source = "../../modules/streaming"

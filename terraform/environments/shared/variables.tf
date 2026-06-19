@@ -222,3 +222,49 @@ variable "backup_enable_cloudwatch_alarms" {
   type        = bool
   default     = true
 }
+
+#--------------------------------------------------------------
+# ECR
+#--------------------------------------------------------------
+
+variable "ecr_repository_names" {
+  description = "List of ECR repository names to create"
+  type        = list(string)
+  default = [
+    "web-ui",
+    "api-gateway",
+    "order-service",
+    "payment-service",
+    "notification-service",
+    "inventory-service"
+  ]
+}
+
+#--------------------------------------------------------------
+# ACM / DNS
+#--------------------------------------------------------------
+
+variable "domain_name" {
+  description = "Domain name for ACM certificate and Route 53 A record"
+  type        = string
+}
+
+variable "hosted_zone_name" {
+  description = "Route 53 hosted zone name (e.g., example.com)"
+  type        = string
+}
+
+#--------------------------------------------------------------
+# Loadbalancer
+#--------------------------------------------------------------
+
+variable "alb_services" {
+  description = "Map of ALB-facing services with routing config"
+  type = map(object({
+    port          = number
+    health_path   = string
+    path_patterns = list(string)
+    priority      = number
+  }))
+  default = {}
+}
