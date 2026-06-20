@@ -240,6 +240,19 @@ variable "ecr_repository_names" {
   ]
 }
 
+variable "image_tags" {
+  description = "Map of service name to image tag (versioned, no :latest in production)"
+  type        = map(string)
+  default = {
+    web-ui               = "v1"
+    api-gateway          = "v1"
+    order-service        = "v1"
+    payment-service      = "v1"
+    notification-service = "v1"
+    inventory-service    = "v1"
+  }
+}
+
 #--------------------------------------------------------------
 # ACM / DNS
 #--------------------------------------------------------------

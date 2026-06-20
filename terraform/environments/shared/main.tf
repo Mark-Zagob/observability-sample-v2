@@ -2,8 +2,24 @@
 # Shared Environment - Main
 # Wire modules vào đây, mỗi lần thêm module mới sẽ thêm 1 block
 #--------------------------------------------------------------
+# Image source: Toggle giữa ECR và Docker Hub
+# Chỉ dùng 1 trong 2 — comment/uncomment để chuyển đổi
 
+# Option A: ECR (production — image đã push lên ECR)
+locals {
+  service_images = {
+    for name in var.ecr_repository_names : name =>
+    "${module.ecr.repository_urls[name]}:${var.image_tags[name]}"
+  }
+}
 
+# Option B: Docker Hub (thay <dockerhub-user> bằng username thật)
+# locals {
+#   service_images = {
+#     for name in var.ecr_repository_names : name =>
+#     "<dockerhub-user>/${name}:${var.image_tags[name]}"
+#   }
+# }
 
 # Module 1: Logging (S3 + Athena for centralized log storage)
 # Must be deployed before network — network needs bucket ARN.
@@ -302,52 +318,52 @@ module "ecs_cluster" {
 #--------------------------------------------------------------
 
 # Step 1: Payment Service (stateless, no ALB, Cloud Map only)
-# module "payment_service" {
-#   source = "../../modules/compute/ecs-service"
+module "payment_service" {
+  source = "../../modules/compute/ecs-service"
 
-#   project_name   = var.project_name
-#   service_name   = "payment-service"
-#   cluster_id     = module.ecs_cluster.cluster_id
-#   image          = "${module.ecr.repository_urls["payment-service"]}:latest"
-#   container_port = 5002
-#   aws_region     = var.aws_region
+  project_name   = var.project_name
+  service_name   = "payment-service"
+  cluster_id     = module.ecs_cluster.cluster_id
+  image          = local.service_images["payment-service"]
+  container_port = 5002
+  aws_region     = var.aws_region
 
-#   # Networking
-#   subnets         = module.network.private_subnet_ids
-#   security_groups = [module.security.application_security_group_id]
+  # Networking
+  subnets         = module.network.private_subnet_ids
+  security_groups = [module.security.application_security_group_id]
 
-#   # IAM
-#   execution_role_arn = module.security.ecs_task_execution_role_arn
-#   task_role_arn      = module.security.ecs_task_role_arn
+  # IAM
+  execution_role_arn = module.security.ecs_task_execution_role_arn
+  task_role_arn      = module.security.ecs_task_role_arn
 
-#   # No ALB — internal service only (Cloud Map discovery)
-#   enable_load_balancer = false
+  # No ALB — internal service only (Cloud Map discovery)
+  enable_load_balancer = false
 
-#   # Cloud Map: payment-service.ecommerce.local
-#   enable_service_discovery = true
-#   namespace_id             = module.ecs_cluster.namespace_id
+  # Cloud Map: payment-service.ecommerce.local
+  enable_service_discovery = true
+  namespace_id             = module.ecs_cluster.namespace_id
 
-#   # Task sizing (lab — minimal)
-#   cpu    = 256
-#   memory = 512
+  # Task sizing (lab — minimal)
+  cpu    = 256
+  memory = 512
 
-#   # App config
-#   environment = {
-#     SERVICE_NAME = "payment-service"
-#     PORT         = "5002"
-#     DB_HOST      = module.database.rds_address
-#     DB_PORT      = tostring(module.database.rds_port)
-#     DB_NAME      = module.database.rds_db_name
-#   }
-#   secrets = {
-#     DB_SECRET = module.database.db_secret_arn
-#   }
+  # App config
+  environment = {
+    SERVICE_NAME = "payment-service"
+    PORT         = "5002"
+    DB_HOST      = module.database.rds_address
+    DB_PORT      = tostring(module.database.rds_port)
+    DB_NAME      = module.database.rds_db_name
+  }
+  secrets = {
+    DB_SECRET = module.database.db_secret_arn
+  }
 
-#   common_tags = {
-#     Module = "ecs-service"
-#     Step   = "1"
-#   }
-# }
+  common_tags = {
+    Module = "ecs-service"
+    Step   = "1"
+  }
+}
 
 # Step 2: Order Service (uncomment when ready)
 # module "order_service" {
@@ -355,7 +371,7 @@ module "ecs_cluster" {
 #   project_name   = var.project_name
 #   service_name   = "order-service"
 #   cluster_id     = module.ecs_cluster.cluster_id
-#   image          = "${module.ecr.repository_urls["order-service"]}:latest"
+#   image          = local.service_images["order-service"]
 #   container_port = 5001
 #   aws_region     = var.aws_region
 #   subnets         = module.network.private_subnet_ids
@@ -385,7 +401,7 @@ module "ecs_cluster" {
 #   project_name   = var.project_name
 #   service_name   = "api-gateway"
 #   cluster_id     = module.ecs_cluster.cluster_id
-#   image          = "${module.ecr.repository_urls["api-gateway"]}:latest"
+#   image          = local.service_images["api-gateway"]
 #   container_port = 5000
 #   aws_region     = var.aws_region
 #   subnets         = module.network.private_subnet_ids
@@ -412,7 +428,7 @@ module "ecs_cluster" {
 #   project_name   = var.project_name
 #   service_name   = "web-ui"
 #   cluster_id     = module.ecs_cluster.cluster_id
-#   image          = "${module.ecr.repository_urls["web-ui"]}:latest"
+#   image          = local.service_images["web-ui"]
 #   container_port = 8080
 #   aws_region     = var.aws_region
 #   subnets         = module.network.private_subnet_ids
