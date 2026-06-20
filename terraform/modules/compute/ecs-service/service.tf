@@ -15,6 +15,9 @@ resource "aws_ecs_service" "this" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # ECS Exec — shell into running containers for debugging
+  enable_execute_command = var.enable_execute_command
+
   # Tasks run in private subnets, no public IP
   network_configuration {
     subnets          = var.subnets

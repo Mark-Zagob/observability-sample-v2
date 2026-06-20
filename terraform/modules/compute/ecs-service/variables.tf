@@ -124,6 +124,16 @@ variable "enable_adot_sidecar" {
 }
 
 #--------------------------------------------------------------
+# ECS Exec (shell into running containers)
+#--------------------------------------------------------------
+
+variable "enable_execute_command" {
+  description = "Enable ECS Exec to shell into running containers (requires SSM permissions on task role)"
+  type        = bool
+  default     = true
+}
+
+#--------------------------------------------------------------
 # Application Configuration
 #--------------------------------------------------------------
 
