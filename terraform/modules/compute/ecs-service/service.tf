@@ -47,6 +47,12 @@ resource "aws_ecs_service" "this" {
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100
 
+  # 👇 FIX BOM #2: The Rollback Shield
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true # Tự động hủy deploy và quay lại Task Definition cũ nếu task mới fail
+  }
+
   # Wait for ALB health check before considering deployment successful
   health_check_grace_period_seconds = var.enable_load_balancer ? 60 : null
 

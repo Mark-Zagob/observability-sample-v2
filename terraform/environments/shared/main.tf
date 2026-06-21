@@ -354,6 +354,12 @@ module "payment_service" {
     DB_HOST      = module.database.rds_address
     DB_PORT      = tostring(module.database.rds_port)
     DB_NAME      = module.database.rds_db_name
+    # 👇 FIX Q1: Trỏ OTel SDK về ADOT Sidecar (localhost của Fargate Task)
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    
+    # 👇 FIX BOM #1: Inject Redis URL (Dù chưa có Redis, inject vào để App fail-fast 
+    # ở tầng connection, thay vì lỗi DNS undefined)
+    REDIS_URL   
   }
   secrets = {
     DB_SECRET = module.database.db_secret_arn

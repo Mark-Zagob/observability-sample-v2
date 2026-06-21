@@ -59,11 +59,23 @@ def init_otel(service_name, service_version="1.0.0"):
     Returns:
         (tracer, meter) tuple
     """
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    # 👇 FIX Q1: Parse endpoint an toàn cho cả gRPC và HTTP
+    raw_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    
+    # OTLP gRPC Exporter của Python KHÔNG chấp nhận prefix http:// hoặc https://
+    # Nó chỉ chấp nhận format: "host:port"
+    if raw_endpoint.startswith("http://"):
+        endpoint = raw_endpoint.replace("http://", "")
+    elif raw_endpoint.startswith("https://"):
+        endpoint = raw_endpoint.replace("https://", "")
+    else:
+        endpoint = raw_endpoint
 
     resource = Resource.create({
         "service.name": service_name,
         "service.version": service_version,
+        # 👇 Thêm Cloud Attribute để X-Ray / AMP nhận diện đây là task chạy trên ECS
+        "cloud.platform": "aws_ecs_fargate" 
     })
 
     # --- Tracing ---

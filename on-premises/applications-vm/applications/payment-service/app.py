@@ -71,7 +71,18 @@ SLOW_RATE = float(os.getenv("PAYMENT_SLOW_RATE", "0.20"))
 app = Flask(__name__)
 FlaskInstrumentor().instrument_app(app)
 
-health_bp = create_health_blueprint("payment-service", checks={"redis": lambda: redis_client.ping()})
+# 👇 FIX BOM #1: Graceful Degradation cho Redis
+def redis_health_check():
+    try:
+        return redis_client.ping()
+    except Exception as e:
+        # Log warning nhưng trả về True để Health Check pass (HTTP 200)
+        # Tránh việc ECS Fargate kill task liên tục do thiếu Redis ở Phase 1
+        logger.warning(f"Redis is unavailable: {e}. Degrading gracefully (Idempotency disabled).")
+        return True 
+
+# Truyền hàm đã wrap vào thay vì lambda raw
+health_bp = create_health_blueprint("payment-service", checks={"redis": redis_health_check})
 app.register_blueprint(health_bp)
 
 # Hàm gọi Gateway giả lập qua HTTP thật (để test timeout)
