@@ -16,47 +16,54 @@ Endpoints:
 import os
 import time
 import random
+import redis
+import requests
+import pybreaker
 from flask import Flask, jsonify, request
 
-# ----------------------------------------------------------
 # Shared modules
-# ----------------------------------------------------------
 from shared.logging_config import setup_logging
 from shared.otel_setup import init_otel
 from shared.health import create_health_blueprint
 from shared.errors import problem_response
 
-# ----------------------------------------------------------
-# Auto-instrumentation imports
-# ----------------------------------------------------------
+# Auto-instrumentation
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
-# ----------------------------------------------------------
 # Initialize logging + OTel
-# ----------------------------------------------------------
 logger = setup_logging("payment-service")
 tracer, meter = init_otel("payment-service", "2.0.0")
+
+# Auto-instrument outgoing HTTP requests (Fix Bom #4)
+RequestsInstrumentor().instrument()
 
 # ============================================================
 # Custom Metrics
 # ============================================================
-payments_counter = meter.create_counter(
-    name="payments_total",
-    description="Total payment transactions",
-    unit="1",
+payments_counter = meter.create_counter(name="payments_total", description="Total payment transactions", unit="1")
+payment_amount = meter.create_histogram(name="payment_amount_dollars", description="Payment amount", unit="$")
+gateway_duration = meter.create_histogram(name="payment_gateway_duration_seconds", description="Gateway latency", unit="s")
+
+# ============================================================
+# Redis Idempotency Store (Fix Bom #1)
+# ============================================================
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+# ============================================================
+# Circuit Breaker (Fix Bom #3)
+# ============================================================
+# Mở circuit nếu có 3 lỗi liên tiếp, đóng lại sau 30s
+payment_breaker = pybreaker.CircuitBreaker(
+    fail_max=3, 
+    reset_timeout=30,
+    name="payment_gateway_breaker"
 )
 
-payment_amount = meter.create_histogram(
-    name="payment_amount_dollars",
-    description="Payment amount distribution in dollars",
-    unit="$",
-)
-
-gateway_duration = meter.create_histogram(
-    name="payment_gateway_duration_seconds",
-    description="External payment gateway call duration",
-    unit="s",
-)
+PROVIDERS = ["stripe", "paypal", "square"]
+FAILURE_RATE = float(os.getenv("PAYMENT_FAILURE_RATE", "0.10"))
+SLOW_RATE = float(os.getenv("PAYMENT_SLOW_RATE", "0.20"))
 
 # ============================================================
 # Flask App
@@ -64,20 +71,27 @@ gateway_duration = meter.create_histogram(
 app = Flask(__name__)
 FlaskInstrumentor().instrument_app(app)
 
-# Simulated payment providers
-PROVIDERS = ["stripe", "paypal", "square"]
-
-# --- Health checks (no external deps to check) ---
-health_bp = create_health_blueprint("payment-service")
+health_bp = create_health_blueprint("payment-service", checks={"redis": lambda: redis_client.ping()})
 app.register_blueprint(health_bp)
 
-FAILURE_RATE = float(os.getenv("PAYMENT_FAILURE_RATE", "0.10")) # Mặc định 10% lỗi
-SLOW_RATE = float(os.getenv("PAYMENT_SLOW_RATE", "0.20"))  # Mặc định 20% chậm
+# Hàm gọi Gateway giả lập qua HTTP thật (để test timeout)
+@payment_breaker
+def call_external_gateway(provider, delay):
+    """
+    Gọi ra external API. Dùng httpbin.org để simulate network delay.
+    Nếu delay > timeout, requests sẽ ném exception -> Trigger Circuit Breaker.
+    """
+    # Dùng httpbin.org/delay/{n} để simulate gateway phản hồi chậm
+    url = f"https://httpbin.org/delay/{int(delay)}" 
+    
+    # BẮT BUỘC: Connect timeout 2s, Read timeout 5s
+    # Nếu httpbin mất 6s để trả lời, code sẽ không bị block vô hạn!
+    response = requests.get(url, timeout=(2.0, 5.0)) 
+    response.raise_for_status()
+    return True
 
 @app.route("/charge", methods=["POST"])
 def charge():
-    """Xử lý thanh toán"""
-    # Support both JSON body (preferred) and query params (backward compat)
     if request.is_json:
         data = request.get_json()
         order_id = data.get("order_id", "unknown")
@@ -86,73 +100,79 @@ def charge():
         order_id = request.args.get("order_id", "unknown")
         amount = request.args.get("amount")
 
-    if amount:
-        amount = float(amount)
-    else:
+    if not amount:
         amount = round(random.uniform(10.0, 500.0), 2)
+    else:
+        amount = float(amount)
 
     provider = random.choice(PROVIDERS)
+    logger.info("Processing payment", extra={"order_id": order_id, "amount": amount, "provider": provider})
 
-    logger.info("Processing payment",
-                 extra={"order_id": order_id, "amount": amount, "provider": provider})
+    # --- BƯỚC 1: IDEMPOTENCY CHECK (THE SHIELD) ---
+    idempotency_key = f"idempotency:payment:{order_id}"
+    # SET NX: Chỉ set nếu key CHƯA TỒN TẠI. EX: Tự động xóa sau 24h (86400s)
+    is_new_transaction = redis_client.set(idempotency_key, "processing", nx=True, ex=86400)
+    
+    if not is_new_transaction:
+        # Request trùng lặp! User bấm retry hoặc Network retry.
+        logger.warning("Idempotency check failed: Duplicate request", extra={"order_id": order_id})
+        return jsonify({
+            "status": "idempotent_hit",
+            "message": "Transaction already processed or in progress",
+            "order_id": order_id
+        }), 200 # Trả về 200 để client không bị lỗi, nhưng không trừ tiền
 
-    # Step 1: Validate payment method
-    with tracer.start_as_current_span("validate_payment_method") as span:
-        time.sleep(random.uniform(0.01, 0.03))
-        span.set_attribute("payment.order_id", order_id)
-        span.set_attribute("payment.provider", provider)
-        span.set_attribute("payment.amount", amount)
-
-    # Step 2: Call external payment gateway
+    # --- BƯỚC 2: TRACE & GATEWAY CALL ---
     with tracer.start_as_current_span("call_payment_gateway") as span:
-        span.set_attribute("payment.provider", provider)
-        span.set_attribute("payment.amount", amount)
-
-        # Simulate gateway latency
-        delay = random.uniform(0.05, 0.15)
+        # Enrich Trace (Fix Bom #4): Gắn order_id vào span để debug trên X-Ray
+        span.set_attribute("app.order_id", order_id)
+        span.set_attribute("app.provider", provider)
+        
+        delay = random.uniform(0.5, 1.5)
         is_slow = random.random() < SLOW_RATE
-
         if is_slow:
-            delay = random.uniform(0.5, 2.0)
-            span.set_attribute("payment.slow", True)
-            logger.warning("Slow payment gateway response",
-                            extra={"order_id": order_id, "provider": provider,
-                                   "delay_ms": int(delay * 1000)})
+            delay = random.uniform(3.0, 6.0) # Cố tình làm chậm > 5s để test Timeout
+            span.set_attribute("app.slow", True)
 
-        time.sleep(delay)
+        start_time = time.time()
+        try:
+            # Gọi qua Circuit Breaker
+            call_external_gateway(provider, delay)
+            
+            # Simulate Business Failure (10% chance)
+            if random.random() < FAILURE_RATE:
+                raise Exception("Gateway rejected card")
 
-        # Record gateway duration metric
-        gateway_duration.record(delay, {"provider": provider})
-        span.set_attribute("payment.gateway_duration_ms", int(delay * 1000))
+        except requests.exceptions.Timeout:
+            logger.error("Gateway Timeout", extra={"order_id": order_id})
+            # Xóa key Redis để user có thể retry lại (vì giao dịch chưa hoàn tất)
+            redis_client.delete(idempotency_key) 
+            return problem_response(504, "Gateway Timeout", "Payment gateway took too long", instance="/charge")
+            
+        except pybreaker.CircuitBreakerError:
+            logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
+            redis_client.delete(idempotency_key)
+            return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
+            
+        except Exception as e:
+            logger.error("Payment failed", extra={"order_id": order_id, "error": str(e)})
+            redis_client.delete(idempotency_key)
+            return problem_response(500, "Payment Error", str(e), instance="/charge")
 
-        # Simulate payment failure (10% chance)
-        if random.random() < FAILURE_RATE:
-            span.set_attribute("error", True)
-            span.set_attribute("error.message", "Payment gateway timeout")
+        duration = time.time() - start_time
+        gateway_duration.record(duration, {"provider": provider})
 
-            payments_counter.add(1, {"status": "failed", "provider": provider})
-            payment_amount.record(amount, {"status": "failed", "provider": provider})
-
-            logger.error("Payment failed",
-                          extra={"order_id": order_id, "provider": provider,
-                                 "amount": amount, "error": "gateway_timeout"})
-
-            return problem_response(
-                500, "Payment Gateway Error",
-                f"Payment gateway ({provider}) timed out for order {order_id}",
-                instance="/charge",
-                extra={"order_id": order_id, "provider": provider, "amount": amount},
-            )
-
-    # Success
+    # --- BƯỚC 3: SUCCESS ---
     txn_id = f"txn-{random.randint(10000, 99999)}"
+    
+    # Cập nhật Redis: Đánh dấu giao dịch đã HOÀN TẤT
+    redis_client.set(idempotency_key, txn_id, ex=86400)
+    
+    # Enrich span với txn_id
+    span.set_attribute("app.transaction_id", txn_id)
 
     payments_counter.add(1, {"status": "success", "provider": provider})
     payment_amount.record(amount, {"status": "success", "provider": provider})
-
-    logger.info("Payment successful",
-                 extra={"order_id": order_id, "provider": provider,
-                        "amount": amount, "transaction_id": txn_id})
 
     return jsonify({
         "status": "success",
@@ -162,8 +182,5 @@ def charge():
         "amount": amount,
     })
 
-
 if __name__ == "__main__":
-    logger.info("Payment Service starting (dev mode)", extra={"port": 5002})
-    logger.warning("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:5002 app:app")
     app.run(host="0.0.0.0", port=5002)

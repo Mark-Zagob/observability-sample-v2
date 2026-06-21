@@ -30,6 +30,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY shared/ ./shared/
 COPY payment-service/app.py .
+COPY payment-service/gunicorn.conf.py .
 
 # Health check
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
@@ -38,6 +39,4 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
 USER appuser
 
 EXPOSE 5002
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5002", \
-     "--access-logfile", "-", "--timeout", "30", \
-     "--worker-tmp-dir", "/dev/shm", "app:app"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "--bind", "0.0.0.0:5002", "app:app"]

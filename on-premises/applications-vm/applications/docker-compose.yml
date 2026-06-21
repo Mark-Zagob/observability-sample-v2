@@ -110,6 +110,7 @@ services:
     container_name: payment-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
+      - REDIS_URL=redis://redis:6379/0
     ports:
       - "5002:5002"
     # --- Security hardening ---

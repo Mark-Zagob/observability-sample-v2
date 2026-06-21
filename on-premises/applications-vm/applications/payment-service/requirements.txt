@@ -5,4 +5,8 @@ opentelemetry-sdk==1.33.*
 opentelemetry-exporter-otlp-proto-grpc==1.33.*
 opentelemetry-instrumentation-flask==0.54b0
 opentelemetry-instrumentation-logging==0.54b0
+opentelemetry-instrumentation-requests==0.54b0  # THÊM MỚI: Auto-trace HTTP calls
 python-json-logger==3.2.*
+redis==5.0.*                                    # THÊM MỚI: Idempotency store
+requests==2.31.*                                # THÊM MỚI: HTTP Client
+pybreaker==1.0.0                                # THÊM MỚI: Circuit Breaker
