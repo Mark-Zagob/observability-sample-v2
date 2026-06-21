@@ -49,7 +49,7 @@ variable "data_security_group_id" {
 variable "engine_version" {
   description = "PostgreSQL engine version (check region availability: aws rds describe-db-engine-versions --engine postgres --query 'DBEngineVersions[].EngineVersion')"
   type        = string
-  default     = "16.6"
+  default     = "16.14"
 }
 
 variable "instance_class" {

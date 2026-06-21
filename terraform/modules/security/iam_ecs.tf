@@ -112,7 +112,9 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         ]
         Resource = [
           "arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter/${var.project_name}/*",
-          "arn:${local.partition}:secretsmanager:${local.region}:${local.account_id}:secret:${var.project_name}/*"
+          "arn:${local.partition}:secretsmanager:${local.region}:${local.account_id}:secret:${var.project_name}/*",
+          # RDS managed secrets (manage_master_user_password = true) use prefix "rds!db-"
+          "arn:${local.partition}:secretsmanager:${local.region}:${local.account_id}:secret:rds!db-*"
         ]
       },
       {

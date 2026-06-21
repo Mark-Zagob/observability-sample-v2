@@ -9,7 +9,7 @@
 locals {
   service_images = {
     for name in var.ecr_repository_names : name =>
-    "${module.ecr.repository_urls[name]}:${var.image_tags[name]}"
+    "${module.ecr.repository_urls[name]}:${lookup(var.image_tags, name, "latest")}"
   }
 }
 
@@ -17,7 +17,7 @@ locals {
 # locals {
 #   service_images = {
 #     for name in var.ecr_repository_names : name =>
-#     "<dockerhub-user>/${name}:${var.image_tags[name]}"
+#     "<dockerhub-user>/${name}:${lookup(var.image_tags, name, "latest")}"
 #   }
 # }
 
@@ -25,20 +25,20 @@ locals {
 # Must be deployed before network — network needs bucket ARN.
 # Separate lifecycle: destroying VPC does NOT destroy log archive.
 #--------------------------------------------------------------
-module "logging-flow-logs" {
-  source = "../../modules/logging-flow-logs"
+# module "logging-flow-logs" {
+#   source = "../../modules/logging-flow-logs"
 
-  project_name = var.project_name
-  environment  = var.environment
+#   project_name = var.project_name
+#   environment  = var.environment
 
-  # Lifecycle: Standard (0-90d) → Glacier (90-365d) → Delete
-  flow_logs_glacier_transition_days = 90
-  flow_logs_expiration_days         = 365
+#   # Lifecycle: Standard (0-90d) → Glacier (90-365d) → Delete
+#   flow_logs_glacier_transition_days = 90
+#   flow_logs_expiration_days         = 365
 
-  common_tags = {
-    Module = "logging"
-  }
-}
+#   common_tags = {
+#     Module = "logging"
+#   }
+# }
 
 #--------------------------------------------------------------
 # Module 2: Network (VPC, Subnets, NAT, Flow Logs)

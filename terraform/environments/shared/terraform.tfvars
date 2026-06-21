@@ -12,7 +12,7 @@ single_nat_gateway = true # 1 NAT = ~$1/day, 3 NAT = ~$3/day
 enable_flow_logs   = true # Bật để học network debugging
 
 # VPC Endpoints — cần cho ECS Fargate (ECR pull, logs, secrets)
-enable_interface_endpoints = true
+enable_interface_endpoints = false
 
 # ACM / DNS
 domain_name      = "app.bd-apa-coi.com"
