@@ -17,3 +17,6 @@ enable_interface_endpoints = false
 # ACM / DNS
 domain_name      = "app.bd-apa-coi.com"
 hosted_zone_name = "bd-apa-coi.com"
+# image_tags = {
+#   "payment-service" = "ecs-fargate-v1"
+# }
