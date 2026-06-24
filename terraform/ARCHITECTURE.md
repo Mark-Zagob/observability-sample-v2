@@ -310,18 +310,48 @@ graph LR
 🆕 Section mới — Critical cho Platform Engineering mindset.
 
 **A. Dual Terraform Backends Strategy**
-Để so sánh thực tế trade-offs giữa Self-managed và SaaS, lab này áp dụng 2 backend khác nhau cho 2 tầng hạ tầng:
+Để so sánh thực tế trade-offs giữa Self-managed và SaaS, lab này áp dụng 2 backend khác nhau:
 | Environment | Backend | Rationale & Learning Value |
 | --- | --- | --- |
-| `environments/shared/` | **S3 + DynamoDB + KMS** | Học cách thiết lập AWS-native state, fine-grained IAM policies, encrypt state file at-rest, và xử lý state lock thủ công khi có sự cố. |
-| `environments/dev/` | **Terraform Cloud (HCP)** | Trải nghiệm VCS integration, Remote Run (chạy plan/apply trên cloud của HashiCorp), Team RBAC, và Cost Estimation tự động trên PR. |
+| `control-plane/lab/` | **S3 + KMS** (native locking) | Học cách thiết lập AWS-native state, fine-grained IAM policies, encrypt state file at-rest. |
+| `environments/tfc-sandbox/` | **Terraform Cloud (HCP)** | Trải nghiệm VCS integration, Remote Run, Team RBAC, và Cost Estimation tự động trên PR. |
 
 **B. The Control Plane vs Data Plane Boundary**
-Một anti-pattern phổ biến là dùng Terraform để quản lý cả EKS Cluster lẫn hàng trăm Kubernetes Deployments. Lab này áp dụng ranh giới chuẩn Enterprise:
-| Layer | Tool | Scope of Management | Blast Radius |
+
+Lab này cung cấp **2 cách tổ chức Terraform** để so sánh trade-offs:
+
+| Approach | Directory | Mô tả | Blast Radius |
 | --- | --- | --- | --- |
-| **Control Plane** | **Terraform** | VPC, EKS Cluster, RDS, IAM Roles, OIDC, ArgoCD Bootstrap | Lỗi Terraform có thể làm sập Network/Database. Tốc độ thay đổi chậm (Daily/Weekly). |
-| **Data Plane** | **ArgoCD + ESO** | Deployments, Services, Ingress, HPA, ConfigMaps, K8s Secrets (sync từ AWS Secrets Manager) | Lỗi ArgoCD chỉ ảnh hưởng 1 microservice. Tốc độ thay đổi nhanh (Hourly/Minutely). Self-healing. |
+| **All-in-One** (tham khảo) | `environments/shared/` | Toàn bộ infra + workload chung 1 state file. Đơn giản, phù hợp khi team nhỏ hoặc lab cá nhân. | `terraform apply` lỗi có thể ảnh hưởng **mọi thứ** (VPC, DB, Services). |
+| **CP/DP Split** (khuyến nghị) | `control-plane/` + `data-plane/` | Tách state riêng biệt: platform infra vs per-service deployment. Phù hợp team ≥ 2 người hoặc khi cần deploy service độc lập. | Lỗi Data Plane chỉ ảnh hưởng **1 service**. Control Plane thay đổi ít, review kỹ hơn. |
+
+> **📌 Khuyến nghị:** Sử dụng `control-plane/` + `data-plane/` cho tất cả các môi trường mới. `environments/shared/` được giữ lại làm **reference** để hiểu cách hoạt động all-in-one trước khi tách, và để so sánh trải nghiệm vận hành giữa 2 cách tổ chức.
+
+**Chi tiết CP/DP Split:**
+
+| Layer | Directory | State Key | Scope | Tốc độ thay đổi |
+| --- | --- | --- | --- | --- |
+| **Control Plane** | `control-plane/lab/` | `control-plane/lab/terraform.tfstate` | VPC, IAM, SGs, RDS, ECR, ECS Cluster, ALB, ACM | Weekly — cần review cẩn thận |
+| **Data Plane** | `data-plane/` | `data-plane/{service}/terraform.tfstate` | ECS Service, Task Definition per microservice | Daily/Hourly — App Team tự quản lý |
+
+**C. SSM Service Catalog (Integration Pattern)**
+Control Plane export metadata vào SSM Parameter Store theo convention `/{project}/{env}/{domain}/{resource}`. Data Plane đọc SSM parameters thay vì dùng `terraform_remote_state` — giúp **loose coupling** giữa 2 state files:
+
+```
+Control Plane (writes)          SSM Parameter Store           Data Plane (reads)
+┌──────────────────┐    /{project}/{env}/network/    ┌──────────────────┐
+│ module.network   │───▶  vpc_id, private_subnets    │ data.aws_ssm_*   │
+│ module.security  │───▶  app_sg_id, iam_role_arns   │                  │
+│ module.database  │───▶  endpoint, secret-arn       │ module.ecs_svc   │
+│ module.ecr       │───▶  ecr/{service-name}         │ (per microservice│
+│ module.ecs_cluster│──▶  cluster_id, namespace_id   │  e.g. payment)   │
+└──────────────────┘                                  └──────────────────┘
+```
+
+**D. Chaos Engineering Playbook**
+Để kiểm chứng tính resilience của kiến trúc CP/DP, xem [`docs/AWS_CHAOS_PLAYBOOK.md`](docs/AWS_CHAOS_PLAYBOOK.md) — bao gồm:
+- **Experiment 1 (IAM Blackhole):** Gỡ IAM policy → Circuit Breaker auto-rollback → bài học về "Silent Failure" khi deploy thất bại âm thầm.
+- **Experiment 2 (Network Partition):** Cắt Security Group → Zombie Task pattern → bài học về Liveness vs Readiness.
 ---
 
 ## Quick Reference
@@ -334,6 +364,6 @@ Một anti-pattern phổ biến là dùng Terraform để quản lý cả EKS Cl
 | Observability | Prometheus, Grafana, Loki, Tempo | Private | Dual-stack với CloudWatch |
 | Management | Bastion, SSM | Mgmt | No SSH, Session Manager |
 | CI/CD | OIDC, GitHub Actions, ArgoCD | External / Mgmt | OIDC IAM roles, Hybrid Push/Pull, OPA Policy-as-Code |
-| State | Terraform state | — | Dual-Backend: S3+DynamoDB (Shared) & HCP Terraform (Dev) |
+| State | Terraform state | — | Control Plane (S3) + Data Plane (S3, per-service key) + TFC Sandbox |
 | Observability | OTel, AMP, X-Ray, CloudWatch | Private / Managed | OTel-Native Bridge, ADOT, AMP, AMG |
 | Secrets | Secrets Manager, SSM | — | Auto Rotation, KMS |

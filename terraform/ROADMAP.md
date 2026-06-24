@@ -8,32 +8,37 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 2. **Chaos is a Feature:** Build xong module nào, phải "phá" (Chaos Drill) module đó ngay (Dùng AWS FIS hoặc thủ công).
 3. **OTel-Native Bridge:** Application code chỉ biết push OTLP. Hạ tầng AWS (ADOT Collector) sẽ route về AMP (Prometheus), X-Ray, CloudWatch. **Tuyệt đối không tự host Loki/Tempo trên AWS** để tránh làm "Storage Admin".
 4. **Control Plane vs Data Plane Boundary:** 
-   - *Control Plane (Terraform):* VPC, EKS Cluster, RDS, IAM, OIDC. (Tốc độ thay đổi: Tuần/Tháng).
-   - *Data Plane (ArgoCD/GitOps):* Deployments, Services, Ingress, HPA. (Tốc độ thay đổi: Giờ/Phút).
+   - *Control Plane (Terraform — `control-plane/lab/`):* VPC, IAM, SGs, RDS, ECR, ECS Cluster, ALB, ACM. (Tốc độ thay đổi: Tuần/Tháng).
+   - *Data Plane (Terraform — `data-plane/`):* ECS Service, Task Definition per microservice. Đọc metadata từ Control Plane qua SSM Parameter Store. (Tốc độ thay đổi: Ngày/Giờ).
+   - *All-in-One (`environments/shared/`):* Giữ lại làm **reference** — toàn bộ infra chung 1 state. Phù hợp khi học cách hoạt động trước khi tách.
+   - *Future Data Plane (ArgoCD/GitOps):* Khi migrate sang EKS — Deployments, Services, Ingress, HPA.
+   - 📌 **Khuyến nghị:** Dùng `control-plane/` + `data-plane/` cho tất cả môi trường mới.
+   - 🔥 Xem [`docs/AWS_CHAOS_PLAYBOOK.md`](docs/AWS_CHAOS_PLAYBOOK.md) để kiểm chứng resilience của kiến trúc này (IAM Blackhole, Network Partition).
 
 ---
 
-## 🚀 PHASE 1: THE SYNC TRACER BULLET (ECS Fargate)
-**Mục tiêu:** Đưa 4 services cốt lõi (Web UI, API GW, Order, Payment) chạy trên ECS Fargate. Hiểu về AWS Networking, IAM Task Role và ALB.
+## 🚀 PHASE 1: THE SYNC TRACER BULLET (ECS Fargate) ✅ DONE
+**Mục tiêu:** Đưa payment-service chạy trên ECS Fargate. Hiểu về AWS Networking, IAM Task Role và ALB.
 **Thời gian:** 2 Tuần
 
 ### 🧩 Modules triển khai (Playbook)
-- [ ] `ecr` (Module 9): Lifecycle policy, Image scanning.
-- [ ] `loadbalancer` (Module 11): ALB Internet-facing, Target Groups, ACM (DNS validation).
-- [ ] `compute/ecs-fargate` (Phase 8B): ECS Cluster, Task Definitions.
-- [ ] *Update* `vpc-endpoints` (Module 2): Bật ECR Interface Endpoints (để Fargate pull image không tốn phí NAT).
+- [x] `ecr` (Module 9): Lifecycle policy, Image scanning.
+- [x] `loadbalancer` (Module 11): ALB Internet-facing, Target Groups, ACM (DNS validation).
+- [x] `compute/ecs-cluster`: ECS Cluster, Cloud Map namespace.
+- [x] `compute/ecs-service`: Task Definition, Service, Circuit Breaker, ECS Exec.
+- [x] *Control Plane / Data Plane split* — SSM Service Catalog integration.
 
 ### 📦 Workload Onboard
-- [ ] Build & Push 4 images lên ECR.
-- [ ] Wire ALB -> API Gateway -> Order/Payment.
-- [ ] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Role.
+- [x] Build & Push payment-service image lên ECR.
+- [x] Wire ALB -> payment-service qua Target Group.
+- [x] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Execution Role.
 
 ### 💥 SRE / Chaos Drill
-- [ ] **Drill 1:** Revoke `ecr:GetAuthorizationToken` từ Task Execution Role -> Quan sát Task stuck ở `PENDING`.
-- [ ] **Drill 2:** Tắt SG Inbound từ ALB -> ECS -> Quan sát ALB báo `502 Bad Gateway`.
+- [x] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback.
+- [x] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern.
 
 ### ✅ Definition of Done (DoD)
-- [ ] `curl https://<ALB_DNS>/health/live` trả về 200 OK (qua HTTPS).
+- [x] `curl https://<ALB_DNS>/health/live` trả về 200 OK.
 - [ ] VPC Flow Logs (Athena) xác nhận traffic ECR pull đi qua VPC Endpoint, KHÔNG qua NAT Gateway.
 
 ---

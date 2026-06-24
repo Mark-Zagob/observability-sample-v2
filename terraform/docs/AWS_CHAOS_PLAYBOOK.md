@@ -108,29 +108,60 @@ Bạn sẽ KHÔNG thấy task mới RUNNING. Thay vào đó, ECS Events sẽ li�
 - `"service payment-service was unable to place a task... Reason: AccessDeniedException. You are not authorized to perform: logs:CreateLogStream..."`
 - hoặc `"...ecr:GetAuthorizationToken..."`
 
-### Bước 3.2: Check xem Task có sinh ra không?
+### Bước 3.2: Check xem Service có tự phục hồi không? (Circuit Breaker in Action)
 
 ```bash
-aws ecs list-tasks --cluster <your-cluster-name> --service-name payment-service --desired-status RUNNING
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount, Deployments:deployments[*].{Status:status, Running:runningCount, Rollout:rolloutState}}' \
+    --output json
 ```
 
-👁️ **Kết quả:** List sẽ rỗng hoặc chỉ có Task cũ (đang chuẩn bị bị kill). Task mới bị kẹt ở đâu đó.
+👁️ **Kết quả (Cú twist mà nhiều người không ngờ):**
 
-### Bước 3.3: Tìm Task bị "chết trong bụng mẹ" (STOPPED)
+Bạn sẽ thấy **2 deployments**:
+
+```json
+"Deployments": [
+  { "Status": "PRIMARY",   "Running": 1, "Rollout": "COMPLETED" },
+  { "Status": "INACTIVE",  "Running": 0, "Rollout": "FAILED" }
+]
+```
+
+💡 **What just happened?**
+
+1. `force-new-deployment` tạo ra deployment mới (task mới).
+2. Task mới lặp đi lặp lại: `PROVISIONING` → `PENDING` → `STOPPED` (vì thiếu IAM policy).
+3. Sau vài lần retry thất bại, **`deployment_circuit_breaker`** kích hoạt → đánh dấu deployment mới là `FAILED`.
+4. Vì `rollback = true`, ECS tự động rollback về task definition cũ → **Task cũ vẫn sống**, `Running: 1`.
+
+🚨 **THE "AHA!" MOMENT (Bẫy tinh vi hơn bạn tưởng):**
+
+Service **KHÔNG chết trắng** nhờ Circuit Breaker. Nhưng đây chính là **"Silent Failure"** — nếu bạn chỉ nhìn `Running: 1` và vội kết luận "hệ thống ổn", bạn sẽ bỏ lỡ hoàn toàn thực tế rằng **deployment vừa thất bại và đã bị rollback**.
+
+### Bước 3.3: Tìm bằng chứng trong ECS Events (The Forensics)
 
 ```bash
-# Tìm task STOPPED
-STOPPED_TASK=$(aws ecs list-tasks --cluster <your-cluster-name> --service-name payment-service --desired-status STOPPED --query 'taskArns[0]' --output text)
-
-# Xem lý do nó chết
-aws ecs describe-tasks --cluster <your-cluster-name> --tasks $STOPPED_TASK \
-    --query 'tasks[0].containers[0].{ExitCode:exitCode, Reason:reason, LastStatus:lastStatus}' \
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].events[0:5].message' \
     --output table
 ```
 
-👁️ **Kết quả:** `Reason: "ResourceInitializationError: failed to validate logger args... AccessDeniedException"`
+👁️ **Bạn sẽ thấy chuỗi events như sau (đọc từ dưới lên):**
 
-💡 **Aha! Moment:** Task chết ở phase `PENDING` → `PROVISIONING`, nó chưa bao giờ chạm đến phase `RUNNING` để App code kịp in ra một dòng log.
+1. `"...was unable to place a task... AccessDeniedException..."` (Task mới fail)
+2. `"...deployment ecs-svc/xxx circuit breaker: failure threshold exceeded..."` (Circuit Breaker trip)
+3. `"...deployment ecs-svc/xxx rolled back..."` (Auto rollback)
+4. `"...has reached a steady state."` (Service ổn định lại với task cũ)
+
+💡 **Bài học quan trọng:**
+
+- **Circuit Breaker bảo vệ Availability** (service không chết trắng), nhưng **che giấu Root Cause** nếu bạn không đọc Events.
+- Trong Production, bạn CẦN CloudWatch Alarm trên ECS Event `SERVICE_DEPLOYMENT_FAILED` để team được alert ngay lập tức, thay vì phát hiện muộn rằng "code mới không lên được".
+- Task cũ vẫn chạy = **App version cũ vẫn serve traffic**. Nếu đây là hotfix cho bug nghiêm trọng, hotfix đó sẽ KHÔNG được deploy mà bạn không hề biết.
 
 ### Bước 3.4: Kiểm tra CloudWatch Logs
 
@@ -148,7 +179,7 @@ aws logs tail $LOG_GROUP --since 10m
 Vì bạn vừa phá AWS bằng Console (ClickOps), Terraform sẽ phát hiện ra sự "trôi dạt" (Drift).
 
 ```bash
-cd terraform/environments/shared
+cd terraform/control-plane/lab
 terraform plan | grep -A 5 "iam_role_policy_attachment"
 ```
 
@@ -160,9 +191,9 @@ terraform plan | grep -A 5 "iam_role_policy_attachment"
 
 ## 🔄 Phase 4: Rollback & Recovery
 
-> Đừng dùng Console để sửa. Hãy dùng Terraform để "heal" (chữa lành) hệ thống.
+> Circuit Breaker đã giữ service sống bằng task cũ. Nhưng IAM Policy vẫn đang bị drift — cần Terraform heal.
 
-1. Đảm bảo code Terraform của bạn (`iam.tf` hoặc `ecs.tf`) vẫn còn nguyên vẹn policy attachment.
+1. Đảm bảo code Terraform của bạn (`iam_ecs.tf`) vẫn còn nguyên vẹn policy attachment.
 2. Chạy:
 
 ```bash
@@ -170,12 +201,23 @@ terraform apply -auto-approve
 ```
 
 3. Quan sát Terminal: Terraform sẽ attach lại policy vào IAM Role.
-4. Đợi 2-3 phút, ECS Service sẽ tự động nhận ra nó đã có "giấy thông hành", và spawn Task mới thành công.
+4. Sau khi IAM được heal, force deploy lại để chứng minh task mới đã lên được:
 
 ```bash
-# Verify recovery
-aws ecs describe-services --cluster <your-cluster-name> --services payment-service --query 'services[0].{Status:status, Running:runningCount}'
+aws ecs update-service \
+    --cluster <your-cluster-name> \
+    --service payment-service \
+    --force-new-deployment
+
+# Đợi 1-2 phút, sau đó verify
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Deployments:deployments[*].{Status:status, Rollout:rolloutState}}' \
+    --output json
 ```
+
+✅ **Kỳ vọng:** Chỉ còn 1 deployment duy nhất với `Rollout: COMPLETED`. Task mới đã chạy thành công.
 
 ---
 
@@ -185,13 +227,15 @@ aws ecs describe-services --cluster <your-cluster-name> --services payment-servi
 
 | Câu hỏi | Trả lời của bạn (Gợi ý) |
 |---------|------------------------|
-| 1. Why did the deployment fail? | Task mới không thể chuyển sang trạng thái `RUNNING`. |
+| 1. Why did the deployment fail? | Task mới không thể chuyển sang trạng thái `RUNNING`. Circuit Breaker phát hiện và rollback. |
 | 2. Why couldn't Task start? | ECS Agent bị chặn quyền `logs:CreateLogStream` (hoặc `ecr:GetAuthorizationToken`). |
 | 3. Why was the permission blocked? | (Drill) Tôi đã cố tình gỡ IAM Policy khỏi Task Execution Role. |
-| 4. Why is this role critical? | Nó là "giấy thông hành" của ECS Agent (Control Plane), không phải của App Code (Data Plane). Mất nó, container không thể sinh ra. |
-| 5. Systemic Gap (Production)? | Nếu một DevOps vô tình xóa policy này trên Prod thì sao? |
+| 4. Why didn't anyone notice immediately? | Circuit Breaker giữ task cũ sống → `Running: 1` → Dashboard vẫn xanh. Deployment thất bại nhưng **không ai bị alert**. |
+| 5. Systemic Gap (Production)? | Nếu đây là hotfix cho critical bug, hotfix sẽ KHÔNG được deploy mà team không biết. Cần alert trên `SERVICE_DEPLOYMENT_FAILED`. |
 
-**Action Item (Phase 3):** Viết OPA Policy (Rego) chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy` khỏi ECS Task Execution Role.
+**Action Items:**
+1. Viết OPA Policy (Rego) chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy` khỏi ECS Task Execution Role.
+2. Tạo CloudWatch Alarm / EventBridge Rule trên ECS Event `SERVICE_DEPLOYMENT_FAILED` → gửi SNS notification cho team.
 
 ---
 
@@ -261,7 +305,7 @@ Chúng ta sẽ dùng Terraform để gỡ bỏ "sợi dây cáp mạng" nối t�
 4. Chạy lệnh:
 
 ```bash
-cd terraform/environments/shared
+cd terraform/control-plane/lab
 terraform apply -auto-approve
 ```
 

@@ -133,18 +133,22 @@ observability-sample-v2/
 │       ├── 00-TEMPLATE.md                # Chuẩn hóa format (5 Whys, Action Items)
 │       └── 01-GOLDEN-EXAMPLE-*.md        # Ví dụ mẫu — DB Saturation incident
 │
-├── terraform/                             # 🔄 AWS IaC — Foundation done
+├── terraform/                             # 🔄 AWS IaC — Foundation + ECS Fargate done
 │   ├── README.md                         # Learning objectives, navigation, anti-patterns
 │   ├── ARCHITECTURE.md                   # AWS blueprint — VPC topology, compute phases
 │   ├── AWS_TERRAFORM_PLAYBOOK.md         # Module-by-module deployment playbook
-│   ├── bootstrap/                        # S3 state backend + DynamoDB lock + KMS
+│   ├── ROADMAP.md                        # Master roadmap (Workload & Platform)
+│   ├── bootstrap/                        # S3 state backend + KMS
+│   ├── control-plane/                    # 🆕 Platform infra (VPC, IAM, RDS, ECR, ECS Cluster)
+│   │   └── lab/                           #   Lab environment (S3 backend)
+│   ├── data-plane/                       # 🆕 Per-service ECS deployments (SSM → ecs-service)
 │   ├── environments/
-│   │   ├── shared/                       # Shared infra (VPC, Security, RDS)
-│   │   └── dev/                          # Dev environment (Terraform Cloud backend)
+│   │   └── shared/                       # All-in-one reference (1 state file, phù hợp lab cá nhân)
 │   ├── modules/
 │   │   ├── network/                      # VPC, subnets, NAT, route tables
 │   │   ├── security/                     # Security groups, IAM roles
 │   │   ├── database/                     # RDS PostgreSQL Multi-AZ
+│   │   ├── compute/                      # 🆕 ecs-cluster, ecs-service (Fargate)
 │   │   ├── vpc-endpoints/                # Private connectivity tới AWS services
 │   │   ├── logging-flow-logs/            # S3 + Athena for flow log archive + KMS
 │   │   └── backup/                       # AWS Backup vault, plans, compliance reports
@@ -152,7 +156,7 @@ observability-sample-v2/
 │   ├── docs/                             # Deep-dive documentation
 │   │   ├── TRADE_OFFS.md                # Architecture decision records
 │   │   ├── FINOPS.md                    # AWS cost management & optimization
-│   │   └── chaos-exercises-network.md   # 12 break/test/recover exercises
+│   │   └── AWS_CHAOS_PLAYBOOK.md        # IAM Blackhole & Network Partition drills
 │   └── interviews/                       # DevOps interview questions
 │       └── devops-question-m1-iac-core.md  # 54 câu hỏi IaC (Terraform, state, modules)
 │
@@ -342,13 +346,18 @@ curl -s http://localhost:5000/health | jq .
 cd terraform/bootstrap
 terraform init && terraform apply
 
-# 2. Deploy shared infrastructure
-cd ../environments/shared
+# 2. Deploy Control Plane (platform infra)
+cd ../control-plane/lab
 terraform init
 terraform plan -out=plan.tfplan
 terraform show -json plan.tfplan > plan.json
 conftest test plan.json -p ../../policy/    # Validate OPA policies
 terraform apply plan.tfplan
+
+# 3. Deploy Data Plane (per-service, e.g. payment-service)
+cd ../../data-plane
+# Edit terraform.tfvars: service_name, image_tag
+terraform init && terraform apply
 ```
 
 > 💡 **FinOps Tip:** `terraform destroy` → $0/day. Apply sáng, destroy tối ≈ $10/ngày.
@@ -381,12 +390,12 @@ terraform apply plan.tfplan
 
 ### Terraform / AWS
 
-| File | Nội dung |
-|------|---------|
-| [`ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | AWS blueprint — VPC topology, compute phases, failure domains |
+| [`ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | AWS blueprint — VPC topology, compute phases, failure domains, CP/DP split |
 | [`AWS_TERRAFORM_PLAYBOOK.md`](terraform/AWS_TERRAFORM_PLAYBOOK.md) | Module-by-module deployment playbook |
+| [`ROADMAP.md`](terraform/ROADMAP.md) | Master roadmap — Workload & Platform driven phases |
 | [`docs/TRADE_OFFS.md`](terraform/docs/TRADE_OFFS.md) | Architecture decision records — why these AWS services? |
 | [`docs/FINOPS.md`](terraform/docs/FINOPS.md) | AWS cost management & optimization strategies |
+| [`docs/AWS_CHAOS_PLAYBOOK.md`](terraform/docs/AWS_CHAOS_PLAYBOOK.md) | 🔥 Chaos Engineering — IAM Blackhole (Silent Failure), Network Partition (Zombie Task) |
 | [`docs/chaos-exercises-network.md`](terraform/docs/chaos-exercises-network.md) | 12 network chaos engineering exercises |
 | [`policy/README.md`](terraform/policy/README.md) | Hướng dẫn OPA policy-as-code |
 | [`interviews/devops-question-m1-iac-core.md`](terraform/interviews/devops-question-m1-iac-core.md) | 54 câu hỏi phỏng vấn IaC (Terraform, state, modules) |

@@ -28,7 +28,7 @@ Sau khi hoàn thành lab này, bạn sẽ có khả năng:
 |---|---|
 | **ECS-First Approach** | Dù EKS rất phổ biến, **ECS** vẫn là "workhorse" cho ~70% workload enterprise/SMB do operational overhead thấp hơn. Lab này master ECS (EC2 & Fargate launch types, Capacity Providers) trước để hiểu bản chất container orchestration trước khi tackle K8s control plane. |
 | **Hybrid CI/CD Strategy** | **CI** luôn là GitHub Actions (Build, Test, Push ECR). **CD** phụ thuộc ngữ cảnh: **Push-based** (GHA + AWS CLI/Terraform) cho ECS để hiểu imperative deployment, và **Pull-based GitOps** (ArgoCD) khi chuyển sang EKS để master declarative state reconciliation. |
-| **Dual Terraform Backends** | `shared/` dùng **S3 + DynamoDB** (AWS native, fine-grained IAM, KMS). `dev/` dùng **Terraform Cloud** (VCS integration, remote ops, team RBAC). Sự phân tách này giúp so sánh trade-offs giữa Self-managed vs SaaS state management dựa trên team size. |
+| **Dual Terraform Backends** | `control-plane/lab/` dùng **S3 + KMS** (AWS native, native locking). `environments/tfc-sandbox/` dùng **Terraform Cloud** (VCS integration, remote ops, team RBAC). Sự phân tách này giúp so sánh trade-offs giữa Self-managed vs SaaS state management. |
 | **OTel-Native Observability** | App code chỉ emit OTLP (Vendor-neutral). AWS Managed Services (AMP, X-Ray, CloudWatch) làm backend. Tách biệt "Telemetry Generation" và "Storage" để chống vendor lock-in ở tầng application. |
 ---
 
@@ -88,10 +88,12 @@ graph TB
 | Data | `database` (RDS) | ✅ Done |
 | Data | `cache` (ElastiCache), `streaming` (MSK) | 🔲 TODO |
 | Data | `opensearch`, `rds-proxy` | 🆕 NEW — TODO |
-| Platform | `ecr`, `efs`, `loadbalancer` | 🔲 TODO |
+| Platform | `ecr`, `loadbalancer`, `acm` | ✅ Done |
+| Compute | `ecs-cluster`, `ecs-service` (Fargate) | ✅ Done |
+| IaC Split | Control Plane / Data Plane + SSM Service Catalog | ✅ Done |
 | Operations | `bastion`, `cicd`, `backup`, `budgets` | 🔲 TODO |
 | Operations | `fis` (Chaos Engineering) | 🆕 NEW — TODO |
-| Compute | `ecs-ec2`, `ecs-fargate`, `eks-nodegroup`, `eks-fargate` | 🔲 TODO |
+| Compute | `ecs-ec2`, `eks-nodegroup`, `eks-fargate` | 🔲 TODO |
 | DR | Pilot Light (cross-region) | 🔲 TODO |
 
 ---
@@ -135,16 +137,19 @@ graph TB
 - Terraform ≥ 1.7.0
 - AWS CLI configured (`aws configure`)
 - S3 backend bootstrapped (xem `bootstrap/`)
-> ⚠️ **State Management Note (Dual-Backend Setup):**
-> *   **Shared Infra (Network, DB, Security):** Sử dụng `S3 + DynamoDB`. Bạn **BẮT BUỘC** phải chạy module `bootstrap/` trước để tạo S3 bucket, DynamoDB lock table và KMS key.
-> *   **Dev/Workloads:** Sử dụng `Terraform Cloud` (HCP Terraform). Bạn cần chạy `terraform login` và map workspace trên HCP dashboard trước khi `terraform init`.
-> *   *Learning Goal:* So sánh UX, Security Model (IAM vs API Tokens) và Cost giữa AWS Native State và SaaS State.
+> ⚠️ **State Management Note (Control Plane / Data Plane):**
+> *   **Control Plane** (`control-plane/lab/`): Platform infra (VPC, IAM, RDS, ECR, ECS Cluster). S3 backend, state key `control-plane/lab/`.
+> *   **Data Plane** (`data-plane/`): Per-service ECS deployments. S3 backend, state key `data-plane/{service}/`. Đọc metadata từ Control Plane qua SSM Parameter Store.
+> *   **All-in-One** (`environments/shared/`): Giữ lại làm **reference** — toàn bộ infra chung 1 state file, phù hợp khi học cách hoạt động trước khi tách.
+> *   **TFC Sandbox** (`environments/tfc-sandbox/`): Terraform Cloud backend để so sánh UX.
+>
+> 📌 **Khuyến nghị:** Sử dụng `control-plane/` + `data-plane/` cho tất cả môi trường mới. `shared/` chỉ dùng để tham khảo.
 - OPA + conftest installed
 
-**Deploy shared infrastructure:**
+**Deploy Control Plane (platform infra):**
 
 ```bash
-cd environments/shared
+cd control-plane/lab
 terraform init
 terraform plan -out=plan.tfplan
 terraform show -json plan.tfplan > plan.json
@@ -152,11 +157,20 @@ conftest test plan.json -p ../../policy/  # Validate OPA policies
 terraform apply plan.tfplan
 ```
 
-**Destroy:**
+**Deploy Data Plane (per-service):**
 
 ```bash
-cd environments/shared
-terraform destroy
+cd data-plane
+# Edit terraform.tfvars: service_name, image_tag
+terraform init
+terraform apply
+```
+
+**Destroy (reverse order):**
+
+```bash
+cd data-plane && terraform destroy       # Data Plane first
+cd ../control-plane/lab && terraform destroy  # Then Control Plane
 ```
 
 > 💡 **FinOps Tip:** `terraform destroy` → $0/day. Apply sáng, destroy tối ≈ $10/ngày.
@@ -168,17 +182,23 @@ terraform destroy
 ```
 terraform/
 ├── README.md                          ← File này (Front Door)
-├── ARCHITECTURE_AWS.md                ← Blueprint & Failure Domains
-├── AWS_TERRAFORM_PLAYBOOK.md          ← 🆕 Module-by-module playbook
-├── TRADE_OFFS.md                      ← 🆕 Decision records (why AWS services?)
-├── FINOPS.md                          ← 🆕 Cost management & optimization
-├── LEARNING_PATH.md                   ← 🆕 6-week curriculum
+├── ARCHITECTURE.md                    ← Blueprint & Failure Domains
+├── AWS_TERRAFORM_PLAYBOOK.md          ← Module-by-module playbook
+├── ROADMAP.md                         ← Master roadmap (Workload & Platform)
 │
+├── control-plane/                     ← 🆕 Platform infra (VPC, IAM, RDS, ECS Cluster)
+│   └── lab/                           ←   Lab environment (S3 backend)
+├── data-plane/                        ← 🆕 Per-service ECS deployments
+│   ├── main.tf                        ←   Reads SSM → deploys ecs-service module
+│   └── terraform.tfvars               ←   App Team config (image_tag, cpu, memory)
+├── environments/                      ← shared/ (all-in-one reference) + TFC sandbox
 ├── modules/                           ← Reusable Terraform modules
-├── environments/                      ← Per-environment configs
+├── bootstrap/                         ← S3 state backend + KMS
 ├── policy/                            ← OPA/Rego policy-as-code
-├── drills/                            ← 🆕 AWS FIS chaos scenarios
-├── runbooks/                          ← 🆕 AWS-specific runbooks
+├── docs/                              ← Deep-dive documentation
+│   ├── TRADE_OFFS.md                  ←   Architecture decision records
+│   ├── FINOPS.md                      ←   AWS cost management & optimization
+│   └── AWS_CHAOS_PLAYBOOK.md          ←   🔥 Chaos Engineering (IAM Blackhole, Network Partition)
 └── interviews/                        ← DevOps interview questions
 ```
 
