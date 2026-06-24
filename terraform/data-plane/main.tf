@@ -45,7 +45,7 @@ data "aws_ssm_parameter" "db_endpoint" {
 }
 
 data "aws_ssm_parameter" "db_secret_arn" {
-  name = "/obs/lab/database/secret_arn"
+  name = "/obs/lab/database/secret-arn"
 }
 
 #--------------------------------------------------------------
