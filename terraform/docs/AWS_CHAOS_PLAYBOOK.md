@@ -12,80 +12,358 @@
 
 ---
 
-## 🧪 Experiment 1: The IAM Blackhole (Task Execution Role)
+# 🧪 Experiment 1: The IAM Blackhole (Task Execution Role)
 
-**Mục tiêu:** Hiểu rõ sự khác biệt giữa `Task Role` (App dùng) và `Task Execution Role` (ECS Agent dùng). Kiểm chứng cơ chế tự phục hồi của ECS Fargate.
-
-**Blast Radius:** 1 ECS Service (`payment-service`).
-
-**Stop Condition:** Khôi phục IAM Policy ngay lập tức sau khi quan sát xong ECS Events.
-
-### 🛠️ Steps to Inject
-
-1. Mở AWS Console → IAM → Roles → Tìm role có tên `<project_name>-ecs-task-execution`.
-2. Ở tab **Permissions**, tìm policy `AmazonECSTaskExecutionRolePolicy` (hoặc custom policy đọc Secrets Manager).
-3. Bấm **Remove** (Gỡ bỏ) policy này khỏi Role.
-4. Mở ECS Console → Cluster → `payment-service` → Bấm **Update Service** → Tích vào `Force new deployment` → Bấm Create.
-
-### 👁️ What to Observe (The SRE Lens)
-
-1. **ECS Console (Tab Events):** Bạn sẽ KHÔNG thấy Task mới chuyển sang `RUNNING`. Thay vào đó, sau khoảng 1–2 phút, ECS Events sẽ bắn ra lỗi:
-
-   > *"service payment-service was unable to place a task... Reason: AccessDeniedException. You are not authorized to perform: logs:CreateLogStream / ecr:GetAuthorizationToken"*
-
-2. **CloudWatch Logs:** Hoàn toàn trống trơn (vì Task chết trước khi App kịp code log).
-3. **AWS CloudTrail (Event History):** Tìm kiếm Event `AssumeRole` hoặc `AccessDenied` để thấy ECS Agent đang bị IAM chặn đứng như thế nào.
-
-### 🔄 Rollback
-
-1. Vào lại IAM Role → **Add permissions** → Attach lại `AmazonECSTaskExecutionRolePolicy` và các policy cần thiết.
-2. ECS Service sẽ tự động nhận ra sự thay đổi, spawn Task mới và Task sẽ chuyển sang `RUNNING`.
-
-### 🧠 Post-Mortem & Learnings
-
-- **Bài học:** Task Execution Role là "giấy thông hành" để ECS Agent kéo image và tạo log. Mất nó, Workload không thể sinh ra (**Birth failure**), khác với việc App đang chạy thì bị crash (**Runtime failure**).
-- **Platform Guardrail:** Đây là lý do Phase 3 (OPA Conftest) sẽ chặn mọi PR Terraform cố tình xóa bỏ IAM Role attachment của ECS Services.
+**SEV-3** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~15 phút
 
 ---
 
-## 🧪 Experiment 2: The Network Partition (Security Group Isolation)
+## 🎯 Mục tiêu & SRE Mindset
 
-**Mục tiêu:** Kiểm chứng `deployment_circuit_breaker` (Lá chắn đã fix ở Step 1) và cách ALB Health Check điều phối Traffic.
+Hiểu rõ sự khác biệt sống còn giữa **Task Execution Role** (ECS Agent dùng để kéo image, ghi log) và **Task Role** (App code dùng để gọi AWS API).
 
-**Blast Radius:** Luồng traffic từ ALB vào `payment-service`.
+Kiểm chứng giả thuyết: *"Mất Execution Role, Workload sẽ không thể 'chào đời' (Birth Failure), khác hoàn toàn với việc App đang chạy thì bị crash (Runtime Failure)."*
 
-**Stop Condition:** Add lại Inbound Rule ngay khi ALB báo Target Unhealthy.
+---
 
-### 🛠️ Steps to Inject
+## 🛑 Phase 0: Pre-flight Check (Steady State)
 
-1. Mở file `terraform/modules/security/security_groups.tf`.
-2. Tìm block `resource "aws_security_group_rule" "app_ingress_from_alb"`.
-3. **Comment out** (hoặc xóa) block này.
-4. Chạy `terraform apply`. (AWS sẽ thu hồi quyền ALB gọi vào App SG).
+> *Mục tiêu: Đảm bảo hệ thống đang KHỎE trước khi phá. Không bao giờ drill trên một hệ thống đang ốm.*
 
-### 👁️ What to Observe (The SRE Lens)
+Mở Terminal và chạy:
 
-1. **EC2 Console → Target Groups:** Chọn Target Group của `payment-service`. Bạn sẽ thấy Health Status chuyển từ `Healthy` sang `Unhealthy` (do ALB không thể gửi gói tin TCP/HTTP Health Check vào App).
-
-2. **ECS Console → Service `payment-service`:**
-   - Nếu bạn đã fix **Bom #2 (Deployment Circuit Breaker)**: ECS sẽ phát hiện Task mới không nhận được traffic hoặc Health Check fail, nó sẽ tự động **Rollback** về Task Definition cũ (nếu có) hoặc giữ nguyên Task cũ và báo lỗi `DEPLOYMENT_FAILED`.
-   - *Lưu ý:* Nếu `payment-service` không gắn ALB (chỉ dùng Cloud Map nội bộ), Drill này sẽ không ảnh hưởng đến Health Check của ECS, mà chỉ chặn các service khác (như API Gateway) gọi đến nó qua Cloud Map DNS.
-
-3. **VPC Flow Logs (Nếu đã bật):** Query trên Athena hoặc CloudWatch Logs Insights:
-
-```sql
-   SELECT * FROM vpc_flow_logs
-   WHERE dstport = 5002 AND action = 'REJECT'
+```bash
+# 1. Check xem service có đang RUNNING không
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount, Events:events[0:2]}' \
+    --output table
 ```
 
-   Bạn sẽ thấy hàng loạt gói tin từ ALB bị `REJECT` ở tầng Network.
+✅ **Kỳ vọng:** `Status: ACTIVE`, `Running: 1`, `Desired: 1`. Events gần nhất không có lỗi.  
+❌ **Nếu sai:** DỪNG LẠI. Fix hệ thống trước khi drill.
 
-### 🔄 Rollback
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+> *Mục tiêu: Chụp ảnh "hiện trường" trước khi gây án.*
+
+```bash
+# 2. Lưu lại ARN của Task Execution Role hiện tại
+EXEC_ROLE_ARN=$(aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].taskDefinition' --output text | xargs -I {} aws ecs describe-task-definition --task-definition {} --query 'taskDefinition.executionRoleArn' --output text)
+echo "Current Exec Role: $EXEC_ROLE_ARN"
+
+# 3. Lấy tên Log Group để tí nữa verify
+LOG_GROUP="/ecs/<your-project>/payment-service"
+echo "Log Group: $LOG_GROUP"
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Service RUNNING, Exec Role attached.
+
+---
+
+## 💥 Phase 2: Inject Failure (The Blackhole)
+
+Chúng ta sẽ dùng AWS Console để inject (vì IAM Policy UI trực quan), nhưng sẽ dùng CLI để quan sát.
+
+1. Mở AWS Console → IAM → Roles → Tìm role `<project_name>-ecs-task-execution`.
+2. Tab **Permissions** → Tìm policy `AmazonECSTaskExecutionRolePolicy` (hoặc policy custom cho CloudWatch Logs/Secrets Manager).
+3. Bấm **Remove** (Gỡ bỏ).
+4. Quay lại Terminal, ép ECS spawn task mới:
+
+```bash
+aws ecs update-service \
+    --cluster <your-cluster-name> \
+    --service payment-service \
+    --force-new-deployment
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Removed Execution Role policy + Force Deploy.
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The Investigation)
+
+> Đây là lúc bạn đeo kính lúp của SRE. KHÔNG MỞ AWS CONSOLE. Hãy nhìn Terminal.
+
+### Bước 3.1: Đợi 1-2 phút, sau đó check Events
+
+```bash
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].events[0:5]' \
+    --output table
+```
+
+👁️ **The SRE Lens (Bạn sẽ thấy gì?):**
+
+Bạn sẽ KHÔNG thấy task mới RUNNING. Thay vào đó, ECS Events sẽ liên tục bắn ra:
+
+- `"service payment-service was unable to place a task... Reason: AccessDeniedException. You are not authorized to perform: logs:CreateLogStream..."`
+- hoặc `"...ecr:GetAuthorizationToken..."`
+
+### Bước 3.2: Check xem Task có sinh ra không?
+
+```bash
+aws ecs list-tasks --cluster <your-cluster-name> --service-name payment-service --desired-status RUNNING
+```
+
+👁️ **Kết quả:** List sẽ rỗng hoặc chỉ có Task cũ (đang chuẩn bị bị kill). Task mới bị kẹt ở đâu đó.
+
+### Bước 3.3: Tìm Task bị "chết trong bụng mẹ" (STOPPED)
+
+```bash
+# Tìm task STOPPED
+STOPPED_TASK=$(aws ecs list-tasks --cluster <your-cluster-name> --service-name payment-service --desired-status STOPPED --query 'taskArns[0]' --output text)
+
+# Xem lý do nó chết
+aws ecs describe-tasks --cluster <your-cluster-name> --tasks $STOPPED_TASK \
+    --query 'tasks[0].containers[0].{ExitCode:exitCode, Reason:reason, LastStatus:lastStatus}' \
+    --output table
+```
+
+👁️ **Kết quả:** `Reason: "ResourceInitializationError: failed to validate logger args... AccessDeniedException"`
+
+💡 **Aha! Moment:** Task chết ở phase `PENDING` → `PROVISIONING`, nó chưa bao giờ chạm đến phase `RUNNING` để App code kịp in ra một dòng log.
+
+### Bước 3.4: Kiểm tra CloudWatch Logs
+
+```bash
+# (Yêu cầu AWS CLI v2. Nếu dùng v1, hãy mở Console CloudWatch Logs để verify)
+aws logs tail $LOG_GROUP --since 10m
+```
+
+👁️ **Kết quả:** Hoàn toàn trống trơn.
+
+💡 **Bài học:** Nếu bạn chỉ dựa vào App Logs để debug, bạn sẽ bị "mù" (Blindspot). Bạn bắt buộc phải nhìn vào Control Plane Logs (ECS Events).
+
+### Bước 3.5 (Nâng cao): Terraform Drift Detection
+
+Vì bạn vừa phá AWS bằng Console (ClickOps), Terraform sẽ phát hiện ra sự "trôi dạt" (Drift).
+
+```bash
+cd terraform/environments/shared
+terraform plan | grep -A 5 "iam_role_policy_attachment"
+```
+
+👁️ **Kết quả:** Terraform sẽ báo `~ update in-place` hoặc `+ create` để attach lại policy.
+
+💡 **Platform Mindset:** Trong Production, nếu ai đó lén gỡ policy này, Terraform Plan trong CI/CD pipeline sẽ "hét lên" và chặn không cho merge PR nếu không có sự chấp thuận.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+> Đừng dùng Console để sửa. Hãy dùng Terraform để "heal" (chữa lành) hệ thống.
+
+1. Đảm bảo code Terraform của bạn (`iam.tf` hoặc `ecs.tf`) vẫn còn nguyên vẹn policy attachment.
+2. Chạy:
+
+```bash
+terraform apply -auto-approve
+```
+
+3. Quan sát Terminal: Terraform sẽ attach lại policy vào IAM Role.
+4. Đợi 2-3 phút, ECS Service sẽ tự động nhận ra nó đã có "giấy thông hành", và spawn Task mới thành công.
+
+```bash
+# Verify recovery
+aws ecs describe-services --cluster <your-cluster-name> --services payment-service --query 'services[0].{Status:status, Running:runningCount}'
+```
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+Điền vào Incident Log của bạn.
+
+| Câu hỏi | Trả lời của bạn (Gợi ý) |
+|---------|------------------------|
+| 1. Why did the deployment fail? | Task mới không thể chuyển sang trạng thái `RUNNING`. |
+| 2. Why couldn't Task start? | ECS Agent bị chặn quyền `logs:CreateLogStream` (hoặc `ecr:GetAuthorizationToken`). |
+| 3. Why was the permission blocked? | (Drill) Tôi đã cố tình gỡ IAM Policy khỏi Task Execution Role. |
+| 4. Why is this role critical? | Nó là "giấy thông hành" của ECS Agent (Control Plane), không phải của App Code (Data Plane). Mất nó, container không thể sinh ra. |
+| 5. Systemic Gap (Production)? | Nếu một DevOps vô tình xóa policy này trên Prod thì sao? |
+
+**Action Item (Phase 3):** Viết OPA Policy (Rego) chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy` khỏi ECS Task Execution Role.
+
+---
+
+# 🧪 Experiment 2: The Network Partition (Security Group Isolation)
+
+**SEV-2** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~20 phút
+
+---
+
+## 🎯 Mục tiêu & SRE Mindset
+
+Hiểu rõ sự khác biệt sống còn giữa **Liveness** (App có đang chạy không?) và **Readiness** (App có thể nhận traffic không?).
+
+Kiểm chứng giả thuyết: *"Network Partition không làm App crash. Nó biến App thành một 'Zombie' – vẫn thở nhưng không ai nghe thấy tiếng gọi."*
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+> *Mục tiêu: Đảm bảo ALB đang route traffic thành công xuống ECS Task.*
+
+Mở Terminal và chạy:
+
+```bash
+# 1. Lấy DNS của ALB
+ALB_DNS=$(aws elbv2 describe-load-balancers \
+    --names <your-project>-alb \
+    --query 'LoadBalancers[0].DNSName' --output text)
+echo "ALB DNS: $ALB_DNS"
+
+# 2. Verify traffic đang thông suốt (Kỳ vọng: 200 OK hoặc 404 Not Found của API GW)
+curl -I http://$ALB_DNS/health/live
+```
+
+✅ **Kỳ vọng:** HTTP Status 200 hoặc 404 (miễn là không phải 502/504).
+
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+> *Mục tiêu: Chụp ảnh "hiện trường" Target Group khi hệ thống khỏe mạnh.*
+
+```bash
+# 3. Lấy Target Group ARN của payment-service
+TG_ARN=$(aws elbv2 describe-target-groups \
+    --names <your-project>-payment-service \
+    --query 'TargetGroups[0].TargetGroupArn' --output text)
+
+# 4. Check Health Status qua CLI
+aws elbv2 describe-target-health \
+    --target-group-arn $TG_ARN \
+    --query 'TargetHealthDescriptions[*].{Target:Target.Id, State:TargetHealth.State, Reason:TargetHealth.Reason}' \
+    --output table
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Target Group State = HEALTHY.
+
+---
+
+## 💥 Phase 2: Inject Failure (The Isolation)
+
+Chúng ta sẽ dùng Terraform để gỡ bỏ "sợi dây cáp mạng" nối từ ALB vào App.
+
+1. Mở file `terraform/modules/security/security_groups.tf`.
+2. Tìm block `resource "aws_security_group_rule" "app_ingress_from_alb"` (hoặc rule cho phép ALB SG gọi vào App SG ở port 5002).
+3. Comment out (hoặc xóa) block đó.
+4. Chạy lệnh:
+
+```bash
+cd terraform/environments/shared
+terraform apply -auto-approve
+```
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The "Zombie" Investigation)
+
+> Đây là lúc tư duy SRE của bạn được thử thách. HÃY MỞ 3 TERMINAL để thấy bức tranh toàn cảnh.
+
+### Terminal 1: Giả lập User Traffic (The Symptom)
+
+Chạy vòng lặp curl để bắn request liên tục vào ALB:
+
+```bash
+while true; do curl -s -o /dev/null -w "%{http_code}\n" http://$ALB_DNS/api/payment/health; sleep 1; done
+```
+
+👁️ **The SRE Lens:**
+
+Ban đầu bạn thấy 200. Khoảng 60-90s sau khi chạy `terraform apply`, terminal sẽ liên tục bắn ra `502` (Bad Gateway) hoặc `504` (Gateway Timeout).
+
+💡 **Tại sao?** ALB cố gắng gửi Health Check và Traffic xuống App, nhưng bị VPC Router chặn đứng (Drop) ở tầng Network.
+
+### Terminal 2: Check ALB Target Health (The Control Plane)
+
+```bash
+aws elbv2 describe-target-health \
+    --target-group-arn $TG_ARN \
+    --query 'TargetHealthDescriptions[*].{Target:Target.Id, State:TargetHealth.State, Reason:TargetHealth.Reason, Desc:TargetHealth.Description}' \
+    --output table
+```
+
+👁️ **Kết quả:**
+
+- `State: unhealthy`
+- `Reason: Health checks failed`
+- `Description: Health check failed with status code 0` (hoặc Timeout)
+
+💡 ALB đã nhận ra "cư dân" này không còn phản hồi và ngừng route traffic mới vào nó.
+
+### Terminal 3: Check ECS Task Status (The Illusion / Bẫy lớn nhất)
+
+```bash
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount, Deployments:deployments[*].{Status:status, Running:runningCount, Rollback:rollBack}}' \
+    --output json
+```
+
+👁️ **Kết quả (Cú sốc cho Junior SRE):**
+
+- `Status: ACTIVE`
+- `Running: 1`
+- `Rollback: false` (Hoặc Circuit Breaker KHÔNG kích hoạt)
+
+🚨 **THE "AHA!" MOMENT (Đính chính hiểu lầm tai hại):**
+
+Nhiều người nghĩ rằng `deployment_circuit_breaker` sẽ tự động Rollback khi ALB báo Unhealthy. **SAI!**
+
+- Circuit Breaker CHỈ hoạt động trong quá trình **DEPLOYMENT** (khi Task mới đang cố gắng replace Task cũ).
+- Nếu Task ĐANG CHẠY ỔN ĐỊNH mà bạn đột ngột cắt Network (SG Rule), ECS Control Plane KHÔNG giết Task đó, và KHÔNG Rollback.
+- Dưới góc nhìn của ECS Agent: Container vẫn đang chạy (Liveness Probe = Pass, Process PID vẫn tồn tại). ECS không biết gì về việc AWS VPC Network đang drop gói tin.
+- **Kết luận:** Bạn vừa tạo ra một **Zombie Task**. Nó vẫn tốn tiền CPU/RAM của bạn, vẫn ghi log "Server started on port 5002", nhưng không phục vụ bất kỳ user nào.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+Khôi phục "sợi dây cáp mạng" bằng Terraform.
 
 1. Uncomment lại block `app_ingress_from_alb` trong `security_groups.tf`.
-2. Chạy `terraform apply`. AWS SG Rule được tái tạo, ALB ngay lập tức probe lại và đánh dấu Target là Healthy.
+2. Chạy:
 
-### 🧠 Post-Mortem & Learnings
+```bash
+terraform apply -auto-approve
+```
 
-- **Bài học:** Security Group hoạt động ở tầng Stateful Firewall. Việc xóa Rule không làm sập App, mà làm App bị **"cô lập" (Network Partition)**.
-- **SRE Mindset:** Trong các hệ thống Microservices, Network Partition nguy hiểm hơn Service Crash, vì App vẫn nghĩ mình đang `RUNNING` (Liveness Probe pass) nhưng thực tế không nhận được request nào (Readiness Probe fail).
+3. Quan sát Terminal 1 (Vòng lặp curl):
+   - Đợi khoảng 30s - 60s (Thời gian AWS propagate SG Rule + ALB Health Check Interval 30s × 3 lần success).
+   - Mã HTTP sẽ nhảy từ `502` trở lại về `200`.
+
+4. Verify Target Group:
+
+```bash
+aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealthDescriptions[*].TargetHealth.State'
+# Kỳ vọng: ['healthy']
+```
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời của bạn (Gợi ý) |
+|---------|------------------------|
+| 1. Why did users get 502 Bad Gateway? | ALB không thể kết nối TCP/HTTP tới ECS Task để forward request. |
+| 2. Why couldn't ALB reach the Task? | Security Group Inbound Rule từ ALB SG đến App SG bị xóa. VPC Network drop gói tin. |
+| 3. Why didn't ECS restart or rollback the Task? | ECS chỉ kiểm tra Liveness (Container có đang chạy process không?). Nó không tự động kiểm tra Readiness (Network có thông không?) đối với các Task đã chạy ổn định từ trước. |
+| 4. Why is Network Partition dangerous? | Nó tạo ra "Zombie Tasks" – chiếm dụng tài nguyên, làm sai lệch metrics (App báo healthy, nhưng Business metric = 0), và gây khó khăn khi debug nếu chỉ nhìn vào ECS Console. |
+| 5. Systemic Gap (Production)? | Nếu AI/Dev vô tình xóa SG Rule trên Prod, làm sao phát hiện ngay lập tức? |
+
+**Action Item (Phase 3/8):**
+
+1. Cần một CloudWatch Alarm dựa trên metric `HTTPCode_Target_5XX_Count` của ALB.
+2. (Nâng cao) Cấu hình App tự động tắt (Crash) nếu nó phát hiện không nhận được request nào trong 5 phút (Self-preservation pattern).
