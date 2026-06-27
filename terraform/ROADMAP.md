@@ -37,6 +37,7 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 ### 💥 SRE / Chaos Drill
 - [ ] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback.
 - [ ] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern.
+- [ ] **Drill 3 (Poison Config):** Deploy bad image tag / OOM Kill -> ExitCode signatures (`null` vs `137` vs `1`).
 
 ### ✅ Definition of Done (DoD)
 - [ ] `curl https://<ALB_DNS>/health/live` trả về 200 OK.

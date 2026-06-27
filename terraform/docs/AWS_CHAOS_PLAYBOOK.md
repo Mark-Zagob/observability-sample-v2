@@ -411,3 +411,267 @@ aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealt
 
 1. Cần một CloudWatch Alarm dựa trên metric `HTTPCode_Target_5XX_Count` của ALB.
 2. (Nâng cao) Cấu hình App tự động tắt (Crash) nếu nó phát hiện không nhận được request nào trong 5 phút (Self-preservation pattern).
+
+---
+
+# 🧪 Experiment 3: The Poison Config (Container Runtime Failure)
+
+**SEV-3** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~20 phút
+
+---
+
+## 🎯 Mục tiêu & SRE Mindset
+
+Hiểu rõ sự khác biệt giữa **3 loại failure** trong ECS Task lifecycle:
+
+| # | Loại failure | Khi nào xảy ra | Ví dụ | CloudWatch Logs? |
+|---|---|---|---|---|
+| 1 | **Birth Failure** (Experiment 1) | Trước khi container khởi tạo | IAM thiếu quyền pull image/secrets | ❌ Trống hoàn toàn |
+| 2 | **Runtime Failure** (Experiment 3A) | Container chạy rồi nhưng app crash ngay | Bad config, missing env var, OOM Kill | ✅ Có vài dòng log trước khi chết |
+| 3 | **Zombie Failure** (Experiment 2) | Container chạy ổn định nhưng bị cô lập | Network partition, SG rule bị xóa | ✅ App vẫn ghi log bình thường |
+
+Kiểm chứng giả thuyết: *"Khi container chạy được nhưng app crash ngay, Circuit Breaker vẫn bảo vệ — nhưng tín hiệu diagnostic hoàn toàn khác Birth Failure. SRE phải biết nhìn đúng chỗ."*
+
+Experiment này có **2 kịch bản** (chọn 1 hoặc làm cả 2):
+- **Scenario A:** Deploy image tag không tồn tại → Image Pull Failure
+- **Scenario B:** Set memory quá thấp → OOM Kill
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+```bash
+# Verify service đang khỏe
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount}' \
+    --output table
+```
+
+✅ **Kỳ vọng:** `Running: 1`, `Desired: 1`.
+
+---
+
+## 📊 Phase 1: Baseline
+
+```bash
+# Lưu lại Task Definition revision hiện tại (sẽ cần so sánh sau)
+CURRENT_TD=$(aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].taskDefinition' --output text)
+echo "Current TD: $CURRENT_TD"
+
+# Verify CloudWatch Logs đang ghi bình thường
+LOG_GROUP="/ecs/<your-project>/payment-service"
+aws logs tail $LOG_GROUP --since 5m --format short | tail -5
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Service RUNNING, Logs đang ghi bình thường.
+
+---
+
+## 💥 Phase 2: Inject Failure
+
+### Scenario A: Image Tag Không Tồn Tại
+
+Trong `data-plane/terraform.tfvars`, đổi image tag thành giá trị không tồn tại:
+
+```hcl
+# terraform.tfvars
+image_tag = "this-tag-does-not-exist-v999"
+```
+
+Chạy:
+
+```bash
+cd terraform/data-plane
+terraform apply -auto-approve
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Deployed non-existent image tag.
+
+### Scenario B: Memory Starvation (OOM Kill)
+
+Trong `data-plane/terraform.tfvars`, giảm memory xuống mức không đủ cho app:
+
+```hcl
+# terraform.tfvars — giá trị gốc: memory = 512
+memory = 256    # Flask + dependencies thường cần ~300-400MB
+```
+
+> ⚠️ Fargate chỉ chấp nhận một số tổ hợp CPU/Memory cố định. Với `cpu = 256`, memory hợp lệ là: 512, 1024, 2048.
+> Nếu set `memory = 256` mà Terraform báo lỗi validation, hãy giữ `memory = 512` và thay đổi sang **Scenario A**.
+
+Chạy:
+
+```bash
+cd terraform/data-plane
+terraform apply -auto-approve
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Reduced memory to trigger OOM Kill.
+
+---
+
+## 🔍 Phase 3: Observe & Triage
+
+> Mở 2 Terminal: 1 để theo dõi Events, 1 để check Logs.
+
+### Bước 3.1: Theo dõi ECS Events (Circuit Breaker timeline)
+
+```bash
+# Chạy lặp mỗi 15s để thấy Circuit Breaker "trưởng thành"
+while true; do
+  echo "=== $(date) ==="
+  aws ecs describe-services \
+      --cluster <your-cluster-name> \
+      --services payment-service \
+      --query 'services[0].{Running:runningCount, Deployments:deployments[*].{Status:status, Running:runningCount, Rollout:rolloutState}, Events:events[0:3].message}' \
+      --output json
+  echo ""
+  sleep 15
+done
+```
+
+👁️ **The SRE Lens (Timeline bạn sẽ thấy):**
+
+| Thời điểm | Event | Ý nghĩa |
+|---|---|---|
+| T+0s | `deployment started` | Terraform tạo Task Definition mới, ECS bắt đầu deploy |
+| T+30-60s | `unable to pull image` (Scenario A) hoặc `OutOfMemoryError` (Scenario B) | Task mới chết |
+| T+60-120s | Lặp lại 2-3 lần | ECS retry theo exponential backoff |
+| T+120-180s | `circuit breaker: failure threshold exceeded` | Circuit Breaker trip! |
+| T+180-240s | `deployment rolled back` + `steady state` | Auto-rollback về Task Definition cũ |
+
+### Bước 3.2: So sánh tín hiệu Logs (Điểm khác biệt then chốt)
+
+#### Scenario A (Bad Image Tag):
+
+```bash
+aws logs tail $LOG_GROUP --since 10m --format short | tail -5
+```
+
+👁️ **Kết quả:** **Hoàn toàn trống** — giống hệt Experiment 1 (IAM Blackhole).
+
+💡 **Tại sao?** Image pull failure xảy ra TRƯỚC khi container khởi động. Không có process nào chạy → Không có log nào được ghi.
+
+#### Scenario B (OOM Kill):
+
+```bash
+aws logs tail $LOG_GROUP --since 10m --format short | tail -10
+```
+
+👁️ **Kết quả:** Có **vài dòng log** trước khi chết:
+
+```
+[INFO] Starting gunicorn 21.2.0
+[INFO] Listening at: http://0.0.0.0:5002
+[INFO] Worker booting...
+ ← Đột ngột cắt ngang, không có "Server started" hoặc "Ready"
+```
+
+💡 **Tại sao?** Container CHẠY ĐƯỢC (process start) nhưng bị Linux OOM Killer giết khi vượt memory limit. Log bị cắt ngang giữa chừng.
+
+### Bước 3.3: Tìm STOPPED Tasks để phân biệt Root Cause
+
+```bash
+# Lấy task STOPPED gần nhất
+STOPPED_TASK=$(aws ecs list-tasks \
+    --cluster <your-cluster-name> \
+    --service-name payment-service \
+    --desired-status STOPPED \
+    --query 'taskArns[0]' --output text)
+
+# Xem chi tiết lý do chết
+aws ecs describe-tasks \
+    --cluster <your-cluster-name> \
+    --tasks $STOPPED_TASK \
+    --query 'tasks[0].{StoppedReason:stoppedReason, StopCode:stopCode, Containers:containers[0].{ExitCode:exitCode, Reason:reason, LastStatus:lastStatus}}' \
+    --output json
+```
+
+👁️ **So sánh kết quả:**
+
+| Field | Scenario A (Bad Image) | Scenario B (OOM Kill) |
+|---|---|---|
+| `StopCode` | `TaskFailedToStart` | `EssentialContainerExited` |
+| `StoppedReason` | `CannotPullContainerError: ...` | `OutOfMemoryError: Container killed due to memory usage` |
+| `ExitCode` | `null` (chưa bao giờ chạy) | `137` (SIGKILL = 128 + 9) |
+| `Reason` | `CannotPullContainerError` | `OutOfMemoryError` |
+
+🚨 **THE "AHA!" MOMENT:**
+
+- **ExitCode `null`** = Container chưa bao giờ khởi động (Birth Failure — same as Experiment 1)
+- **ExitCode `137`** = Container đã chạy nhưng bị SIGKILL (Runtime Failure — Linux OOM Killer)
+- **ExitCode `1`** = App crash do exception (Runtime Failure — App bug)
+
+Đây là 3 "chữ ký" (signatures) mà SRE phải thuộc lòng để triage nhanh trong Production:
+
+```
+ExitCode = null  → Check IAM / ECR / Image tag    (Control Plane issue)
+ExitCode = 137   → Check memory limits / profiling  (Resource issue)
+ExitCode = 1     → Check app logs / env vars         (Application issue)
+```
+
+### Bước 3.4: Verify Circuit Breaker đã rollback thành công
+
+```bash
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Running:runningCount, TaskDef:taskDefinition, Deployments:deployments[*].{Status:status, Rollout:rolloutState}}' \
+    --output json
+```
+
+👁️ **Kết quả:** `Running: 1`, `taskDefinition` trỏ về revision CŨ (so sánh với `$CURRENT_TD` đã lưu ở Phase 1).
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+Khôi phục config gốc trong `data-plane/terraform.tfvars`:
+
+```hcl
+# terraform.tfvars — khôi phục giá trị gốc
+image_tag = "<your-working-tag>"   # e.g., "ecs-fargate-v1"
+memory    = 512
+```
+
+```bash
+cd terraform/data-plane
+terraform apply -auto-approve
+```
+
+Verify:
+
+```bash
+# Đợi 1-2 phút, sau đó check
+aws ecs describe-services \
+    --cluster <your-cluster-name> \
+    --services payment-service \
+    --query 'services[0].{Running:runningCount, Deployments:deployments[*].{Status:status, Rollout:rolloutState}}' \
+    --output json
+```
+
+✅ **Kỳ vọng:** 1 deployment duy nhất, `Rollout: COMPLETED`.
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Scenario A (Bad Image) | Scenario B (OOM Kill) |
+|---------|----------------------|---------------------|
+| 1. Why did deployment fail? | ECS không thể pull image từ ECR — tag không tồn tại. | Container bị Linux OOM Killer giết — vượt memory limit. |
+| 2. Why was the wrong config deployed? | (Drill) Tôi cố tình đặt image tag sai. | (Drill) Tôi cố tình giảm memory xuống quá thấp. |
+| 3. How did we detect it? | ECS Events + Circuit Breaker trip. CloudWatch Logs trống. | ECS Events + ExitCode `137`. CloudWatch Logs bị cắt ngang. |
+| 4. Why didn't it cause outage? | Circuit Breaker rollback giữ task cũ sống. | Circuit Breaker rollback giữ task cũ sống. |
+| 5. Systemic Gap (Production)? | CI/CD pipeline nên validate image tag tồn tại TRƯỚC khi deploy. | Cần load testing + memory profiling để set đúng resource limits. |
+
+**Action Items:**
+
+1. **CI/CD Gate:** Thêm bước `aws ecr describe-images --image-ids imageTag=$TAG` trong pipeline để xác nhận image tồn tại trước khi `terraform apply`.
+2. **Resource Baseline:** Chạy load test trên local/staging để xác định baseline memory usage, set Fargate memory = `baseline × 1.5` (headroom).
+3. **CloudWatch Alarm:** Tạo alarm trên metric `MemoryUtilization` > 85% để cảnh báo TRƯỚC khi OOM xảy ra.
+4. **Diagnostic Cheat Sheet:** Lưu bảng ExitCode signatures (`null` / `137` / `1`) vào team runbook để triage nhanh.
