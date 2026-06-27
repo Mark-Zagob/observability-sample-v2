@@ -359,7 +359,6 @@ module "payment_service" {
     
     # 👇 FIX BOM #1: Inject Redis URL (Dù chưa có Redis, inject vào để App fail-fast 
     # ở tầng connection, thay vì lỗi DNS undefined)
-    REDIS_URL   
   }
   secrets = {
     DB_SECRET = module.database.db_secret_arn

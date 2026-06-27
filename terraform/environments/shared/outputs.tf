@@ -163,3 +163,14 @@ output "payment_service_log_group" {
   description = "Payment service CloudWatch log group"
   value       = module.payment_service.log_group_name
 }
+
+# Alerting outputs
+output "sns_critical_arn" {
+  description = "SNS topic ARN for critical alerts (outage, deployment failed)"
+  value       = module.alerting.sns_critical_arn
+}
+
+output "sns_warning_arn" {
+  description = "SNS topic ARN for warning alerts (resource spikes, task anomalies)"
+  value       = module.alerting.sns_warning_arn
+}
