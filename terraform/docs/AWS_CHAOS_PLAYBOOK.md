@@ -423,6 +423,9 @@ aws ecs describe-services \
 
 > *Mục tiêu: Đảm bảo payment-service đang reachable qua Cloud Map DNS.*
 
+> 💡 **Lưu ý:** Image `python:3.12-slim-bookworm` không có `curl` hay `nslookup`.
+> Tất cả lệnh trong container đều dùng **Python one-liners** (có sẵn trong image).
+
 ```bash
 # 1. Lấy cluster và task info
 CLUSTER=obs-cluster
@@ -440,13 +443,13 @@ aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
 # (Chạy từ bên trong VPC — dùng ECS Exec)
 aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
   --container payment-service --interactive \
-  --command "nslookup payment-service.ecommerce.local"
+  --command "python -c \"import socket; print(socket.getaddrinfo('payment-service.ecommerce.local', 5002))\""
 # Kỳ vọng: trả về private IP của task (trùng với IP ở bước 2)
 
 # 4. Verify service endpoint
 aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
   --container payment-service --interactive \
-  --command "curl -s -o /dev/null -w '%{http_code}' http://localhost:5002/health/live"
+  --command "python -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:5002/health/live'); print(r.status)\""
 # Kỳ vọng: 200
 ```
 
@@ -526,25 +529,30 @@ terraform apply -auto-approve
 
 ### Terminal 1: Giả lập Service-to-Service Call (The Symptom)
 
-Nếu bạn có 1 container khác trong cluster (ví dụ `order-service`), dùng ECS Exec để curl vào `payment-service`:
+Dùng ECS Exec vào chính `payment-service` để self-test connectivity qua Cloud Map DNS:
 
 ```bash
-# Option A: Dùng ECS Exec vào chính payment-service để self-test
+# Dùng ECS Exec vào payment-service
 aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
   --container payment-service --interactive --command "/bin/sh"
 
-# Trong container shell:
-while true; do
-  curl -s -o /dev/null -w "%{http_code}\n" \
-    http://payment-service.ecommerce.local:5002/health/live --connect-timeout 3
-  sleep 2
-done
+# Trong container shell — chạy vòng lặp Python:
+python -c "
+import urllib.request, urllib.error, time
+while True:
+    try:
+        r = urllib.request.urlopen('http://payment-service.ecommerce.local:5002/health/live', timeout=3)
+        print(r.status)
+    except Exception as e:
+        print(f'FAIL: {e}')
+    time.sleep(2)
+"
 ```
 
 👁️ **The SRE Lens:**
 
-- `curl localhost:5002/health/live` → vẫn trả **200** (vì localhost bypass SG).
-- `curl payment-service.ecommerce.local:5002/health/live` → **timeout** hoặc **connection refused** (vì DNS resolve ra IP, nhưng SG chặn TCP connection ở port 5000-5005).
+- `urllib.request.urlopen('http://localhost:5002/health/live')` → vẫn trả **200** (vì localhost bypass SG).
+- `urllib.request.urlopen('http://payment-service.ecommerce.local:5002/...')` → **timeout** hoặc **connection refused** (vì DNS resolve ra IP, nhưng SG chặn TCP connection ở port 5000-5005).
 
 💡 **Tại sao?** Cloud Map DNS vẫn resolve đúng IP, nhưng VPC Security Group đã chặn gói tin TCP ở tầng network. DNS ≠ Connectivity.
 
@@ -555,10 +563,10 @@ done
 aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID \
   --query 'Instances[*].{Id:Id,IP:Attributes.AWS_INSTANCE_IPV4}' --output table
 
-# DNS resolve có trả IP?
+# DNS resolve có trả IP? (dùng Python thay nslookup)
 aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
   --container payment-service --interactive \
-  --command "nslookup payment-service.ecommerce.local"
+  --command "python -c \"import socket; print(socket.getaddrinfo('payment-service.ecommerce.local', 5002))\""
 ```
 
 👁️ **Kết quả (bẫy lớn):**
@@ -625,9 +633,9 @@ Khôi phục SG rules bằng Terraform.
 terraform apply -auto-approve
 ```
 
-3. Quan sát Terminal 1 (vòng lặp curl):
+3. Quan sát Terminal 1 (vòng lặp Python):
    - Đợi khoảng 10-30s (SG rule propagation + Cloud Map DNS TTL = 10s).
-   - curl sẽ chuyển từ timeout trở lại `200`.
+   - Output sẽ chuyển từ `FAIL: <urlopen error ...>` trở lại `200`.
 
 4. Verify Cloud Map + Connectivity:
 
@@ -638,7 +646,7 @@ aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID --output tabl
 # Connectivity restored
 aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
   --container payment-service --interactive \
-  --command "curl -s http://payment-service.ecommerce.local:5002/health/live"
+  --command "python -c \"import urllib.request; r=urllib.request.urlopen('http://payment-service.ecommerce.local:5002/health/live'); print(r.status)\""
 # Kỳ vọng: 200
 ```
 
