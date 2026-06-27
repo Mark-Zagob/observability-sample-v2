@@ -390,6 +390,8 @@ terraform init && terraform apply
 
 ### Terraform / AWS
 
+| Tài liệu | Mô tả |
+|---|---|
 | [`ARCHITECTURE.md`](terraform/ARCHITECTURE.md) | AWS blueprint — VPC topology, compute phases, failure domains, CP/DP split |
 | [`AWS_TERRAFORM_PLAYBOOK.md`](terraform/AWS_TERRAFORM_PLAYBOOK.md) | Module-by-module deployment playbook |
 | [`ROADMAP.md`](terraform/ROADMAP.md) | Master roadmap — Workload & Platform driven phases |

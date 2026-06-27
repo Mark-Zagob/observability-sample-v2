@@ -17,28 +17,29 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 
 ---
 
-## 🚀 PHASE 1: THE SYNC TRACER BULLET (ECS Fargate) ✅ DONE
-**Mục tiêu:** Đưa payment-service chạy trên ECS Fargate. Hiểu về AWS Networking, IAM Task Role và ALB.
+## 🚀 PHASE 1: THE SYNC TRACER BULLET (ECS Fargate)
+**Mục tiêu:** Đưa 4 services cốt lõi (Web UI, API GW, Order, Payment) chạy trên ECS Fargate. Hiểu về AWS Networking, IAM Task Role và ALB.
 **Thời gian:** 2 Tuần
 
 ### 🧩 Modules triển khai (Playbook)
-- [x] `ecr` (Module 9): Lifecycle policy, Image scanning.
-- [x] `loadbalancer` (Module 11): ALB Internet-facing, Target Groups, ACM (DNS validation).
-- [x] `compute/ecs-cluster`: ECS Cluster, Cloud Map namespace.
-- [x] `compute/ecs-service`: Task Definition, Service, Circuit Breaker, ECS Exec.
-- [x] *Control Plane / Data Plane split* — SSM Service Catalog integration.
+- [ ] `ecr` (Module 9): Lifecycle policy, Image scanning.
+- [ ] `loadbalancer` (Module 11): ALB Internet-facing, Target Groups, ACM (DNS validation).
+- [ ] `compute/ecs-fargate` (Phase 8B): ECS Cluster, Task Definitions.
+- [ ] `compute/ecs-cluster`: ECS Cluster, Cloud Map namespace.
+- [ ] `compute/ecs-service`: Task Definition, Service, Circuit Breaker, ECS Exec.
+- [ ] *Control Plane / Data Plane split* — SSM Service Catalog integration.
 
 ### 📦 Workload Onboard
-- [x] Build & Push payment-service image lên ECR.
-- [x] Wire ALB -> payment-service qua Target Group.
-- [x] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Execution Role.
+- [ ] Build & Push 4 images lên ECR.
+- [ ] Wire ALB -> API Gateway -> Order/Payment.
+- [ ] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Role.
 
 ### 💥 SRE / Chaos Drill
-- [x] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback.
-- [x] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern.
+- [ ] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback.
+- [ ] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern.
 
 ### ✅ Definition of Done (DoD)
-- [x] `curl https://<ALB_DNS>/health/live` trả về 200 OK.
+- [ ] `curl https://<ALB_DNS>/health/live` trả về 200 OK.
 - [ ] VPC Flow Logs (Athena) xác nhận traffic ECR pull đi qua VPC Endpoint, KHÔNG qua NAT Gateway.
 
 ---
