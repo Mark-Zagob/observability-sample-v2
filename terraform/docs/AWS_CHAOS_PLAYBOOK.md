@@ -387,7 +387,7 @@ aws ecs describe-services \
 | 5. Systemic Gap (Production)? | Nếu đây là hotfix cho critical bug, hotfix sẽ KHÔNG được deploy mà team không biết. Cần alert trên `SERVICE_DEPLOYMENT_FAILED`. |
 
 **Action Items:**
-1. ✅ **DONE (Iteration A.1.T4):** EventBridge Rule `ecs-deployment-failed` → SNS critical → Lambda Telegram. Xem [`control-plane/lab/eventbridge-ecs.tf`](../control-plane/lab/eventbridge-ecs.tf).
+1. ✅ **DONE (Iteration A.1.T4):** EventBridge Rule `ecs-deployment-failed` → SNS critical → Lambda Telegram. Xem [`control-plane/lab/observability.tf`](../control-plane/lab/observability.tf).
 2. ⏸️ **Deferred (Sprint A.3):** OPA Rego policy chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy`. Sẽ implement khi có CI/CD.
 3. 📝 **Backlog:** CloudWatch metric filter trên Lambda Logs `/aws/lambda/obs-lab-telegram-notifier` để alert khi bot tự nó chết (meta-alert).
 
@@ -897,7 +897,7 @@ aws ecs describe-services \
 
 1. ⏸️ **Deferred (Sprint A.3):** CI/CD Gate — thêm bước `aws ecr describe-images --image-ids imageTag=$TAG` trong pipeline. Sẽ làm khi có CI/CD.
 2. 📝 **Backlog:** Resource Baseline — chạy load test để xác định baseline memory, set Fargate memory = `baseline × 1.5`.
-3. ✅ **DONE (Iteration A.2.T2):** CloudWatch Alarm `memory-high` trên `MemoryUtilization > 85%`. Xem [`control-plane/lab/alarms-ecs.tf`](../control-plane/lab/alarms-ecs.tf). Verify recurring bằng Experiment 3.5 dưới đây.
+3. ✅ **DONE (Iteration A.2.T2):** CloudWatch Alarm `memory-high` trên `MemoryUtilization > 85%`. Xem [`control-plane/lab/observability.tf`](../control-plane/lab/observability.tf). Verify recurring bằng Experiment 3.5 dưới đây.
 4. ✅ **DONE (Tài liệu hóa):** Diagnostic Cheat Sheet `null` / `137` / `1` — đã có trong Bước 3.3 của experiment này.
 
 ---
@@ -1009,7 +1009,7 @@ watch -n 30 "aws cloudwatch describe-alarms \
 
 **Checklist sau drill:**
 
-- [ ] Telegram nhận **2 tin nhắn**: 1 lúc `ALARM` + 1 lúc `OK`. Nếu thiếu tin OK → kiểm tra `ok_actions` trong `alarms-ecs.tf`.
+- [ ] Telegram nhận **2 tin nhắn**: 1 lúc `ALARM` + 1 lúc `OK`. Nếu thiếu tin OK → kiểm tra `ok_actions` trong `observability.tf`.
 - [ ] **TTD ≤ 3 phút** (Inject → Telegram ALARM).
 - [ ] **TTR ≤ 5 phút** (Stress end → Telegram OK).
 - [ ] Task KHÔNG bị OOM Kill (chạy `aws ecs describe-tasks --tasks $TASK_ARN` confirm `lastStatus = RUNNING`, không có `stoppedAt`). Nếu task chết → giảm `--vm-bytes` lần sau.
@@ -1037,7 +1037,7 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 
 | Tình huống | Tần suất gợi ý |
 |---|---|
-| Sau mỗi `terraform apply` chạm `alarms-ecs.tf` | 1 lần (smoke test) |
+| Sau mỗi `terraform apply` chạm `observability.tf` | 1 lần (smoke test) |
 | Định kỳ hàng tháng | 1 lần (verify alerting infra) |
 | Trước GameDay lớn | 1 lần (warm-up team) |
 | Sau khi rotate Telegram bot token | 1 lần (verify Secrets Manager) |
@@ -1128,9 +1128,7 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 
 # 📚 Tham khảo
 
-- **Iteration A plan:** [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) — chi tiết alerting infra đã build.
 - **Module alerting:** [`../modules/alerting/`](../modules/alerting/) — SNS + Lambda Telegram.
-- **EventBridge rules:** [`../control-plane/lab/eventbridge-ecs.tf`](../control-plane/lab/eventbridge-ecs.tf)
-- **CloudWatch alarms:** [`../control-plane/lab/alarms-ecs.tf`](../control-plane/lab/alarms-ecs.tf)
+- **Observability (EventBridge + Alarms):** [`../control-plane/lab/observability.tf`](../control-plane/lab/observability.tf)
 - **ROADMAP tổng:** [`../ROADMAP.md`](../ROADMAP.md)
 - **AWS docs:** [ECS Events](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_cwe_events.html) · [Stop codes](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stopped-task-error-codes.html) · [Container Insights metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-metrics-ECS.html)

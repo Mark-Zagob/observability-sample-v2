@@ -35,7 +35,7 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 - [ ] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Role.
 
 ### 💥 SRE / Chaos Drill
-- [x] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback. ✅ Alert wired → `eventbridge-ecs.tf`
+- [x] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback. ✅ Alert wired → `observability.tf`
 - [x] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern. ✅ Alert wired (Task stopped abnormal)
 - [x] **Drill 3 (Poison Config):** Deploy bad image tag / OOM Kill -> ExitCode signatures (`null` vs `137` vs `1`). ✅ Alert wired
 - [x] **Drill 3.5 (Memory Pressure):** ECS Exec stress → verify `memory-high` alarm leading indicator. ✅ Documented → `AWS_CHAOS_PLAYBOOK.md` Exp 3.5
