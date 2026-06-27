@@ -74,6 +74,26 @@ resource "aws_ssm_parameter" "ecr_urls" {
   tags = { Domain = "ecr", Service = each.key }
 }
 
+# 5. ALERTING DOMAIN
+# SNS ARN được export để EventBridge rules và CloudWatch Alarms ở các file
+# khác (eventbridge-ecs.tf, alarms-ecs.tf) có thể đọc qua SSM thay vì
+# hard-depend vào module output — giúp sau này tách state nếu cần.
+resource "aws_ssm_parameter" "sns_critical_arn" {
+  name  = "/${var.project_name}/${var.environment}/alerting/sns_critical_arn"
+  type  = "String"
+  value = module.alerting.sns_critical_arn
+
+  tags = { Domain = "alerting", Severity = "critical" }
+}
+
+resource "aws_ssm_parameter" "sns_warning_arn" {
+  name  = "/${var.project_name}/${var.environment}/alerting/sns_warning_arn"
+  type  = "String"
+  value = module.alerting.sns_warning_arn
+
+  tags = { Domain = "alerting", Severity = "warning" }
+}
+
 #--------------------------------------------------------------
 # 📢 OUTPUT: Prefix để Data Plane xây dựng IAM Policy Wildcard
 #--------------------------------------------------------------

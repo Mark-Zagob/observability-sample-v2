@@ -4,7 +4,28 @@
 
 ---
 
-## 🛡️ Nguyên tắc an toàn (The 3 Commandments)
+## � Cách đọc tài liệu này
+
+Mỗi experiment đi theo cấu trúc 6 phase cố định:
+
+| Phase | Mục đích | Câu hỏi cần trả lời |
+|---|---|---|
+| **0. Pre-flight** | Đảm bảo hệ thống KHỎE trước khi phá | "Steady state đã đạt chưa?" |
+| **1. Baseline** | Chụp ảnh hiện trường | "Bằng chứng trạng thái trước inject là gì?" |
+| **2. Inject Failure** | Gây án có chủ đích | "Tôi sẽ phá cái gì, ở đâu, trong bao lâu?" |
+| **3. Observe & Triage** | Quan sát qua các Control Plane signals | "Hệ thống phản ứng thế nào? Alert có đến không?" |
+| **4. Rollback & Recovery** | Khôi phục về steady state | "Recovery có tự động hay phải can thiệp?" |
+| **5. Post-Mortem** | 5 Whys + Action Items | "Bài học hệ thống là gì? Guard rail nào cần build?" |
+
+**Quy tắc cho người đọc:**
+- Đọc HẾT 1 experiment trước khi gõ lệnh đầu tiên.
+- Mở **3 terminals** song song khi vào Phase 3 (xem chi tiết từng exp).
+- Ghi vào notebook cá nhân: `[HH:MM] event description` cho mỗi mốc thời gian quan trọng.
+- Sau Phase 5: **đo Time-To-Detect (TTD)** = thời gian từ Inject đến lúc nhận alert đầu tiên trên Telegram.
+
+---
+
+## �🛡️ Nguyên tắc an toàn (The 3 Commandments)
 
 1. **Always have a Stop Condition:** Mọi drill thủ công phải có Time-box (hẹn giờ) hoặc Script tự động Rollback.
 2. **Start with the smallest Blast Radius:** Chỉ tác động lên 1 Task, 1 Rule, hoặc 1 AZ trước khi scale lên toàn hệ thống.
@@ -12,17 +33,96 @@
 
 ---
 
+## 📡 Alerting Infrastructure (Iteration A — Đã triển khai)
+
+Trước khi chạy bất kỳ experiment nào, **bạn cần hiểu rõ hệ thống alerting** đã được build sẵn — vì các experiment sẽ trigger nó.
+
+### Pipeline alert hiện tại
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   ┌──────────────────┐         ┌──────────────────┐                     │
+│   │ EventBridge Rule │         │ CloudWatch Alarm │                     │
+│   │ (ECS events)     │         │ (Metrics)        │                     │
+│   └────────┬─────────┘         └────────┬─────────┘                     │
+│            │                            │                               │
+│            └──────────────┬─────────────┘                               │
+│                           ▼                                             │
+│            ┌──────────────────────────┐                                 │
+│            │  SNS Topics              │                                 │
+│            │  • alerts-critical       │  ← outage / deployment fail     │
+│            │  • alerts-warning        │  ← leading indicator / anomaly  │
+│            └──────────────┬───────────┘                                 │
+│                           ▼                                             │
+│            ┌──────────────────────────┐                                 │
+│            │  Lambda telegram-notifier│                                 │
+│            │  (Python 3.12)           │                                 │
+│            └──────────────┬───────────┘                                 │
+└───────────────────────────┼─────────────────────────────────────────────┘
+                            ▼
+                  ┌──────────────────┐
+                  │  Telegram chat   │
+                  └──────────────────┘
+```
+
+### Catalog các nguồn alert đã wire sẵn
+
+| Nguồn alert | Trigger | Topic | Bắt được experiment |
+|---|---|---|---|
+| EventBridge rule `ecs-deployment-failed` | ECS Deployment State Change `SERVICE_DEPLOYMENT_FAILED` | 🚨 critical | Exp 1, Exp 3A, Exp 3B (qua Circuit Breaker) |
+| EventBridge rule `ecs-task-stopped-abnormal` | ECS Task State Change `stopCode ∈ {TaskFailedToStart, EssentialContainerExited}` | ⚠️ warning | Exp 3A (Birth), Exp 3B (OOM Runtime), Exp 4 (future) |
+| CloudWatch alarm `memory-high` | `AWS/ECS MemoryUtilization > 85%` (2 min) | ⚠️ warning | Leading indicator — fire **trước** Exp 3B |
+| CloudWatch alarm `cpu-high` | `AWS/ECS CPUUtilization > 80%` (5 min) | ⚠️ warning | Awareness — workload anomaly |
+| CloudWatch alarm `running-task-low` | `ECS/ContainerInsights RunningTaskCount < 1` | 🚨 critical | Tổng quát — service down |
+
+### Pre-flight: verify alerting healthy TRƯỚC mọi experiment
+
+> Không bao giờ drill nếu alerting đang bệnh — bạn sẽ không phân biệt được "hệ thống không alert" vs "hệ thống không fail".
+
+```bash
+# 1. Lambda alive — invoke direct với dummy payload
+aws lambda invoke \
+  --function-name obs-lab-telegram-notifier \
+  --payload '{"Records":[{"Sns":{"TopicArn":"arn:aws:sns:ap-southeast-2:730335245469:obs-lab-alerts-critical","Message":"{\"AlarmName\":\"preflight-check\",\"NewStateValue\":\"ALARM\",\"NewStateReason\":\"manual preflight from drill\",\"Region\":\"ap-southeast-2\",\"AWSAccountId\":\"730335245469\"}"}}]}' \
+  --cli-binary-format raw-in-base64-out /tmp/preflight.json
+cat /tmp/preflight.json   # Kỳ vọng: {"status":"ok"}
+# ✅ Bạn PHẢI nhận được tin nhắn Telegram trong < 5 giây.
+
+# 2. 3 alarms ở state OK (không INSUFFICIENT_DATA)
+aws cloudwatch describe-alarms \
+  --alarm-names obs-lab-payment-service-memory-high \
+                obs-lab-payment-service-cpu-high \
+                obs-lab-payment-service-running-task-low \
+  --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' \
+  --output table
+
+# 3. EventBridge rules ENABLED
+aws events list-rules --name-prefix obs-lab-ecs- \
+  --query 'Rules[*].{Name:Name,State:State}' --output table
+```
+
+Nếu bất kỳ check nào FAIL, **STOP** — sửa alerting trước, không drill.
+
+---
+
 # 🧪 Experiment 1: The IAM Blackhole (Task Execution Role)
 
 **SEV-3** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~15 phút
 
----
+### 📚 Học được gì sau experiment này
 
-## 🎯 Mục tiêu & SRE Mindset
+- Phân biệt sống còn giữa **Task Execution Role** (ECS Agent dùng để kéo image / ghi log) và **Task Role** (App code dùng để gọi AWS API).
+- Hiểu cơ chế **`deployment_circuit_breaker`** trong ECS — nó cứu service khỏi outage NHƯNG che giấu root cause.
+- Đọc và phân tích **ECS Events** — "black box recorder" duy nhất khi container chưa kịp khởi động.
+- Hiểu khái niệm **Drift Detection** trong Terraform khi infra bị thay đổi ngoài IaC.
+- **TTD target:** Telegram alert 🚨 `SERVICE_DEPLOYMENT_FAILED` phải đến trong **≤ 5 phút** sau khi force-deploy.
 
-Hiểu rõ sự khác biệt sống còn giữa **Task Execution Role** (ECS Agent dùng để kéo image, ghi log) và **Task Role** (App code dùng để gọi AWS API).
+### ⚠️ Bẫy thường gặp (Common pitfalls)
 
-Kiểm chứng giả thuyết: *"Mất Execution Role, Workload sẽ không thể 'chào đời' (Birth Failure), khác hoàn toàn với việc App đang chạy thì bị crash (Runtime Failure)."*
+- ❌ Nhìn `RunningCount: 1` → kết luận "hệ thống ổn" → BỎ LỠ deployment failed.
+- ❌ Mở CloudWatch Logs để debug → tab trống → ngỡ Logs bị lỗi (thực ra container chưa bao giờ tồn tại).
+- ❌ Gỡ luôn `AmazonECSTaskExecutionRolePolicy` mà không backup ARN trước → mất time rollback.
 
 ---
 
@@ -174,7 +274,41 @@ aws logs tail $LOG_GROUP --since 10m
 
 💡 **Bài học:** Nếu bạn chỉ dựa vào App Logs để debug, bạn sẽ bị "mù" (Blindspot). Bạn bắt buộc phải nhìn vào Control Plane Logs (ECS Events).
 
-### Bước 3.5 (Nâng cao): Terraform Drift Detection
+### Bước 3.5: Watch Telegram (Verify your guard rails)
+
+> Đây là phần mới sau Iteration A. Mọi drill từ giờ phải verify alert thật sự đến.
+
+**Mở Telegram chat** và đợi tin nhắn từ bot. Trong vòng 2-5 phút sau khi Circuit Breaker trip (Bước 3.2), bạn phải thấy:
+
+```
+🚨 CRITICAL: ECS Deployment State Change
+Event:    SERVICE_DEPLOYMENT_FAILED
+Cluster:  obs-cluster
+Service:  service:payment-service
+Rollout:  FAILED
+Reason:   ECS deployment circuit breaker: tasks failed to start.
+Source:   aws.ecs  |  Region: ap-southeast-2
+```
+
+**Ghi vào notebook:**
+- `[HH:MM:SS]` Inject (force-new-deployment)
+- `[HH:MM:SS]` Circuit breaker trip (Bước 3.2)
+- `[HH:MM:SS]` 🚨 Telegram received  → **TTD = ?**
+
+**Nếu KHÔNG nhận được Telegram trong 10 phút:**
+```bash
+# 1. Lambda có được invoke không?
+aws logs tail /aws/lambda/obs-lab-telegram-notifier --since 15m --format short
+
+# 2. EventBridge rule có match event không?
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=obs-lab-ecs-deployment-failed \
+  --start-time $(date -u -d '15 min ago' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
+  --period 60 --statistics Sum
+```
+
+### Bước 3.6 (Nâng cao): Terraform Drift Detection
 
 Vì bạn vừa phá AWS bằng Console (ClickOps), Terraform sẽ phát hiện ra sự "trôi dạt" (Drift).
 
@@ -234,8 +368,9 @@ aws ecs describe-services \
 | 5. Systemic Gap (Production)? | Nếu đây là hotfix cho critical bug, hotfix sẽ KHÔNG được deploy mà team không biết. Cần alert trên `SERVICE_DEPLOYMENT_FAILED`. |
 
 **Action Items:**
-1. Viết OPA Policy (Rego) chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy` khỏi ECS Task Execution Role.
-2. Tạo CloudWatch Alarm / EventBridge Rule trên ECS Event `SERVICE_DEPLOYMENT_FAILED` → gửi SNS notification cho team.
+1. ✅ **DONE (Iteration A.1.T4):** EventBridge Rule `ecs-deployment-failed` → SNS critical → Lambda Telegram. Xem [`control-plane/lab/eventbridge-ecs.tf`](../control-plane/lab/eventbridge-ecs.tf).
+2. ⏸️ **Deferred (Sprint A.3):** OPA Rego policy chặn mọi PR Terraform cố tình xóa `AmazonECSTaskExecutionRolePolicy`. Sẽ implement khi có CI/CD.
+3. 📝 **Backlog:** CloudWatch metric filter trên Lambda Logs `/aws/lambda/obs-lab-telegram-notifier` để alert khi bot tự nó chết (meta-alert).
 
 ---
 
@@ -243,13 +378,19 @@ aws ecs describe-services \
 
 **SEV-2** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~20 phút
 
----
+### 📚 Học được gì sau experiment này
 
-## 🎯 Mục tiêu & SRE Mindset
+- Phân biệt sống còn giữa **Liveness** (container có chạy không) vs **Readiness** (network có thông không).
+- Hiểu khái niệm **Zombie Task** — RUNNING + HEALTHY (theo Liveness) nhưng KHÔNG serve traffic.
+- Đính chính hiểu lầm: **Circuit Breaker CHỈ hoạt động trong deployment**, không bảo vệ task đang chạy.
+- Hiểu cơ chế ALB Target Group health check vs ECS health check — 2 cấp độ độc lập.
+- **TTD target:** Telegram alert ⚠️ Task Stopped phải đến trong **≤ 5 phút** (khi ALB deregister + ECS kill task).
 
-Hiểu rõ sự khác biệt sống còn giữa **Liveness** (App có đang chạy không?) và **Readiness** (App có thể nhận traffic không?).
+### ⚠️ Bẫy thường gặp
 
-Kiểm chứng giả thuyết: *"Network Partition không làm App crash. Nó biến App thành một 'Zombie' – vẫn thở nhưng không ai nghe thấy tiếng gọi."*
+- ❌ Kỳ vọng Circuit Breaker auto-rollback khi ALB báo unhealthy → SAI. Circuit Breaker chỉ active trong deployment cycle.
+- ❌ Khôi phục SG rule rồi vội test ngay → ALB vẫn cần 30-90s để mark target healthy lại (health check threshold).
+- ❌ Bỏ qua VPC Flow Logs — đây là evidence trail rõ ràng nhất chứng minh "gói tin bị REJECT ở SG layer".
 
 ---
 
@@ -371,6 +512,31 @@ Nhiều người nghĩ rằng `deployment_circuit_breaker` sẽ tự động Rol
 - Dưới góc nhìn của ECS Agent: Container vẫn đang chạy (Liveness Probe = Pass, Process PID vẫn tồn tại). ECS không biết gì về việc AWS VPC Network đang drop gói tin.
 - **Kết luận:** Bạn vừa tạo ra một **Zombie Task**. Nó vẫn tốn tiền CPU/RAM của bạn, vẫn ghi log "Server started on port 5002", nhưng không phục vụ bất kỳ user nào.
 
+### Terminal 4 (NEW — Iteration A): Watch Telegram
+
+Với Exp 2, alert KHÔNG đến ngay vì Network Partition không trigger `SERVICE_DEPLOYMENT_FAILED`. Bạn sẽ thấy alert ⚠️ Task Stopped khi:
+
+1. ALB deregister target (sau ~30-90s health check fail)
+2. ECS phát hiện task unhealthy theo cấu hình ALB target group → kill task → fire EventBridge `ecs-task-stopped-abnormal`
+
+```
+⚠️ WARNING: ECS Task State Change
+Cluster:  obs-cluster
+Service:  service:payment-service
+Reason:   Task failed ELB health checks in (target-group ...)
+Source:   aws.ecs  |  Region: ap-southeast-2
+```
+
+**Bài học quan trọng:** Đây là ví dụ điển hình của **alert chậm** vì failure ở Network layer mà ECS không tự biết. Trong Production cần thêm:
+- ALB-level alarm `HTTPCode_Target_5XX_Count` (sẽ làm khi onboard service thứ 2 — xem [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) Sprint A.1.T5).
+- VPC Flow Logs query với REJECT filter để truy vết SG rule sai trong < 30s.
+
+**Ghi vào notebook:**
+- `[HH:MM:SS]` Inject (terraform apply gỡ SG rule)
+- `[HH:MM:SS]` 502 đầu tiên từ Terminal 1
+- `[HH:MM:SS]` ALB target unhealthy
+- `[HH:MM:SS]` ⚠️ Telegram task-stopped received → **TTD = ?**
+
 ---
 
 ## 🔄 Phase 4: Rollback & Recovery
@@ -409,8 +575,9 @@ aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealt
 
 **Action Item (Phase 3/8):**
 
-1. Cần một CloudWatch Alarm dựa trên metric `HTTPCode_Target_5XX_Count` của ALB.
-2. (Nâng cao) Cấu hình App tự động tắt (Crash) nếu nó phát hiện không nhận được request nào trong 5 phút (Self-preservation pattern).
+1. ⏸️ **Deferred** — CloudWatch Alarm `HTTPCode_Target_5XX_Count` trên ALB. Lý do: `payment-service` chưa đăng ký với ALB (chỉ Cloud Map). Sẽ làm khi onboard service thứ 2 — xem [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) Sprint A.1.T5.
+2. 📝 **Backlog:** Self-preservation pattern — App tự crash nếu không nhận request nào trong 5 phút. Cần implement ở app code, không phải infra.
+3. ✅ **DONE (Iteration A.1.T4):** EventBridge `ecs-task-stopped-abnormal` — bắt được một phần của failure này khi ALB cuối cùng deregister target và ECS kill task.
 
 ---
 
@@ -418,23 +585,21 @@ aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealt
 
 **SEV-3** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~20 phút
 
----
+### 📚 Học được gì sau experiment này
 
-## 🎯 Mục tiêu & SRE Mindset
+- Làm chủ bảng **ExitCode signatures** — `null` / `137` / `1` — công cụ triage nhanh nhất trong Production.
+- Hiểu 3 loại failure trong ECS Task lifecycle: **Birth**, **Runtime**, **Zombie**.
+- Thấy `deployment_circuit_breaker` hoạt động ở cả 2 scénario (Bad Image và OOM) và phân biệt được qua diễn biến ECS Events.
+- So sánh **leading vs lagging indicators**: Memory alarm (leading) fire TRƯỚC OOM, ExitCode 137 (lagging) chỉ fire SAU khi container chết.
+- **TTD target:**
+  - Scénario A (Bad Image): 🚨 critical trong **≤ 4 phút** (sau khi circuit breaker trip).
+  - Scénario B (OOM): ⚠️ warning task-stopped mỗi 1-2 phút + 🚨 critical sau khi circuit breaker trip.
 
-Hiểu rõ sự khác biệt giữa **3 loại failure** trong ECS Task lifecycle:
+### ⚠️ Bẫy thường gặp
 
-| # | Loại failure | Khi nào xảy ra | Ví dụ | CloudWatch Logs? |
-|---|---|---|---|---|
-| 1 | **Birth Failure** (Experiment 1) | Trước khi container khởi tạo | IAM thiếu quyền pull image/secrets | ❌ Trống hoàn toàn |
-| 2 | **Runtime Failure** (Experiment 3A) | Container chạy rồi nhưng app crash ngay | Bad config, missing env var, OOM Kill | ✅ Có vài dòng log trước khi chết |
-| 3 | **Zombie Failure** (Experiment 2) | Container chạy ổn định nhưng bị cô lập | Network partition, SG rule bị xóa | ✅ App vẫn ghi log bình thường |
-
-Kiểm chứng giả thuyết: *"Khi container chạy được nhưng app crash ngay, Circuit Breaker vẫn bảo vệ — nhưng tín hiệu diagnostic hoàn toàn khác Birth Failure. SRE phải biết nhìn đúng chỗ."*
-
-Experiment này có **2 kịch bản** (chọn 1 hoặc làm cả 2):
-- **Scenario A:** Deploy image tag không tồn tại → Image Pull Failure
-- **Scenario B:** Set memory quá thấp → OOM Kill
+- ❌ Thấy `ExitCode null` và mở CloudWatch Logs tìm error → tab trống → ngỡ service đang chạy bình thường.
+- ❌ Nhầm lẫn ExitCode 137 (OOM Kill) với ExitCode 139 (Segfault). 137 = 128 + 9 (SIGKILL).
+- ❌ Quan sát chỉ 1 task STOPPED → bỏ lỡ pattern circuit breaker retry 2-3 lần trước khi rollback.
 
 ---
 
@@ -627,6 +792,46 @@ aws ecs describe-services \
 
 👁️ **Kết quả:** `Running: 1`, `taskDefinition` trỏ về revision CŨ (so sánh với `$CURRENT_TD` đã lưu ở Phase 1).
 
+### Bước 3.5: Watch Telegram (NEW — Iteration A)
+
+Với Exp 3, bạn sẽ thấy **CHUỖI alert** chứ không phải 1 alert đơn lẻ — đây là pattern thực tế nhất trong Production:
+
+**Scenario A (Bad Image):**
+```
+[T+60s]  ⚠️ ECS Task State Change
+         stopCode: TaskFailedToStart
+         reason:   CannotPullContainerError: ... not found: manifest unknown
+
+[T+120s] ⚠️ ECS Task State Change (lần 2 — retry)
+         stopCode: TaskFailedToStart
+
+[T+180s] 🚨 ECS Deployment State Change
+         eventType: SERVICE_DEPLOYMENT_FAILED
+         reason:    ECS deployment circuit breaker: tasks failed to start.
+```
+
+**Scenario B (OOM Kill):**
+```
+[T+45s]  ⚠️ ECS Task State Change
+         stopCode: EssentialContainerExited
+         (exitCode 137 trong detail)
+
+[T+90s]  ⚠️ ECS Task State Change (retry lần 2)
+
+[T+150s] 🚨 ECS Deployment State Change → SERVICE_DEPLOYMENT_FAILED
+```
+
+**🎓 Bài học từ chuỗi alert:**
+- Bạn nhìn thấy **circuit breaker retry pattern** rõ ràng — đếm số ⚠️ trước khi 🚨 fire.
+- ⚠️ warning đến TRƯỚC 🚨 critical — đây là cảnh báo sớm. Trong Production, có thể auto-trigger rollback ngay khi nhận 2 ⚠️ liên tiếp thay vì đợi circuit breaker.
+
+**Ghi vào notebook:**
+- `[HH:MM:SS]` Inject (terraform apply bad config)
+- `[HH:MM:SS]` ⚠️ Telegram task-stopped #1
+- `[HH:MM:SS]` ⚠️ Telegram task-stopped #2
+- `[HH:MM:SS]` 🚨 Telegram deployment-failed → **TTD = ?**
+- Đếm: bao nhiêu ⚠️ trước khi 🚨? (so sánh với `deployment_circuit_breaker.failure_threshold` trong ecs-service module)
+
 ---
 
 ## 🔄 Phase 4: Rollback & Recovery
@@ -671,7 +876,242 @@ aws ecs describe-services \
 
 **Action Items:**
 
-1. **CI/CD Gate:** Thêm bước `aws ecr describe-images --image-ids imageTag=$TAG` trong pipeline để xác nhận image tồn tại trước khi `terraform apply`.
-2. **Resource Baseline:** Chạy load test trên local/staging để xác định baseline memory usage, set Fargate memory = `baseline × 1.5` (headroom).
-3. **CloudWatch Alarm:** Tạo alarm trên metric `MemoryUtilization` > 85% để cảnh báo TRƯỚC khi OOM xảy ra.
-4. **Diagnostic Cheat Sheet:** Lưu bảng ExitCode signatures (`null` / `137` / `1`) vào team runbook để triage nhanh.
+1. ⏸️ **Deferred (Sprint A.3):** CI/CD Gate — thêm bước `aws ecr describe-images --image-ids imageTag=$TAG` trong pipeline. Sẽ làm khi có CI/CD.
+2. 📝 **Backlog:** Resource Baseline — chạy load test để xác định baseline memory, set Fargate memory = `baseline × 1.5`.
+3. ✅ **DONE (Iteration A.2.T2):** CloudWatch Alarm `memory-high` trên `MemoryUtilization > 85%`. Xem [`control-plane/lab/alarms-ecs.tf`](../control-plane/lab/alarms-ecs.tf). Verify recurring bằng Experiment 3.5 dưới đây.
+4. ✅ **DONE (Tài liệu hóa):** Diagnostic Cheat Sheet `null` / `137` / `1` — đã có trong Bước 3.3 của experiment này.
+
+---
+
+# 🧪 Experiment 3.5: Memory Pressure Drill (Leading Indicator Verify)
+
+**SEV-4** | **Blast Radius:** 1 ECS Task (in-place, không tái deploy) | **Thời gian:** ~10 phút
+
+> **Đây là drill kiểm tra "alarm còn work không"** — chạy định kỳ (tháng/quý) để đảm bảo `MemoryUtilization > 85%` alarm vẫn fire đúng, Telegram vẫn nhận tin, và team chưa quên cách diễn giải nó.
+>
+> Khác với Experiment 1-3 (full chaos, có 5 phase), drill này ngắn vì:
+> - Inject KHÔNG phá deployment.
+> - Recovery tự động khi `stress-ng --timeout` hết.
+> - Mục tiêu duy nhất: verify **leading indicator** vs **lagging indicator**.
+
+### 📚 Học được gì sau drill này
+
+- Hiểu cách dùng **ECS Exec** để inject failure mà không cần thay đổi infra.
+- Quan sát trực tiếp **leading indicator fire TRƯỚC lagging indicator** — bằng chứng sống cho lý thuyết.
+- Đo độ trễ thực tế từ "metric breach threshold" → "alarm fire" → "Telegram received". Số liệu này dùng để tinh chỉnh `evaluation_periods` sau này.
+- **TTD target:** ⚠️ Telegram alert `memory-high` đến trong **≤ 3 phút** sau khi bắt đầu stress.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Set `--vm-bytes` quá cao (sát limit) → OOM Kill xảy ra TRƯỚC khi alarm fire → bạn đang test Experiment 3B, không phải leading indicator.
+- ❌ Quên `--timeout` → stress chạy mãi → task bị OOM kill → đảo chiều thí nghiệm.
+- ❌ Chạy stress 30 giây → alarm cần `evaluation_periods × period = 2 × 60s = 120s` sustained → không fire → tưởng alarm hỏng.
+
+### Phase 0 — Pre-flight
+
+```bash
+# 1. Lấy memory limit thực tế của task (để chọn --vm-bytes an toàn)
+CLUSTER=obs-cluster
+SERVICE=payment-service
+TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER --service-name $SERVICE \
+  --query 'taskArns[0]' --output text)
+
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].{Memory:memory,Containers:containers[*].{Name:name,Memory:memory}}' \
+  --output table
+# Ghi nhận giá trị Memory (vd: 512MB).
+# --vm-bytes nên = 70% × Memory = ~360MB cho task 512MB.
+# Đủ để vượt 85% (cộng với app baseline) nhưng KHÔNG đủ để trigger OOM Kill.
+
+# 2. ECS Exec enabled?
+aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
+  --query 'services[0].enableExecuteCommand'
+# Kỳ vọng: true. Nếu false → sửa modules/compute/ecs-service/main.tf
+# (set enable_execute_command = true) rồi terraform apply trước khi drill.
+
+# 3. Alarm hiện đang OK?
+aws cloudwatch describe-alarms \
+  --alarm-names obs-lab-payment-service-memory-high \
+  --query 'MetricAlarms[0].{Name:AlarmName,State:StateValue,Threshold:Threshold}'
+# Kỳ vọng: State = "OK". Nếu ALARM hoặc INSUFFICIENT_DATA → dừng, debug trước.
+```
+
+### Phase 1 — Inject Memory Pressure
+
+```bash
+# Mở 2 terminal:
+# Terminal 1: exec vào container
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive --command "/bin/sh"
+
+# --- TRONG container shell ---
+# Cài stress-ng (apt cho Debian/Ubuntu, apk cho Alpine)
+apt-get update -qq && apt-get install -y -qq stress-ng || \
+  apk add --no-cache stress-ng
+
+# Eat 360MB trong 3 phút (180s). Đủ thời gian để alarm fire (cần ≥2 phút sustained).
+stress-ng --vm 1 --vm-bytes 360M --vm-keep --timeout 180s
+# --vm-keep: giữ allocation, không free liên tục (mô phỏng memory leak).
+```
+
+📝 **Ghi vào notebook:** `[HH:MM:SS]` Inject memory stress 360MB × 180s.
+
+### Phase 2 — Observe (Terminal 2, song song)
+
+```bash
+# Theo dõi metric real-time
+watch -n 30 "aws cloudwatch get-metric-statistics \
+  --namespace AWS/ECS --metric-name MemoryUtilization \
+  --dimensions Name=ClusterName,Value=$CLUSTER Name=ServiceName,Value=$SERVICE \
+  --start-time \$(date -u -d '5 min ago' +%FT%TZ) \
+  --end-time \$(date -u +%FT%TZ) \
+  --period 60 --statistics Average \
+  --query 'Datapoints[*].{Time:Timestamp,Mem:Average}' --output table"
+
+# Theo dõi state alarm
+watch -n 30 "aws cloudwatch describe-alarms \
+  --alarm-names obs-lab-payment-service-memory-high \
+  --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason}' --output json"
+```
+
+👁️ **Timeline kỳ vọng:**
+
+| T+ | Sự kiện | Verify ở đâu |
+|---|---|---|
+| 0s | Stress bắt đầu | Terminal 1 |
+| ~60s | Memory metric đầu tiên > 85% xuất hiện | Terminal 2 metric |
+| ~120s | `evaluation_periods = 2` đạt → alarm `OK → ALARM` | Terminal 2 state |
+| ~125s | ⚠️ Telegram nhận `memory-high` ALARM | Telegram chat |
+| ~180s | Stress kết thúc, memory về baseline | Terminal 1 logs |
+| ~240s | Alarm `ALARM → OK` (cần 2 datapoint dưới threshold) | Terminal 2 state |
+| ~245s | ⚠️ Telegram nhận `memory-high` OK (recovered) | Telegram chat |
+
+### Phase 3 — Verify & Notebook
+
+**Checklist sau drill:**
+
+- [ ] Telegram nhận **2 tin nhắn**: 1 lúc `ALARM` + 1 lúc `OK`. Nếu thiếu tin OK → kiểm tra `ok_actions` trong `alarms-ecs.tf`.
+- [ ] **TTD ≤ 3 phút** (Inject → Telegram ALARM).
+- [ ] **TTR ≤ 5 phút** (Stress end → Telegram OK).
+- [ ] Task KHÔNG bị OOM Kill (chạy `aws ecs describe-tasks --tasks $TASK_ARN` confirm `lastStatus = RUNNING`, không có `stoppedAt`). Nếu task chết → giảm `--vm-bytes` lần sau.
+
+**Ghi notebook:**
+```
+[HH:MM:SS] Drill start: --vm-bytes 360M
+[HH:MM:SS] Memory > 85% lần đầu
+[HH:MM:SS] Alarm → ALARM
+[HH:MM:SS] ⚠️ Telegram ALARM received  → TTD = __s
+[HH:MM:SS] Stress timeout
+[HH:MM:SS] Alarm → OK
+[HH:MM:SS] ⚠️ Telegram OK received     → TTR = __s
+```
+
+### Phase 4 — Tuning ý tưởng
+
+Sau khi đo TTD nhiều lần, cân nhắc:
+
+- TTD quá chậm (> 4 phút)? → Giảm `evaluation_periods` 2 → 1 (nhưng dễ false alarm với GC spike).
+- TTD quá nhanh, false alarm? → Tăng `period` 60s → 300s.
+- Memory baseline luôn > 60% → Investigate app: có memory leak? Có cần tăng task memory?
+
+### Tần suất chạy drill
+
+| Tình huống | Tần suất gợi ý |
+|---|---|
+| Sau mỗi `terraform apply` chạm `alarms-ecs.tf` | 1 lần (smoke test) |
+| Định kỳ hàng tháng | 1 lần (verify alerting infra) |
+| Trước GameDay lớn | 1 lần (warm-up team) |
+| Sau khi rotate Telegram bot token | 1 lần (verify Secrets Manager) |
+
+---
+
+# 📖 Glossary & Cheat Sheets (Iteration A++)
+
+### ExitCode signatures — bảng định mệnh của mọi SRE
+
+| ExitCode | Tên | Ý nghĩa | Nguôn nhìn đầu tiên |
+|---|---|---|---|
+| `null` | Birth failure | Container CHƯA bao giờ khởi động | IAM Role, ECR image tag, Secrets Manager |
+| `0` | Normal exit | Process kết thúc bình thường | Thường do user / scheduler initiated |
+| `1` | App error | Process thoát do exception chưa catch | App logs (CloudWatch), env vars, config |
+| `137` | OOM Kill (SIGKILL) | Linux OOM Killer hoặc manual `kill -9` | Memory metrics, task definition memory limit |
+| `139` | Segfault (SIGSEGV) | Memory violation (C/C++/Rust unsafe) | Application core dump, dependency version |
+| `143` | Graceful SIGTERM | ECS scale-in gửi SIGTERM, container respect | Healthy — không phải failure |
+
+### ECS Failure Quadrants (kết hợp từ 4 experiments)
+
+| Failure type | Container state | CloudWatch Logs | EventBridge signal | Telegram alert |
+|---|---|---|---|---|
+| **Birth** (Exp 1, 3A) | Never started | ❌ Empty | `stopCode = TaskFailedToStart` | ⚠️ + 🚨 (sau circuit breaker) |
+| **Runtime** (Exp 3B, Exp 4 future) | Started → died | ✅ Partial (logs cut off) | `stopCode = EssentialContainerExited`, exit 137/1 | ⚠️ + 🚨 |
+| **Zombie** (Exp 2) | Running + healthy | ✅ Full (bình thường) | (Chậm) `Task failed ELB health checks` | ⚠️ sau ~5 phút |
+| **Deployment** (Exp 1 outer) | Old task survives | (Empty cho task mới) | `eventType = SERVICE_DEPLOYMENT_FAILED` | 🚨 ngay |
+
+### Leading vs Lagging indicators
+
+| Loại | Metric | Khi fire | Action |
+|---|---|---|---|
+| **Leading** | `MemoryUtilization > 85%` | Trước OOM | Right-size, profile memory, scale out |
+| **Lagging** | `RunningTaskCount < 1` | Sau khi service chết | Page on-call, cứu service trước, RCA sau |
+| **Awareness** | `CPUUtilization > 80%` 5min | Workload anomaly | Investigate, chưa cần act |
+
+### CloudWatch Alarm states (junior thường nhầm)
+
+| State | Nghĩa | Có gửi notification không? |
+|---|---|---|
+| `OK` | Metric trong threshold | Có — nếu có `ok_actions` |
+| `ALARM` | Metric breached threshold và đủ `evaluation_periods` | Có — qua `alarm_actions` |
+| `INSUFFICIENT_DATA` | Không đủ datapoint để đánh giá | Có — nếu có `insufficient_data_actions` (mặc định không) |
+
+### `treat_missing_data` — 1 trong 3 điểm dễ sai nhất
+
+| Value | Khi missing datapoint | Dùng cho |
+|---|---|---|
+| `notBreaching` | Coi như OK | Resource usage (Memory, CPU) — task tạm dừng không phải vấn đề |
+| `breaching` | Coi như ALARM | RunningTaskCount, HealthyHostCount — metric mất = service chết |
+| `ignore` | Giữ state cũ | Hiếm dùng |
+| `missing` | INSUFFICIENT_DATA | Mặc định — thường gây lừa khều trong production |
+
+### EventBridge `eventType` với `ECS Deployment State Change`
+
+| eventType | Khi nào fire | Mức độ |
+|---|---|---|
+| `SERVICE_DEPLOYMENT_IN_PROGRESS` | Deployment bắt đầu | Info |
+| `SERVICE_DEPLOYMENT_COMPLETED` | Thành công — ROLLOUT_COMPLETED | Info (nên log) |
+| `SERVICE_DEPLOYMENT_FAILED` | Circuit breaker trip + rollback | **Alert critical** |
+
+### `stopCode` enum cho ECS Task State Change
+
+| stopCode | Mô tả | Alert? |
+|---|---|---|
+| `TaskFailedToStart` | Container chưa từng RUNNING (Birth) | ✅ Đã wire |
+| `EssentialContainerExited` | Container chạy rồi exit (Runtime) | ✅ Đã wire |
+| `UserInitiated` | `aws ecs stop-task` thủ công | ❌ Loại |
+| `ServiceSchedulerInitiated` | Rolling deploy / scale-in | ❌ Loại |
+| `SpotInterruption` | (nếu dùng Fargate Spot) | Tữ nhân nhức |
+
+---
+
+# 🔮 Roadmap experiments kế tiếp
+
+| # | Tên | Status | Iteration | Skill mới học được |
+|---|---|---|---|---|
+| 1 | IAM Blackhole (Execution Role) | ✅ Done + alert wired | A | EventBridge, Circuit Breaker, IAM |
+| 2 | Network Partition (SG) | ✅ Done + alert wired (chậm) | A | Zombie Task, ALB health check |
+| 3 | Poison Config (Bad Image / OOM) | ✅ Done + alert wired | A | ExitCode signatures, leading vs lagging |
+| 3.5 | **Memory Pressure Drill** (recurring) | ✅ Done | A | ECS Exec, leading indicator verify, alarm tuning |
+| 4 | **Task Role Blackhole (Runtime IAM)** | 🔜 Next | B | Runtime IAM vs Birth IAM, app-level error handling |
+| 5 | Cascading failure (Payment slow → Order timeout) | 🔜 | C (sau onboard Order) | Service-to-service timeout, retry storm |
+| 6 | Cloud Map DNS failure | 🔜 | C | Service discovery resilience |
+| 7 | AWS FIS AZ failure | 🔜 | Phase 8 (ROADMAP) | Multi-AZ recovery, native AWS chaos |
+
+---
+
+# 📚 Tham khảo
+
+- **Iteration A plan:** [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) — chi tiết alerting infra đã build.
+- **Module alerting:** [`../modules/alerting/`](../modules/alerting/) — SNS + Lambda Telegram.
+- **EventBridge rules:** [`../control-plane/lab/eventbridge-ecs.tf`](../control-plane/lab/eventbridge-ecs.tf)
+- **CloudWatch alarms:** [`../control-plane/lab/alarms-ecs.tf`](../control-plane/lab/alarms-ecs.tf)
+- **ROADMAP tổng:** [`../ROADMAP.md`](../ROADMAP.md)
+- **AWS docs:** [ECS Events](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_cwe_events.html) · [Stop codes](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stopped-task-error-codes.html) · [Container Insights metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-metrics-ECS.html)
