@@ -462,20 +462,28 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
 > *Mục tiêu: Chụp ảnh "hiện trường" Cloud Map và SG khi hệ thống khỏe mạnh.*
 
 ```bash
+# Variables (điền đúng project/env của bạn)
+PROJECT=obs
+ENV=lab
+
 # 1. Cloud Map: liệt kê instances đã đăng ký
-NAMESPACE_ID=$(aws servicediscovery list-namespaces \
-  --query "Namespaces[?Name=='ecommerce.local'].Id" --output text)
 SVC_DISCOVERY_ID=$(aws servicediscovery list-services \
   --query "Services[?Name=='payment-service'].Id" --output text)
 
 aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID \
   --query 'Instances[*].{Id:Id,IP:Attributes.AWS_INSTANCE_IPV4}' --output table
 
-# 2. SG: ghi nhận rule App↔App hiện tại
-APP_SG_ID=$(aws ec2 describe-security-groups \
-  --filters "Name=group-name,Values=*application*" \
-  --query 'SecurityGroups[0].GroupId' --output text)
+# 2. SG: lấy App SG ID từ SSM (đã export sẵn bởi control-plane)
+# Tên thực tế của SG là "obs-sg-app" — KHÔNG phải "*application*"
+APP_SG_ID=$(aws ssm get-parameter \
+  --name "/$PROJECT/$ENV/security/app_sg_id" \
+  --query 'Parameter.Value' --output text)
 echo "App SG: $APP_SG_ID"
+
+# (Fallback nếu không có SSM — filter theo tag Name)
+# APP_SG_ID=$(aws ec2 describe-security-groups \
+#   --filters "Name=tag:Name,Values=$PROJECT-sg-app" \
+#   --query 'SecurityGroups[0].GroupId' --output text)
 
 aws ec2 describe-security-group-rules --filter "Name=group-id,Values=$APP_SG_ID" \
   --query 'SecurityGroupRules[?contains(Description, `Service-to-service`)].{RuleId:SecurityGroupRuleId,Direction:IsEgress,Ports:join(`-`,[to_string(FromPort),to_string(ToPort)]),Description:Description}' \
