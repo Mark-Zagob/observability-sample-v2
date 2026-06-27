@@ -402,72 +402,121 @@ aws ecs describe-services \
 - Phân biệt sống còn giữa **Liveness** (container có chạy không) vs **Readiness** (network có thông không).
 - Hiểu khái niệm **Zombie Task** — RUNNING + HEALTHY (theo Liveness) nhưng KHÔNG serve traffic.
 - Đính chính hiểu lầm: **Circuit Breaker CHỈ hoạt động trong deployment**, không bảo vệ task đang chạy.
-- Hiểu cơ chế ALB Target Group health check vs ECS health check — 2 cấp độ độc lập.
-- **TTD target:** Telegram alert ⚠️ Task Stopped phải đến trong **≤ 5 phút** (khi ALB deregister + ECS kill task).
+- Hiểu cơ chế Cloud Map health check (custom) vs ECS task health — 2 cấp độ độc lập.
+- **TTD target:** Telegram alert ⚠️ Task Stopped phải đến trong **≤ 5 phút** (nếu ECS phát hiện task unhealthy).
 
 ### ⚠️ Bẫy thường gặp
 
-- ❌ Kỳ vọng Circuit Breaker auto-rollback khi ALB báo unhealthy → SAI. Circuit Breaker chỉ active trong deployment cycle.
-- ❌ Khôi phục SG rule rồi vội test ngay → ALB vẫn cần 30-90s để mark target healthy lại (health check threshold).
+- ❌ Kỳ vọng Circuit Breaker auto-rollback khi service bị cô lập → SAI. Circuit Breaker chỉ active trong deployment cycle.
+- ❌ Khôi phục SG rule rồi vội test ngay → Cloud Map DNS cần ~10-30s để re-resolve IP mới (TTL = 10s trong cấu hình).
 - ❌ Bỏ qua VPC Flow Logs — đây là evidence trail rõ ràng nhất chứng minh "gói tin bị REJECT ở SG layer".
+
+### ⚠️ Quan trọng: Architecture Context
+
+> `payment-service` hiện tại deploy với `enable_load_balancer = false` — chỉ dùng **Cloud Map** (service discovery DNS: `payment-service.ecommerce.local:5002`).
+>
+> Do đó experiment này **KHÔNG liên quan đến ALB Target Group**. Thay vào đó, ta sẽ cắt SG rule **App ↔ App** (service-to-service) để mô phỏng network partition giữa các microservices.
 
 ---
 
 ## 🛑 Phase 0: Pre-flight Check (Steady State)
 
-> *Mục tiêu: Đảm bảo ALB đang route traffic thành công xuống ECS Task.*
-
-Mở Terminal và chạy:
+> *Mục tiêu: Đảm bảo payment-service đang reachable qua Cloud Map DNS.*
 
 ```bash
-# 1. Lấy DNS của ALB
-ALB_DNS=$(aws elbv2 describe-load-balancers \
-    --names <your-project>-alb \
-    --query 'LoadBalancers[0].DNSName' --output text)
-echo "ALB DNS: $ALB_DNS"
+# 1. Lấy cluster và task info
+CLUSTER=obs-cluster
+SERVICE=payment-service
+TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER --service-name $SERVICE \
+  --query 'taskArns[0]' --output text)
+echo "Task: $TASK_ARN"
 
-# 2. Verify traffic đang thông suốt (Kỳ vọng: 200 OK hoặc 404 Not Found của API GW)
-curl -I http://$ALB_DNS/health/live
+# 2. Verify task đang RUNNING
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].{Status:lastStatus,Health:healthStatus,IP:containers[0].networkInterfaces[0].privateIpv4Address}' \
+  --output table
+
+# 3. Verify Cloud Map DNS resolve được
+# (Chạy từ bên trong VPC — dùng ECS Exec)
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive \
+  --command "nslookup payment-service.ecommerce.local"
+# Kỳ vọng: trả về private IP của task (trùng với IP ở bước 2)
+
+# 4. Verify service endpoint
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive \
+  --command "curl -s -o /dev/null -w '%{http_code}' http://localhost:5002/health/live"
+# Kỳ vọng: 200
 ```
 
-✅ **Kỳ vọng:** HTTP Status 200 hoặc 404 (miễn là không phải 502/504).
+✅ **Kỳ vọng:** Task RUNNING, DNS resolve thành công, health endpoint trả 200.
 
 ---
 
 ## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
 
-> *Mục tiêu: Chụp ảnh "hiện trường" Target Group khi hệ thống khỏe mạnh.*
+> *Mục tiêu: Chụp ảnh "hiện trường" Cloud Map và SG khi hệ thống khỏe mạnh.*
 
 ```bash
-# 3. Lấy Target Group ARN của payment-service
-TG_ARN=$(aws elbv2 describe-target-groups \
-    --names <your-project>-payment-service \
-    --query 'TargetGroups[0].TargetGroupArn' --output text)
+# 1. Cloud Map: liệt kê instances đã đăng ký
+NAMESPACE_ID=$(aws servicediscovery list-namespaces \
+  --query "Namespaces[?Name=='ecommerce.local'].Id" --output text)
+SVC_DISCOVERY_ID=$(aws servicediscovery list-services \
+  --query "Services[?Name=='payment-service'].Id" --output text)
 
-# 4. Check Health Status qua CLI
-aws elbv2 describe-target-health \
-    --target-group-arn $TG_ARN \
-    --query 'TargetHealthDescriptions[*].{Target:Target.Id, State:TargetHealth.State, Reason:TargetHealth.Reason}' \
-    --output table
+aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID \
+  --query 'Instances[*].{Id:Id,IP:Attributes.AWS_INSTANCE_IPV4}' --output table
+
+# 2. SG: ghi nhận rule App↔App hiện tại
+APP_SG_ID=$(aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=*application*" \
+  --query 'SecurityGroups[0].GroupId' --output text)
+echo "App SG: $APP_SG_ID"
+
+aws ec2 describe-security-group-rules --filter "Name=group-id,Values=$APP_SG_ID" \
+  --query 'SecurityGroupRules[?contains(Description, `Service-to-service`)].{RuleId:SecurityGroupRuleId,Direction:IsEgress,Ports:join(`-`,[to_string(FromPort),to_string(ToPort)]),Description:Description}' \
+  --output table
+
+# 3. Lưu SG Rule IDs để rollback nhanh
+INGRESS_RULE_ID=$(aws ec2 describe-security-group-rules \
+  --filter "Name=group-id,Values=$APP_SG_ID" \
+  --query 'SecurityGroupRules[?contains(Description, `Service-to-service`) && IsEgress==`false`].SecurityGroupRuleId' \
+  --output text)
+EGRESS_RULE_ID=$(aws ec2 describe-security-group-rules \
+  --filter "Name=group-id,Values=$APP_SG_ID" \
+  --query 'SecurityGroupRules[?contains(Description, `Service-to-service`) && IsEgress==`true`].SecurityGroupRuleId' \
+  --output text)
+echo "Ingress Rule: $INGRESS_RULE_ID"
+echo "Egress Rule:  $EGRESS_RULE_ID"
 ```
 
-📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Target Group State = HEALTHY.
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Cloud Map instance registered, SG rules intact.
 
 ---
 
 ## 💥 Phase 2: Inject Failure (The Isolation)
 
-Chúng ta sẽ dùng Terraform để gỡ bỏ "sợi dây cáp mạng" nối từ ALB vào App.
+Chúng ta sẽ dùng Terraform để gỡ bỏ SG rule **App ↔ App** — cắt đứt giao tiếp giữa các microservices.
 
 1. Mở file `terraform/modules/security/security_groups.tf`.
-2. Tìm block `resource "aws_security_group_rule" "app_ingress_from_alb"` (hoặc rule cho phép ALB SG gọi vào App SG ở port 5002).
-3. Comment out (hoặc xóa) block đó.
+2. Tìm 2 blocks:
+   - `resource "aws_security_group_rule" "app_ingress_from_app"` (line ~121)
+   - `resource "aws_security_group_rule" "app_egress_to_app"` (line ~131)
+3. **Comment out CẢ HAI blocks**.
 4. Chạy lệnh:
 
 ```bash
+# Từ thư mục đang active (control-plane/lab hoặc data-plane)
 cd terraform/control-plane/lab
 terraform apply -auto-approve
 ```
+
+> 💡 **Tại sao comment 2 rules thay vì 1?**
+> Chỉ comment ingress thì egress vẫn cho phép gói tin đi ra — nhưng response không vào được (ingress blocked).
+> Comment cả 2 cho clean: đảm bảo gói tin bị chặn CẢ 2 CHIỀU → VPC Flow Logs có REJECT entry rõ ràng.
+
+📝 **Ghi vào notebook:** `[HH:MM:SS]` Inject: terraform apply gỡ `app_ingress_from_app` + `app_egress_to_app`.
 
 ---
 
@@ -475,44 +524,57 @@ terraform apply -auto-approve
 
 > Đây là lúc tư duy SRE của bạn được thử thách. HÃY MỞ 3 TERMINAL để thấy bức tranh toàn cảnh.
 
-### Terminal 1: Giả lập User Traffic (The Symptom)
+### Terminal 1: Giả lập Service-to-Service Call (The Symptom)
 
-Chạy vòng lặp curl để bắn request liên tục vào ALB:
+Nếu bạn có 1 container khác trong cluster (ví dụ `order-service`), dùng ECS Exec để curl vào `payment-service`:
 
 ```bash
-while true; do curl -s -o /dev/null -w "%{http_code}\n" http://$ALB_DNS/api/payment/health; sleep 1; done
+# Option A: Dùng ECS Exec vào chính payment-service để self-test
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive --command "/bin/sh"
+
+# Trong container shell:
+while true; do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    http://payment-service.ecommerce.local:5002/health/live --connect-timeout 3
+  sleep 2
+done
 ```
 
 👁️ **The SRE Lens:**
 
-Ban đầu bạn thấy 200. Khoảng 60-90s sau khi chạy `terraform apply`, terminal sẽ liên tục bắn ra `502` (Bad Gateway) hoặc `504` (Gateway Timeout).
+- `curl localhost:5002/health/live` → vẫn trả **200** (vì localhost bypass SG).
+- `curl payment-service.ecommerce.local:5002/health/live` → **timeout** hoặc **connection refused** (vì DNS resolve ra IP, nhưng SG chặn TCP connection ở port 5000-5005).
 
-💡 **Tại sao?** ALB cố gắng gửi Health Check và Traffic xuống App, nhưng bị VPC Router chặn đứng (Drop) ở tầng Network.
+💡 **Tại sao?** Cloud Map DNS vẫn resolve đúng IP, nhưng VPC Security Group đã chặn gói tin TCP ở tầng network. DNS ≠ Connectivity.
 
-### Terminal 2: Check ALB Target Health (The Control Plane)
+### Terminal 2: Check Cloud Map Registration (The Control Plane)
 
 ```bash
-aws elbv2 describe-target-health \
-    --target-group-arn $TG_ARN \
-    --query 'TargetHealthDescriptions[*].{Target:Target.Id, State:TargetHealth.State, Reason:TargetHealth.Reason, Desc:TargetHealth.Description}' \
-    --output table
+# Cloud Map: instance vẫn registered?
+aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID \
+  --query 'Instances[*].{Id:Id,IP:Attributes.AWS_INSTANCE_IPV4}' --output table
+
+# DNS resolve có trả IP?
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive \
+  --command "nslookup payment-service.ecommerce.local"
 ```
 
-👁️ **Kết quả:**
+👁️ **Kết quả (bẫy lớn):**
 
-- `State: unhealthy`
-- `Reason: Health checks failed`
-- `Description: Health check failed with status code 0` (hoặc Timeout)
+- Cloud Map instance vẫn `REGISTERED` ✅
+- DNS vẫn resolve ra IP ✅
 
-💡 ALB đã nhận ra "cư dân" này không còn phản hồi và ngừng route traffic mới vào nó.
+💡 **Cloud Map không có health check chủ động** (cấu hình hiện tại dùng `health_check_custom_config` với `failure_threshold = 1`, ECS tự quản lý registration). Cloud Map KHÔNG biết gói tin bị drop — nó chỉ biết "ECS task còn sống hay chết".
 
 ### Terminal 3: Check ECS Task Status (The Illusion / Bẫy lớn nhất)
 
 ```bash
 aws ecs describe-services \
-    --cluster <your-cluster-name> \
+    --cluster $CLUSTER \
     --services payment-service \
-    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount, Deployments:deployments[*].{Status:status, Running:runningCount, Rollback:rollBack}}' \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount, Deployments:deployments[*].{Status:status, Running:runningCount, Rollback:rolloutState}}' \
     --output json
 ```
 
@@ -520,64 +582,64 @@ aws ecs describe-services \
 
 - `Status: ACTIVE`
 - `Running: 1`
-- `Rollback: false` (Hoặc Circuit Breaker KHÔNG kích hoạt)
+- `Rollback: COMPLETED` (deployment cuối cùng đã thành công)
 
 🚨 **THE "AHA!" MOMENT (Đính chính hiểu lầm tai hại):**
 
-Nhiều người nghĩ rằng `deployment_circuit_breaker` sẽ tự động Rollback khi ALB báo Unhealthy. **SAI!**
+Nhiều người nghĩ rằng `deployment_circuit_breaker` sẽ tự động Rollback khi service bị network partition. **SAI!**
 
 - Circuit Breaker CHỈ hoạt động trong quá trình **DEPLOYMENT** (khi Task mới đang cố gắng replace Task cũ).
 - Nếu Task ĐANG CHẠY ỔN ĐỊNH mà bạn đột ngột cắt Network (SG Rule), ECS Control Plane KHÔNG giết Task đó, và KHÔNG Rollback.
 - Dưới góc nhìn của ECS Agent: Container vẫn đang chạy (Liveness Probe = Pass, Process PID vẫn tồn tại). ECS không biết gì về việc AWS VPC Network đang drop gói tin.
-- **Kết luận:** Bạn vừa tạo ra một **Zombie Task**. Nó vẫn tốn tiền CPU/RAM của bạn, vẫn ghi log "Server started on port 5002", nhưng không phục vụ bất kỳ user nào.
+- **Kết luận:** Bạn vừa tạo ra một **Zombie Task**. Nó vẫn tốn tiền CPU/RAM của bạn, vẫn ghi log "Server started on port 5002", nhưng không phục vụ bất kỳ microservice nào.
 
-### Terminal 4 (NEW — Iteration A): Watch Telegram
+### Terminal 4 (Iteration A): Watch Telegram
 
-Với Exp 2, alert KHÔNG đến ngay vì Network Partition không trigger `SERVICE_DEPLOYMENT_FAILED`. Bạn sẽ thấy alert ⚠️ Task Stopped khi:
+Với Exp 2 (Cloud Map only, không ALB):
 
-1. ALB deregister target (sau ~30-90s health check fail)
-2. ECS phát hiện task unhealthy theo cấu hình ALB target group → kill task → fire EventBridge `ecs-task-stopped-abnormal`
+> ⚠️ **Alert sẽ KHÔNG đến** trong trường hợp này — đây là bài học quan trọng nhất.
 
-```
-⚠️ WARNING: ECS Task State Change
-Cluster:  obs-cluster
-Service:  service:payment-service
-Reason:   Task failed ELB health checks in (target-group ...)
-Source:   aws.ecs  |  Region: ap-southeast-2
-```
+Lý do: Không có ALB health check → không có deregistration → ECS không kill task → không có EventBridge `ecs-task-stopped-abnormal`. Payment-service trở thành **Zombie hoàn hảo** — invisible to all monitoring.
 
-**Bài học quan trọng:** Đây là ví dụ điển hình của **alert chậm** vì failure ở Network layer mà ECS không tự biết. Trong Production cần thêm:
-- ALB-level alarm `HTTPCode_Target_5XX_Count` (sẽ làm khi onboard service thứ 2 — xem [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) Sprint A.1.T5).
-- VPC Flow Logs query với REJECT filter để truy vết SG rule sai trong < 30s.
+Đây chính là **Blind Spot** lớn nhất của kiến trúc Cloud Map-only:
+- ALB-based services: ALB health check phát hiện → deregister → ECS kill → EventBridge fire ⚠️
+- **Cloud Map-only services: KHÔNG có mechanism nào phát hiện network partition.**
 
-**Ghi vào notebook:**
-- `[HH:MM:SS]` Inject (terraform apply gỡ SG rule)
-- `[HH:MM:SS]` 502 đầu tiên từ Terminal 1
-- `[HH:MM:SS]` ALB target unhealthy
-- `[HH:MM:SS]` ⚠️ Telegram task-stopped received → **TTD = ?**
+📝 **Ghi vào notebook:**
+- `[HH:MM:SS]` Inject (terraform apply gỡ SG rules)
+- `[HH:MM:SS]` Terminal 1: connection timeout bắt đầu
+- `[HH:MM:SS]` Terminal 2: Cloud Map vẫn registered (blind spot!)
+- `[HH:MM:SS]` Terminal 3: ECS vẫn báo RUNNING (Zombie confirmed)
+- `[HH:MM:SS]` Telegram: **KHÔNG có alert** → Blind Spot confirmed → Action Item
 
 ---
 
 ## 🔄 Phase 4: Rollback & Recovery
 
-Khôi phục "sợi dây cáp mạng" bằng Terraform.
+Khôi phục SG rules bằng Terraform.
 
-1. Uncomment lại block `app_ingress_from_alb` trong `security_groups.tf`.
+1. Uncomment lại 2 blocks `app_ingress_from_app` + `app_egress_to_app` trong `security_groups.tf`.
 2. Chạy:
 
 ```bash
 terraform apply -auto-approve
 ```
 
-3. Quan sát Terminal 1 (Vòng lặp curl):
-   - Đợi khoảng 30s - 60s (Thời gian AWS propagate SG Rule + ALB Health Check Interval 30s × 3 lần success).
-   - Mã HTTP sẽ nhảy từ `502` trở lại về `200`.
+3. Quan sát Terminal 1 (vòng lặp curl):
+   - Đợi khoảng 10-30s (SG rule propagation + Cloud Map DNS TTL = 10s).
+   - curl sẽ chuyển từ timeout trở lại `200`.
 
-4. Verify Target Group:
+4. Verify Cloud Map + Connectivity:
 
 ```bash
-aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealthDescriptions[*].TargetHealth.State'
-# Kỳ vọng: ['healthy']
+# Cloud Map vẫn registered (không thay đổi — nó chưa bao giờ deregister)
+aws servicediscovery list-instances --service-id $SVC_DISCOVERY_ID --output table
+
+# Connectivity restored
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container payment-service --interactive \
+  --command "curl -s http://payment-service.ecommerce.local:5002/health/live"
+# Kỳ vọng: 200
 ```
 
 ---
@@ -586,17 +648,20 @@ aws elbv2 describe-target-health --target-group-arn $TG_ARN --query 'TargetHealt
 
 | Câu hỏi | Trả lời của bạn (Gợi ý) |
 |---------|------------------------|
-| 1. Why did users get 502 Bad Gateway? | ALB không thể kết nối TCP/HTTP tới ECS Task để forward request. |
-| 2. Why couldn't ALB reach the Task? | Security Group Inbound Rule từ ALB SG đến App SG bị xóa. VPC Network drop gói tin. |
-| 3. Why didn't ECS restart or rollback the Task? | ECS chỉ kiểm tra Liveness (Container có đang chạy process không?). Nó không tự động kiểm tra Readiness (Network có thông không?) đối với các Task đã chạy ổn định từ trước. |
-| 4. Why is Network Partition dangerous? | Nó tạo ra "Zombie Tasks" – chiếm dụng tài nguyên, làm sai lệch metrics (App báo healthy, nhưng Business metric = 0), và gây khó khăn khi debug nếu chỉ nhìn vào ECS Console. |
-| 5. Systemic Gap (Production)? | Nếu AI/Dev vô tình xóa SG Rule trên Prod, làm sao phát hiện ngay lập tức? |
+| 1. Why couldn't other services reach payment-service? | Security Group rule `app_ingress_from_app` (port 5000-5005, self-referencing) bị xóa. VPC network drop gói tin TCP. |
+| 2. Why did Cloud Map still show the service as registered? | Cloud Map dùng `health_check_custom_config` — ECS quản lý registration dựa trên task lifecycle, không dựa trên network connectivity. Task vẫn RUNNING → vẫn registered. |
+| 3. Why didn't ECS restart or rollback the task? | ECS chỉ kiểm tra Liveness (Container process có chạy không). Nó không kiểm tra Readiness (Network có thông không) với các task đã stable. Circuit Breaker chỉ active trong deployment cycle. |
+| 4. Why is this more dangerous than ALB-based partition? | Với ALB, health check fail → ALB deregister → ECS eventually kill → EventBridge alert. Với Cloud Map-only, **không có mechanism nào phát hiện** → Zombie tồn tại vĩnh viễn cho đến khi người khác gọi vào và thấy timeout. |
+| 5. Systemic Gap (Production)? | Cloud Map-only services CẦN health check bổ sung — hoặc app-level (liveness endpoint + health checker sidecar) hoặc infra-level (Route 53 health check on Cloud Map). |
 
-**Action Item (Phase 3/8):**
+**Action Items:**
 
-1. ⏸️ **Deferred** — CloudWatch Alarm `HTTPCode_Target_5XX_Count` trên ALB. Lý do: `payment-service` chưa đăng ký với ALB (chỉ Cloud Map). Sẽ làm khi onboard service thứ 2 — xem [`ITERATION_A_PLAN.md`](ITERATION_A_PLAN.md) Sprint A.1.T5.
+1. 📝 **Backlog (Priority High):** Implement **synthetic health check** cho Cloud Map-only services. Options:
+   - Route 53 Health Check trỏ vào Cloud Map service (cần private hosted zone + VPC resolver).
+   - CloudWatch Synthetics canary: chạy định kỳ `curl payment-service.ecommerce.local:5002/health/live` từ Lambda trong VPC → alarm nếu fail.
+   - App-level: mỗi service tự ping dependency và tự crash nếu không thông (self-preservation pattern).
 2. 📝 **Backlog:** Self-preservation pattern — App tự crash nếu không nhận request nào trong 5 phút. Cần implement ở app code, không phải infra.
-3. ✅ **DONE (Iteration A.1.T4):** EventBridge `ecs-task-stopped-abnormal` — bắt được một phần của failure này khi ALB cuối cùng deregister target và ECS kill task.
+3. ✅ **DONE (Iteration A.1.T4):** EventBridge `ecs-task-stopped-abnormal` — bắt được failure **chỉ khi** có ALB hoặc khi container tự crash. KHÔNG bắt được Cloud Map Zombie.
 
 ---
 
@@ -1063,7 +1128,7 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 |---|---|---|---|---|
 | **Birth** (Exp 1, 3A) | Never started | ❌ Empty | `stopCode = TaskFailedToStart` | ⚠️ + 🚨 (sau circuit breaker) |
 | **Runtime** (Exp 3B, Exp 4 future) | Started → died | ✅ Partial (logs cut off) | `stopCode = EssentialContainerExited`, exit 137/1 | ⚠️ + 🚨 |
-| **Zombie** (Exp 2) | Running + healthy | ✅ Full (bình thường) | (Chậm) `Task failed ELB health checks` | ⚠️ sau ~5 phút |
+| **Zombie** (Exp 2) | Running + healthy | ✅ Full (bình thường) | ❌ Không (Cloud Map-only) | ❌ **Blind spot** — không alert |
 | **Deployment** (Exp 1 outer) | Old task survives | (Empty cho task mới) | `eventType = SERVICE_DEPLOYMENT_FAILED` | 🚨 ngay |
 
 ### Leading vs Lagging indicators
@@ -1116,7 +1181,7 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 | # | Tên | Status | Iteration | Skill mới học được |
 |---|---|---|---|---|
 | 1 | IAM Blackhole (Execution Role) | ✅ Done + alert wired | A | EventBridge, Circuit Breaker, IAM |
-| 2 | Network Partition (SG) | ✅ Done + alert wired (chậm) | A | Zombie Task, ALB health check |
+| 2 | Network Partition (SG) | ✅ Done (Blind Spot discovered) | A | Zombie Task, Cloud Map-only blind spot |
 | 3 | Poison Config (Bad Image / OOM) | ✅ Done + alert wired | A | ExitCode signatures, leading vs lagging |
 | 3.5 | **Memory Pressure Drill** (recurring) | ✅ Done | A | ECS Exec, leading indicator verify, alarm tuning |
 | 4 | **Task Role Blackhole (Runtime IAM)** | 🔜 Next | B | Runtime IAM vs Birth IAM, app-level error handling |

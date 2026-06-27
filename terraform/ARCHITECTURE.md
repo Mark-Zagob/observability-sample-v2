@@ -351,7 +351,7 @@ Control Plane (writes)          SSM Parameter Store           Data Plane (reads)
 **D. Chaos Engineering Playbook**
 Để kiểm chứng tính resilience của kiến trúc CP/DP, xem [`docs/AWS_CHAOS_PLAYBOOK.md`](docs/AWS_CHAOS_PLAYBOOK.md) — bao gồm:
 - **Experiment 1 (IAM Blackhole):** Gỡ IAM policy → Circuit Breaker auto-rollback → bài học về "Silent Failure" khi deploy thất bại âm thầm.
-- **Experiment 2 (Network Partition):** Cắt Security Group → Zombie Task pattern → bài học về Liveness vs Readiness.
+- **Experiment 2 (Network Partition):** Cắt SG rule App↔App → Zombie Task pattern → bài học về Liveness vs Readiness, Cloud Map-only blind spot (không alert).
 - **Experiment 3 (Poison Config):** Deploy bad image tag / OOM Kill → phân biệt Birth Failure vs Runtime Failure qua ExitCode signatures.
 ---
 
