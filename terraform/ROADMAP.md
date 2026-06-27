@@ -35,11 +35,25 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 - [ ] Inject `DATABASE_URL` từ Secrets Manager vào ECS Task qua IAM Task Role.
 
 ### 💥 SRE / Chaos Drill
-- [ ] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback.
-- [ ] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern.
-- [ ] **Drill 3 (Poison Config):** Deploy bad image tag / OOM Kill -> ExitCode signatures (`null` vs `137` vs `1`).
+- [x] **Drill 1 (IAM Blackhole):** Revoke Execution Role policy -> Circuit Breaker auto-rollback. ✅ Alert wired → `eventbridge-ecs.tf`
+- [x] **Drill 2 (Network Partition):** Tắt SG Inbound từ ALB -> Zombie Task pattern. ✅ Alert wired (Task stopped abnormal)
+- [x] **Drill 3 (Poison Config):** Deploy bad image tag / OOM Kill -> ExitCode signatures (`null` vs `137` vs `1`). ✅ Alert wired
+- [x] **Drill 3.5 (Memory Pressure):** ECS Exec stress → verify `memory-high` alarm leading indicator. ✅ Documented → `AWS_CHAOS_PLAYBOOK.md` Exp 3.5
 
-### ✅ Definition of Done (DoD)
+> 📖 Chi tiết tất cả drills: [`docs/AWS_CHAOS_PLAYBOOK.md`](docs/AWS_CHAOS_PLAYBOOK.md)
+
+### ✅ Definition of Done — Hardening (Iteration A)
+
+> Tick sau khi chạy `terraform apply` và re-run 3 experiments với alerting.
+
+- [ ] Telegram bot nhận đủ alert từ 3 lần re-run Experiment (screenshot vào notebook).
+- [ ] Time-To-Detect mỗi experiment ≤ 5 phút (ghi TTD vào notebook).
+- [ ] 3 CloudWatch Alarm (memory-high, cpu-high, running-task-low) ở state `OK` (không `INSUFFICIENT_DATA`).
+- [ ] Stress test (Exp 3.5) gây alarm Memory fire trong < 3 phút + Telegram nhận đủ 2 tin (ALARM + OK).
+- [ ] Toàn bộ infra mới qua Terraform, không có ClickOps.
+- [ ] Cập nhật dòng dưới: **`payment-service` onboard: ✅ DONE, Hardening: ✅ DONE**
+
+### ✅ Definition of Done (DoD) — Phase 1 gốc
 - [ ] `curl https://<ALB_DNS>/health/live` trả về 200 OK.
 - [ ] VPC Flow Logs (Athena) xác nhận traffic ECR pull đi qua VPC Endpoint, KHÔNG qua NAT Gateway.
 
@@ -81,6 +95,12 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 ### 📦 Platform Onboard
 - [ ] **Shift-Left:** Chặn `terraform apply` local. Bắt buộc push code -> GHA Plan -> OPA Conftest Scan -> PR Comment -> Merge -> Apply.
 - [ ] Dùng SSM Session Manager qua Bastion để nhảy vào RDS/MSK debug (thay vì mở port 5432 ra Internet).
+
+> ⏸️ **Sprint A.3 từ Iteration A (deferred tới đây):** Sau khi OIDC + GHA pipeline sẵn sàng, implement:
+> 1. OPA Rego policy chặn PR Terraform xóa `AmazonECSTaskExecutionRolePolicy` khỏi ECS Task Execution Role.
+> 2. CI/CD pre-deploy gate: `aws ecr describe-images --image-ids imageTag=$TAG` validate image tồn tại trước deploy.
+>
+> Tools cần học trước: [Conftest](https://www.conftest.dev/) · [tfsec](https://github.com/aquasecurity/tfsec) · [Checkov](https://www.checkov.io/)
 
 ### 💥 SRE / Chaos Drill
 - [ ] **Drill 1 (OPA Block):** Cố tình mở port 22 trên Security Group trong PR -> OPA block PR.

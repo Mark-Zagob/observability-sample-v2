@@ -76,6 +76,25 @@ Trước khi chạy bất kỳ experiment nào, **bạn cần hiểu rõ hệ th
 | CloudWatch alarm `cpu-high` | `AWS/ECS CPUUtilization > 80%` (5 min) | ⚠️ warning | Awareness — workload anomaly |
 | CloudWatch alarm `running-task-low` | `ECS/ContainerInsights RunningTaskCount < 1` | 🚨 critical | Tổng quát — service down |
 
+### One-time setup: Telegram Bot
+
+> Chỉ cần làm **1 lần** khi deploy alerting infra lần đầu. Sau đó không cần lại.
+
+1. Mở [@BotFather](https://t.me/BotFather) trên Telegram → `/newbot` → đặt tên → nhận **bot token** dạng `123456:ABC-DEF...`.
+2. Tạo group/channel mới, add bot làm admin.
+3. Send 1 tin nhắn bất kỳ vào group, rồi mở `https://api.telegram.org/bot<TOKEN>/getUpdates` để lấy **chat_id** (số âm dạng `-100xxxxxxx`).
+4. Lưu vào Secrets Manager (KHÔNG commit git):
+   ```bash
+   aws secretsmanager create-secret \
+     --name /obs/lab/alerting/telegram \
+     --description "Telegram bot token + chat_id for chaos alerts" \
+     --secret-string '{"bot_token":"<TOKEN>","chat_id":"<CHAT_ID>"}' \
+     --region ap-southeast-2
+   ```
+5. Verify đọc được: `aws secretsmanager get-secret-value --secret-id /obs/lab/alerting/telegram --query SecretString --output text`
+
+---
+
 ### Pre-flight: verify alerting healthy TRƯỚC mọi experiment
 
 > Không bao giờ drill nếu alerting đang bệnh — bạn sẽ không phân biệt được "hệ thống không alert" vs "hệ thống không fail".
