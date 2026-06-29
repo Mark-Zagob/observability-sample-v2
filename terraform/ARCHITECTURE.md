@@ -301,9 +301,23 @@ graph LR
 | RDS Proxy | Connection pooling, failover transparency | P1 |
 | OpenSearch | Search Service backend (EXPANSION_PLAN) | P1 |
 | AWS FIS | Chaos Engineering (AZ failure, network partition) | P1 |
+| ECS Service Connect | Envoy-based service mesh (replace Cloud Map DNS) | P2 |
 | Step Functions | Compare với self-hosted Saga Orchestrator | P2 |
 | AWS WAF | Edge security (SQLi, XSS, rate limit) | P2 |
 | AWS Config | Compliance auditing | P3 |
+
+### Service Discovery Evolution Path 🆕
+
+Hiện tại dùng **Cloud Map DNS** (`payment-service.ecommerce.local`). Khi scale > 4 services, migrate sang **ECS Service Connect** (Envoy sidecar).
+
+| Aspect | Cloud Map DNS (As-Is) | Service Connect (To-Be) |
+|---|---|---|
+| Resolution | DNS A record, TTL=10s | Real-time (Envoy proxy) |
+| Health check | Passive (blind spot: Zombie Task) | Active (Envoy probes) |
+| Metrics | Không có sẵn | CloudWatch: error rate, P95 latency |
+| Retry/Timeout | App tự implement | Envoy managed |
+
+> 📖 Chi tiết: [`docs/ECS_SERVICE_CONNECT.md`](docs/ECS_SERVICE_CONNECT.md)
 
 ---
 ## 11. IaC State Management & GitOps Boundary 🆕

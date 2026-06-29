@@ -129,9 +129,20 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 - [ ] **Drill 1 (Auth Down):** Kill Auth Service -> User đang login có gọi được Order không? (Kỳ vọng: CÓ, do API GW cache Public Key).
 - [ ] **Drill 2 (Pool Exhaustion):** Dùng k6 bắn 500 concurrent requests -> Quan sát RDS Proxy queue requests, RDS Instance vẫn sống khỏe (Bulkhead Pattern).
 
+### 🔀 Decision Gate: Cloud Map DNS → ECS Service Connect
+> Tại Phase 4, hệ thống sẽ có **5+ services** gọi nhau. Đây là thời điểm evaluate migrate từ Cloud Map DNS sang ECS Service Connect.
+>
+> **Criteria để migrate:**
+> - [ ] Zombie Task blind spot (Exp 2, 6) đã confirm là risk thực tế
+> - [ ] Cascading failure (Exp 5) cần Envoy retry/outlier detection
+> - [ ] Cần HTTP error rate metrics từ Envoy (thay vì build custom)
+>
+> 📖 Chi tiết concept + Terraform config: [`docs/ECS_SERVICE_CONNECT.md`](docs/ECS_SERVICE_CONNECT.md)
+
 ### ✅ Definition of Done (DoD)
 - [ ] Flow Login -> JWT -> API Gateway -> Order Service.
 - [ ] RDS Proxy transparent failover khi bấm nút RDS Multi-AZ Reboot.
+- [ ] **Decision:** Cloud Map DNS vs Service Connect — documented in ADR.
 
 ---
 

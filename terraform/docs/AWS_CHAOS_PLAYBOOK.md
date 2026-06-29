@@ -2115,6 +2115,18 @@ print(f'DNS restored: payment-service.ecommerce.local → {ip}')
 | `ServiceSchedulerInitiated` | Rolling deploy / scale-in | ❌ Loại |
 | `SpotInterruption` | (nếu dùng Fargate Spot) | Tữ nhân nhức |
 
+### Service Discovery — Cloud Map DNS vs ECS Service Connect
+
+| Aspect | Cloud Map DNS (hiện tại) | ECS Service Connect (tương lai) |
+|---|---|---|
+| Cơ chế | DNS A record, TTL=10s | Envoy sidecar proxy |
+| Zombie Task | ⚠️ Blind spot (Exp 2, 6) | ✅ Active health check |
+| Cascading failure | ⚠️ App tự handle (Exp 5) | ✅ Envoy retry + outlier detection |
+| Metrics | ❌ Không có sẵn | ✅ CloudWatch: error rate, P95 |
+| Resource overhead | $0 | +256 CPU, +64MB per task |
+
+> 📖 Concept guide + Terraform config + Migration path: [`ECS_SERVICE_CONNECT.md`](./ECS_SERVICE_CONNECT.md)
+
 ---
 
 # 🔮 Roadmap experiments kế tiếp
