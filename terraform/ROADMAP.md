@@ -77,6 +77,8 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 - [ ] **Drill 2 (MSK Nightmare):** Kill 1 MSK Broker -> Quan sát Partition Leader Election và Consumer Lag.
 - [ ] **Drill 3 (Graceful Shutdown):** ECS Stop Task Worker -> Verify Kafka offset được commit trước khi chết (SIGTERM).
 
+> ⚠️ **Code review finding:** `order-service/app.py` hiện KHÔNG catch `SIGTERM` → Kafka `flush(timeout=2)` chỉ chạy trong request handler, không chạy khi ECS kill task. Phase 2 phải implement `signal.signal(SIGTERM, shutdown_handler)` cho tất cả Kafka producers/consumers.
+
 ### ✅ Definition of Done (DoD)
 - [ ] End-to-end flow: User mua hàng -> Order -> Kafka -> Workers -> DB.
 - [ ] Verify MSK traffic KHÔNG đi qua NAT Gateway.
@@ -115,6 +117,12 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 ## 🔐 PHASE 4: EXPANSION - SECURITY & CONNECTION POOLING
 **Mục tiêu:** Onboard Auth Service và giải quyết bẫy "Connection Exhaustion" trước khi thêm 4 services nữa.
 **Thời gian:** 2 Tuần
+
+> ⚠️ **Connection Exhaustion Math (from code review):**
+> - `DB_POOL_MAX = 10` per ECS Task (in `order-service/app.py`)
+> - Phase 1: 2 services × 1 task × 10 conn = **20 connections** → OK
+> - Phase 4: 10 services × 1 task × 10 conn = **100 connections** → RDS `db.t3.micro` limit (~150) → **danger zone**
+> - Scaling: 10 services × 3 tasks × 10 conn = **300 connections** → **RDS Proxy bắt buộc**
 
 ### 🧩 Modules triển khai
 - [ ] `rds-proxy` (Module 8): RDS Proxy (Transaction mode, IAM Auth). *So sánh thực tế với self-hosted PgBouncer.*

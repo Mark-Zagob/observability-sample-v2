@@ -108,14 +108,16 @@ aws lambda invoke \
 cat /tmp/preflight.json   # Kỳ vọng: {"status":"ok"}
 # ✅ Bạn PHẢI nhận được tin nhắn Telegram trong < 5 giây.
 
-# 2. 6 alarms ở state OK (3 per service, không INSUFFICIENT_DATA)
+# 2. 8 alarms ở state OK (4 per service: 3 infra + 1 app, không INSUFFICIENT_DATA)
 aws cloudwatch describe-alarms \
   --alarm-names obs-lab-payment-service-memory-high \
                 obs-lab-payment-service-cpu-high \
                 obs-lab-payment-service-running-task-low \
+                obs-lab-payment-service-app-error-rate \
                 obs-lab-order-service-memory-high \
                 obs-lab-order-service-cpu-high \
                 obs-lab-order-service-running-task-low \
+                obs-lab-order-service-app-error-rate \
   --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' \
   --output table
 

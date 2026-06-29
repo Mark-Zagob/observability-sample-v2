@@ -35,10 +35,6 @@ data "aws_ssm_parameter" "ecr_url" {
   name = "/obs/lab/ecr/${var.service_name}"
 }
 
-# 5. Đọc Database Secret ARN từ SSM
-data "aws_ssm_parameter" "db_secret_arn" {
-  name = "/obs/lab/database/secret-arn"
-}
 
 #--------------------------------------------------------------
 # LOCALS: Construct Image URL
@@ -88,10 +84,7 @@ module "payment_service" {
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
   }
 
-  # Secrets (From SSM)
-  secrets = {
-    DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
-  }
+  # Secrets: none — payment-service uses Redis only, no PostgreSQL
 
   common_tags = { 
     Module  = "ecs-service"

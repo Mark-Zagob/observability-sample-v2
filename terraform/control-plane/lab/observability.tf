@@ -266,3 +266,84 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
     Project     = var.project_name
   }
 }
+
+# ============================================================
+# 4. CLOUDWATCH METRIC FILTER + ALARM — Application Error Rate
+# ============================================================
+#
+#   Bridges the gap: Infra Monitoring → Application Monitoring (APM).
+#
+#   Alarms 1-3 above catch INFRA failures (CPU, RAM, Task count).
+#   This alarm catches APP failures:
+#     - DB connection errors
+#     - Payment service timeout (order → payment)
+#     - Unhandled exceptions
+#     - Business logic errors (e.g., insufficient inventory)
+#
+#   How it works:
+#     1. Metric Filter scans ECS log group for JSON logs with "level": "ERROR"
+#     2. Each ERROR log increments custom metric AppErrorCount
+#     3. Alarm fires when AppErrorCount > 0 in 5 minutes
+#
+#   App logs are JSON structured (pythonjsonlogger):
+#     {"timestamp": "...", "level": "ERROR", "name": "order-service", "message": "..."}
+#
+# Verify:
+#   aws cloudwatch describe-alarms --alarm-names \
+#     obs-lab-payment-service-app-error-rate \
+#     obs-lab-order-service-app-error-rate \
+#     --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}'
+
+resource "aws_cloudwatch_log_metric_filter" "app_errors" {
+  for_each = local.monitored_services
+
+  name           = "${var.project_name}-${var.environment}-${each.key}-app-errors"
+  log_group_name = "/ecs/${var.project_name}/${each.key}"
+  # Match JSON structured logs with level ERROR (pythonjsonlogger format)
+  pattern = "{ $.level = \"ERROR\" }"
+
+  metric_transformation {
+    name          = "AppErrorCount"
+    namespace     = "${var.project_name}/ApplicationMetrics"
+    value         = "1"
+    default_value = "0"
+    dimensions = {
+      ServiceName = each.key
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "app_error_rate" {
+  for_each = local.monitored_services
+
+  alarm_name        = "${var.project_name}-${var.environment}-${each.key}-app-error-rate"
+  alarm_description = "${each.key} application errors detected in logs — check for DB failures, timeouts, or unhandled exceptions"
+
+  namespace   = "${var.project_name}/ApplicationMetrics"
+  metric_name = "AppErrorCount"
+  statistic   = "Sum"
+  period      = 300 # 5 minutes
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+
+  # Missing data = no errors = healthy
+  treat_missing_data = "notBreaching"
+
+  dimensions = {
+    ServiceName = each.key
+  }
+
+  alarm_actions = [module.alerting.sns_warning_arn] # warning — app error, not outage
+  ok_actions    = [module.alerting.sns_warning_arn] # notify when errors stop
+
+  tags = {
+    Module      = "observability"
+    Severity    = "warning"
+    Service     = each.key
+    Type        = "application"
+    Environment = var.environment
+    Project     = var.project_name
+  }
+}

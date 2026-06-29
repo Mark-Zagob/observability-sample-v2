@@ -86,6 +86,8 @@ db_pool_active = meter.create_up_down_counter(
 )
 
 DB_POOL_MAX = 10  # must match maxconn in DatabasePool init below
+# ⚠️ Connection math: 1 task × 10 conn = OK. But 10 services × 10 conn = 100 → RDS db.t3.micro limit (~150).
+#    Phase 4 MUST introduce RDS Proxy to solve Connection Exhaustion. See ROADMAP.md Phase 4.
 
 def _pool_max_callback(options):
     yield Observation(DB_POOL_MAX)
@@ -124,8 +126,20 @@ inventory_checks_counter = meter.create_counter(
 # ============================================================
 # Database + Cache (using shared helpers)
 # ============================================================
-# secretlint-disable-next-line
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
+def _build_database_url():
+    """Build DATABASE_URL from DB_SECRET (Secrets Manager JSON) or env var.
+
+    ECS injects DB_SECRET as JSON: {"username":"...", "password":"...", "host":"...", "port":5432, "dbname":"..."}
+    On-premises/docker-compose uses DATABASE_URL directly.
+    """
+    db_secret = os.getenv("DB_SECRET")
+    if db_secret:
+        s = json.loads(db_secret)
+        return f"postgresql://{s['username']}:{s['password']}@{s['host']}:{s['port']}/{s.get('dbname', 'orders')}"
+    # secretlint-disable-next-line
+    return os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
+
+DATABASE_URL = _build_database_url()
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
@@ -406,7 +420,7 @@ def process_order():
             resp = requests.post(
                 f"{PAYMENT_SERVICE}/charge",
                 json={"order_id": order_id, "amount": total_amount},
-                timeout=5,
+                timeout=5,  # Timeout budget: caller (5s) < callee Gunicorn (30s). Validated by Exp 5.
             )
             payment = resp.json()
             payment_status = payment.get("status", "unknown")
@@ -454,6 +468,9 @@ def process_order():
         publish_event("order.payment_failed", order_id, event_data)
 
     # Flush Kafka producer
+    # ⚠️ Phase 2 TODO: Add signal.signal(SIGTERM, shutdown_handler) for graceful shutdown.
+    #    ECS sends SIGTERM on scale-in/deploy → Flask doesn't catch it → Kafka messages may be lost.
+    #    Acceptable risk for Phase 1 (no Kafka Workers yet). See ROADMAP.md Phase 2 Drill 3.
     try:
         get_kafka_producer().flush(timeout=2)
     except Exception:
