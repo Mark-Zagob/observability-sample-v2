@@ -108,11 +108,14 @@ aws lambda invoke \
 cat /tmp/preflight.json   # Kỳ vọng: {"status":"ok"}
 # ✅ Bạn PHẢI nhận được tin nhắn Telegram trong < 5 giây.
 
-# 2. 3 alarms ở state OK (không INSUFFICIENT_DATA)
+# 2. 6 alarms ở state OK (3 per service, không INSUFFICIENT_DATA)
 aws cloudwatch describe-alarms \
   --alarm-names obs-lab-payment-service-memory-high \
                 obs-lab-payment-service-cpu-high \
                 obs-lab-payment-service-running-task-low \
+                obs-lab-order-service-memory-high \
+                obs-lab-order-service-cpu-high \
+                obs-lab-order-service-running-task-low \
   --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' \
   --output table
 
@@ -741,7 +744,7 @@ aws logs tail $LOG_GROUP --since 5m --format short | tail -5
 
 ### Scenario A: Image Tag Không Tồn Tại
 
-Trong `data-plane/terraform.tfvars`, đổi image tag thành giá trị không tồn tại:
+Trong `data-plane/payment-service/terraform.tfvars`, đổi image tag thành giá trị không tồn tại:
 
 ```hcl
 # terraform.tfvars
@@ -751,7 +754,7 @@ image_tag = "this-tag-does-not-exist-v999"
 Chạy:
 
 ```bash
-cd terraform/data-plane
+cd terraform/data-plane/payment-service
 terraform apply -auto-approve
 ```
 
@@ -759,7 +762,7 @@ terraform apply -auto-approve
 
 ### Scenario B: Memory Starvation (OOM Kill)
 
-Trong `data-plane/terraform.tfvars`, giảm memory xuống mức không đủ cho app:
+Trong `data-plane/payment-service/terraform.tfvars`, giảm memory xuống mức không đủ cho app:
 
 ```hcl
 # terraform.tfvars — giá trị gốc: memory = 512
@@ -936,7 +939,7 @@ Với Exp 3, bạn sẽ thấy **CHUỖI alert** chứ không phải 1 alert đ�
 
 ## 🔄 Phase 4: Rollback & Recovery
 
-Khôi phục config gốc trong `data-plane/terraform.tfvars`:
+Khôi phục config gốc trong `data-plane/payment-service/terraform.tfvars`:
 
 ```hcl
 # terraform.tfvars — khôi phục giá trị gốc
@@ -945,7 +948,7 @@ memory    = 512
 ```
 
 ```bash
-cd terraform/data-plane
+cd terraform/data-plane/payment-service
 terraform apply -auto-approve
 ```
 
@@ -1125,6 +1128,928 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 
 ---
 
+# 🧪 Experiment 4: Task Role Blackhole (Runtime IAM)
+
+**SEV-3** | **Blast Radius:** 1 ECS Service (`payment-service`) | **Thời gian:** ~20 phút
+
+### 📚 Học được gì sau experiment này
+
+- Phân biệt **Task Execution Role** (ECS Agent dùng khi BIRTH — kéo image, ghi log, lấy secret) vs **Task Role** (App code dùng khi RUNTIME — gọi AWS SDK).
+- Experiment 1 phá Execution Role → task **không bao giờ khởi động**. Experiment 4 phá Task Role → task **khởi động bình thường nhưng app bị lỗi khi gọi AWS API**.
+- Hiểu tại sao đây là "The Silent Killer" — container RUNNING, health check PASS, nhưng **business logic chết**.
+- Đây là failure mode phổ biến nhất trong production: **partial failure** mà monitoring cơ bản không bắt được.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Task RUNNING + health check PASS → kết luận "mọi thứ ổn" → business logic fail silently.
+- ❌ Nhầm lẫn Task Execution Role và Task Role → gỡ sai role → gây Birth failure thay vì Runtime failure.
+- ❌ Không check app logs → không biết app đang trả 500 cho mọi request.
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+```bash
+# 1. Payment service đang RUNNING
+aws ecs describe-services \
+    --cluster obs-cluster \
+    --services payment-service \
+    --query 'services[0].{Status:status, Running:runningCount, Desired:desiredCount}' \
+    --output table
+
+# 2. App đang respond bình thường (qua ECS Exec)
+TASK_ARN=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name payment-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $TASK_ARN --container payment-service \
+    --interactive --command \
+    "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5002/health').read().decode())\""
+```
+
+✅ **Kỳ vọng:** `ACTIVE`, `Running: 1`, health check trả `200 OK`.
+
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 3. Lưu lại ARN của Task Role hiện tại
+TASK_ROLE_ARN=$(aws ssm get-parameter \
+    --name "/obs/lab/iam/task_role_arn" \
+    --query 'Parameter.Value' --output text)
+echo "Task Role: $TASK_ROLE_ARN"
+
+# 4. List policies hiện tại trên Task Role
+TASK_ROLE_NAME=$(echo $TASK_ROLE_ARN | awk -F'/' '{print $NF}')
+aws iam list-attached-role-policies --role-name $TASK_ROLE_NAME \
+    --query 'AttachedPolicies[*].{Name:PolicyName,Arn:PolicyArn}' --output table
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Service RUNNING, Task Role attached, app healthy.
+
+---
+
+## 💥 Phase 2: Inject Failure (The Silent Killer)
+
+Gỡ bỏ policy Secrets Manager (hoặc S3/DynamoDB nếu app dùng) khỏi Task Role:
+
+```bash
+# 5. Gỡ policy truy cập Secrets Manager khỏi Task Role
+# (Tìm policy ARN từ Bước 4 — thường là custom policy hoặc SecretsManagerReadWrite)
+POLICY_ARN="<arn-from-step-4>"   # ← Thay bằng ARN policy thực tế
+
+aws iam detach-role-policy \
+    --role-name $TASK_ROLE_NAME \
+    --policy-arn $POLICY_ARN
+
+# 6. Force redeploy (Task mới sẽ dùng role đã bị gỡ policy)
+aws ecs update-service --cluster obs-cluster \
+    --service payment-service --force-new-deployment
+```
+
+> ⚠️ **Khác Exp 1:** Task sẽ khởi động THÀNH CÔNG (vì Execution Role vẫn nguyên). Chỉ khi app code gọi AWS API (ví dụ: Secrets Manager) thì mới fail.
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Removed Secrets Manager policy from Task Role + Force Deploy.
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The Investigation)
+
+### Bước 3.1: Check ECS — task mới có RUNNING không?
+
+```bash
+aws ecs describe-services --cluster obs-cluster \
+    --services payment-service \
+    --query 'services[0].{Running:runningCount, Deployments:deployments[*].{Status:status, Rollout:rolloutState}}' \
+    --output json
+```
+
+👁️ **Cú twist:**
+
+```json
+{ "Running": 1, "Deployments": [{"Status": "PRIMARY", "Rollout": "COMPLETED"}] }
+```
+
+Task mới **RUNNING thành công**! Deployment **COMPLETED**! Mọi thứ trông "xanh lè".
+
+### Bước 3.2: Nhưng app thực sự hoạt động thế nào?
+
+```bash
+# Gọi health check — vẫn OK (vì /health không gọi AWS API)
+aws ecs execute-command --cluster obs-cluster \
+    --task $(aws ecs list-tasks --cluster obs-cluster \
+        --service-name payment-service --query 'taskArns[0]' --output text) \
+    --container payment-service --interactive --command \
+    "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5002/health').read().decode())\""
+
+# Gọi business endpoint — FAIL!
+aws ecs execute-command --cluster obs-cluster \
+    --task $(aws ecs list-tasks --cluster obs-cluster \
+        --service-name payment-service --query 'taskArns[0]' --output text) \
+    --container payment-service --interactive --command \
+    "python -c \"
+import urllib.request, json
+req = urllib.request.Request('http://localhost:5002/charge',
+    data=json.dumps({'order_id':'test-iam','amount':10}).encode(),
+    headers={'Content-Type':'application/json'}, method='POST')
+try:
+    resp = urllib.request.urlopen(req, timeout=10)
+    print(resp.read().decode())
+except Exception as e:
+    print(f'ERROR: {e}')
+\""
+```
+
+👁️ **Kết quả:** Health check trả 200 OK nhưng `/charge` trả 500 hoặc exception liên quan `AccessDeniedException`.
+
+### Bước 3.3: Check CloudWatch Alarms
+
+```bash
+aws cloudwatch describe-alarms \
+    --alarm-names obs-lab-payment-service-memory-high \
+                  obs-lab-payment-service-cpu-high \
+                  obs-lab-payment-service-running-task-low \
+    --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' --output table
+```
+
+👁️ **Kết quả:** Tất cả alarms đều ở `OK`. **Không có alarm nào fire!**
+
+🚨 **THE "AHA!" MOMENT:**
+
+Đây là "The Silent Killer":
+- `running-task-low`: OK — task đang RUNNING
+- `memory-high`: OK — app không dùng nhiều memory
+- `cpu-high`: OK — request đang fail nhanh, CPU thấp
+- EventBridge: KHÔNG fire — deployment COMPLETED, task không STOPPED
+
+**Kết luận:** Monitoring hiện tại **KHÔNG bắt được Runtime IAM failure**. Cần thêm application-level monitoring (HTTP error rate, 5xx count) — đây sẽ là action item cho iteration tiếp theo.
+
+### Bước 3.4: Check App Logs (bằng chứng duy nhất)
+
+```bash
+LOG_GROUP="/ecs/obs/payment-service"
+aws logs tail $LOG_GROUP --since 5m --format short 2>/dev/null | grep -i "error\|denied\|exception" | head -20
+```
+
+👁️ Đây là nơi DUY NHẤT bạn thấy lỗi — app logs ghi `AccessDeniedException`.
+
+### Bước 3.5: Watch Telegram
+
+👁️ **Kết quả:** Không có Telegram alert nào.
+
+📝 **Ghi vào notebook:** `[HH:MM]` ❌ No Telegram alert — Silent Failure confirmed.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+```bash
+# 7. Attach lại policy
+aws iam attach-role-policy \
+    --role-name $TASK_ROLE_NAME \
+    --policy-arn $POLICY_ARN
+
+# 8. Force redeploy để task mới pick up
+aws ecs update-service --cluster obs-cluster \
+    --service payment-service --force-new-deployment
+
+# 9. Đợi 2 phút, verify
+aws ecs execute-command --cluster obs-cluster \
+    --task $(aws ecs list-tasks --cluster obs-cluster \
+        --service-name payment-service --query 'taskArns[0]' --output text) \
+    --container payment-service --interactive --command \
+    "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5002/health').read().decode())\""
+```
+
+✅ Kỳ vọng: App trả lại 200 OK cho cả `/health` và `/charge`.
+
+Hoặc dùng Terraform heal:
+
+```bash
+cd terraform/control-plane/lab
+terraform apply -auto-approve
+```
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---|---|
+| 1. Tại sao business logic fail? | App gọi Secrets Manager bị `AccessDeniedException`. |
+| 2. Tại sao không có alarm? | Monitoring chỉ check infra metrics (CPU/Memory/TaskCount) — không check app-level errors. |
+| 3. Tại sao health check vẫn PASS? | `/health` chỉ trả static response, không gọi AWS API. |
+| 4. So sánh với Exp 1? | Exp 1 (Execution Role) → Birth failure → Circuit Breaker → Alert. Exp 4 (Task Role) → Runtime failure → **Silent**. |
+| 5. Systemic Gap? | Cần **application-level alarm**: HTTP 5xx rate, error log metric filter, hoặc custom CloudWatch metric từ OTel. |
+
+**Action Items:**
+1. 📝 **Backlog:** CloudWatch Metric Filter trên app logs → đếm `ERROR` → alarm khi rate > threshold.
+2. 📝 **Backlog:** OTel → CloudWatch custom metric `http.server.request.duration` với dimension `http.status_code=5xx`.
+3. 📝 **Backlog:** Synthetic health check endpoint `/ready` gọi thật vào DB/Secrets Manager thay vì trả static.
+
+---
+
+# 🧪 Experiment 4B: Order-Service Poison Config (Alarm Verification)
+
+**SEV-3** | **Blast Radius:** 1 ECS Service (`order-service`) | **Thời gian:** ~15 phút
+
+### 📚 Học được gì sau experiment này
+
+- **Verify** rằng CloudWatch Alarms `for_each` mới tạo thực sự fire cho `order-service`.
+- Chứng minh **blast radius isolation**: lỗi order-service KHÔNG ảnh hưởng payment-service (CP/DP split + per-service state).
+- So sánh **TTD** giữa 2 services — alarm config giống nhau → TTD nên tương đương.
+- Lặp lại Experiment 3 nhưng target khác → **build muscle memory** cho incident response.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Quên `terraform apply` ở `control-plane/` sau khi thêm `for_each` → alarms cho order-service chưa tồn tại.
+- ❌ Nhầm folder: chạy terraform ở `data-plane/payment-service/` thay vì `data-plane/order-service/`.
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+```bash
+# 1. Cả 2 services đang RUNNING
+for svc in payment-service order-service; do
+  echo "=== $svc ==="
+  aws ecs describe-services --cluster obs-cluster --services $svc \
+    --query 'services[0].{Status:status, Running:runningCount}' --output table
+done
+
+# 2. Alarms cho order-service ĐÃ TỒN TẠI (verify Issue 1 fix)
+aws cloudwatch describe-alarms \
+    --alarm-names obs-lab-order-service-memory-high \
+                  obs-lab-order-service-cpu-high \
+                  obs-lab-order-service-running-task-low \
+    --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' --output table
+```
+
+✅ **Kỳ vọng:** Cả 3 alarms cho order-service phải tồn tại và ở state `OK` (hoặc `INSUFFICIENT_DATA` nếu vừa tạo).
+
+> ⚠️ **STOP nếu alarms không tồn tại!** Chạy `cd terraform/control-plane/lab && terraform apply` trước.
+
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 3. Ghi nhận order-service task đang chạy
+aws ecs list-tasks --cluster obs-cluster --service-name order-service \
+    --query 'taskArns[0]' --output text
+
+# 4. Verify payment-service cũng đang healthy (để so sánh sau)
+aws ecs list-tasks --cluster obs-cluster --service-name payment-service \
+    --query 'taskArns[0]' --output text
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Cả 2 services RUNNING. Alarms đã tạo.
+
+---
+
+## 💥 Phase 2: Inject Failure
+
+Trong `data-plane/order-service/terraform.tfvars`, đổi image tag thành giá trị không tồn tại:
+
+```hcl
+# data-plane/order-service/terraform.tfvars
+image_tag = "this-tag-does-not-exist-v999"
+```
+
+```bash
+cd terraform/data-plane/order-service
+terraform apply -auto-approve
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Deployed non-existent image tag to order-service.
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The Investigation)
+
+### Bước 3.1: Mở 3 Terminals song song
+
+**Terminal 1 — Watch ECS Events (order-service)**
+```bash
+watch -n 10 "aws ecs describe-services --cluster obs-cluster \
+    --services order-service \
+    --query 'services[0].events[0:3].message' --output text"
+```
+
+**Terminal 2 — Watch Alarms (order-service)**
+```bash
+watch -n 15 "aws cloudwatch describe-alarms \
+    --alarm-names obs-lab-order-service-running-task-low \
+    --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason}' --output table"
+```
+
+**Terminal 3 — Watch payment-service (blast radius check)**
+```bash
+watch -n 15 "aws ecs describe-services --cluster obs-cluster \
+    --services payment-service \
+    --query 'services[0].{Running:runningCount, Status:status}' --output table"
+```
+
+### Bước 3.2: Đợi 3-5 phút, quan sát
+
+👁️ **Terminal 1** sẽ hiển thị chuỗi events:
+1. `"unable to place a task... CannotPullContainerError..."` (image không tồn tại)
+2. `"circuit breaker: failure threshold exceeded..."`
+3. `"deployment rolled back..."`
+
+👁️ **Terminal 2** sẽ chuyển sang `ALARM`:
+```
+State: ALARM
+Reason: Threshold Crossed: 2 out of 2 datapoints were less than 1.0
+```
+
+👁️ **Terminal 3** — payment-service vẫn `Running: 1` — **blast radius isolated!** ✅
+
+### Bước 3.3: Watch Telegram
+
+Kỳ vọng nhận **2 alerts**:
+1. 🚨 `SERVICE_DEPLOYMENT_FAILED` (EventBridge → critical) — deployment rolled back
+2. 🚨 `running-task-low` (CloudWatch Alarm → critical) — RunningTaskCount < 1
+
+📝 **Ghi vào notebook:**
+- `[HH:MM:SS]` Inject (terraform apply)
+- `[HH:MM:SS]` 🚨 Telegram: deployment-failed → **TTD₁ = ?**
+- `[HH:MM:SS]` 🚨 Telegram: running-task-low → **TTD₂ = ?**
+- So sánh với payment-service TTD từ Experiment 3.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+Khôi phục image tag trong `data-plane/order-service/terraform.tfvars`:
+
+```hcl
+# terraform.tfvars — khôi phục giá trị gốc
+image_tag = "ecs-fargate-v1"
+```
+
+```bash
+cd terraform/data-plane/order-service
+terraform apply -auto-approve
+```
+
+Đợi 2-3 phút, verify:
+```bash
+aws ecs describe-services --cluster obs-cluster --services order-service \
+    --query 'services[0].{Running:runningCount, Deployments:deployments[*].{Status:status,Rollout:rolloutState}}' \
+    --output json
+```
+
+✅ **Kỳ vọng:** `Running: 1`, 1 deployment với `Rollout: COMPLETED`.
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---|---|
+| 1. Alarms `for_each` hoạt động? | ✅ / ❌ (ghi kết quả thực tế) |
+| 2. TTD order-service vs payment-service? | Order TTD = ___s, Payment TTD = ___s (từ Exp 3) |
+| 3. Blast radius isolated? | ✅ payment-service không bị ảnh hưởng |
+| 4. Có alert nào KHÔNG fire? | Ghi lại nếu có |
+
+**Action Items:**
+1. 📝 So sánh TTD → nếu chênh lệch lớn, investigate pipeline delay.
+2. ✅ Confirm alarms `for_each` pattern hoạt động → mẫu cho onboard services tiếp theo.
+
+---
+
+# 🧪 Experiment 5: Cascading Failure (Payment Slow → Order Timeout)
+
+**SEV-2** | **Blast Radius:** 2 ECS Services (`payment-service` + `order-service`) | **Thời gian:** ~30 phút
+
+> **Đây là experiment giá trị nhất** — lần đầu tiên test service-to-service failure chain. Mọi microservice architecture production đều gặp vấn đề này.
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu **cascading failure pattern**: Payment chậm → Order timeout → User nhận lỗi, nhưng **không service nào "chết"**.
+- Phân biệt **Timeout** vs **ConnectionError** — app xử lý khác nhau không? (Spoiler: hiện tại order-service catch generic `Exception`).
+- Hiểu vì sao **retry without backoff** = "retry storm" = amplify failure.
+- Đánh giá timeout config hiện tại: `timeout=5s` trong order-service vs `SLOW_RATE delay=3-6s` trong payment → **overlap zone** gây intermittent failure.
+- Nhận ra monitoring hiện tại **KHÔNG bắt được** cascading failure (cả 2 tasks vẫn RUNNING, CPU/Memory bình thường).
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Cả 2 service RUNNING → dashboard xanh → "mọi thứ ổn" → user đang nhận 504 mà team không biết.
+- ❌ Nhầm `PAYMENT_SLOW_RATE` (app env var) với `SLOW_RATE` (code variable name).
+- ❌ Quên rollback `PAYMENT_SLOW_RATE` → payment chậm vĩnh viễn.
+
+### 🧬 Kiến trúc dependency
+
+```
+User ──▶ Order Service (port 5001) ──POST /charge──▶ Payment Service (port 5002)
+                   │                    timeout=5s              │
+                   │                    no retry                │ PAYMENT_SLOW_RATE=1.0
+                   │                                            │ → delay 3-6s mỗi request
+                   ▼                                            ▼
+          "payment_error"                              504 Gateway Timeout
+          (catch Exception)                            (khi delay > 5s)
+```
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+```bash
+# 1. Cả 2 services RUNNING
+for svc in payment-service order-service; do
+  echo "=== $svc ==="
+  aws ecs describe-services --cluster obs-cluster --services $svc \
+    --query 'services[0].{Status:status, Running:runningCount}' --output table
+done
+
+# 2. Verify order → payment communication đang hoạt động
+# (gọi order-service /health endpoint)
+ORDER_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name order-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $ORDER_TASK --container order-service \
+    --interactive --command \
+    "python -c \"
+import urllib.request
+resp = urllib.request.urlopen('http://localhost:5001/health')
+print('Order health:', resp.read().decode())
+\""
+
+# 3. Check PAYMENT_SLOW_RATE hiện tại (nên là 0.20 = 20% default)
+PAYMENT_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name payment-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $PAYMENT_TASK --container payment-service \
+    --interactive --command \
+    "python -c \"import os; print('PAYMENT_SLOW_RATE:', os.environ.get('PAYMENT_SLOW_RATE', '0.20 (default)'))\""
+```
+
+✅ **Kỳ vọng:** Cả 2 RUNNING, communication OK, SLOW_RATE = 0.20 (default).
+
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 4. Gửi 5 request tới order-service, ghi nhận response time và kết quả
+for i in $(seq 1 5); do
+  echo "--- Request $i ---"
+  aws ecs execute-command --cluster obs-cluster \
+      --task $ORDER_TASK --container order-service \
+      --interactive --command \
+      "python -c \"
+import urllib.request, time
+start = time.time()
+resp = urllib.request.urlopen('http://localhost:5001/health', timeout=10)
+elapsed = time.time() - start
+print(f'Status: {resp.status}, Time: {elapsed:.2f}s')
+\""
+done
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: 5/5 requests OK, avg response time = ___s.
+
+---
+
+## 💥 Phase 2: Inject Failure
+
+Inject `PAYMENT_SLOW_RATE=1.0` (100% requests chậm 3-6s) vào payment-service **qua Terraform**.
+
+Trong `data-plane/payment-service/main.tf`, thêm env var vào block `environment`:
+
+```hcl
+  # Environment Variables
+  environment = {
+    SERVICE_NAME                = var.service_name
+    PORT                        = tostring(var.container_port)
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    PAYMENT_SLOW_RATE           = "1.0"     # ← INJECT: 100% requests slow 3-6s
+  }
+```
+
+```bash
+cd terraform/data-plane/payment-service
+terraform apply -auto-approve
+```
+
+> ⚠️ **Đây KHÔNG phải lỗi infra** — service vẫn RUNNING, health check vẫn PASS. Chỉ có business endpoint bị chậm.
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: PAYMENT_SLOW_RATE=1.0 deployed to payment-service.
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The Investigation)
+
+### Bước 3.1: Đợi deployment payment hoàn tất (~2-3 phút)
+
+```bash
+watch -n 10 "aws ecs describe-services --cluster obs-cluster \
+    --services payment-service \
+    --query 'services[0].{Running:runningCount, Deployments:deployments[*].{Status:status,Rollout:rolloutState}}' \
+    --output json"
+```
+
+Đợi đến khi `Rollout: COMPLETED`. Bấm `Ctrl+C` để thoát watch.
+
+### Bước 3.2: Gửi request tới order-service (trigger cascading failure)
+
+```bash
+# Gọi từ TRONG order-service container
+ORDER_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name order-service --query 'taskArns[0]' --output text)
+
+for i in $(seq 1 5); do
+  echo "--- Request $i ---"
+  aws ecs execute-command --cluster obs-cluster \
+      --task $ORDER_TASK --container order-service \
+      --interactive --command \
+      "python -c \"
+import urllib.request, json, time
+start = time.time()
+try:
+    data = json.dumps({'product_id': 'test-$i', 'quantity': 1}).encode()
+    req = urllib.request.Request('http://localhost:5001/orders',
+        data=data, headers={'Content-Type': 'application/json'}, method='POST')
+    resp = urllib.request.urlopen(req, timeout=15)
+    elapsed = time.time() - start
+    body = json.loads(resp.read().decode())
+    payment_status = body.get('payment', {}).get('status', 'unknown')
+    print(f'Status: {resp.status}, Time: {elapsed:.2f}s, Payment: {payment_status}')
+except Exception as e:
+    elapsed = time.time() - start
+    print(f'ERROR after {elapsed:.2f}s: {e}')
+\""
+  sleep 2
+done
+```
+
+👁️ **Kết quả kỳ vọng (chuỗi cascading):**
+
+| Request | Order response | Payment status | Response time | Giải thích |
+|---|---|---|---|---|
+| 1 | 200 | `payment_error` | ~5s | Payment delay 3-6s, order timeout=5s → **50/50 chance** |
+| 2 | 200 | `success` | ~4s | Payment delay <5s → vừa kịp |
+| 3 | 200 | `payment_error` | ~5s | Payment delay >5s → order timeout |
+| ... | Intermittent | Intermittent | 4-6s | **Unpredictable** — đây chính là vấn đề |
+
+💡 **THE "AHA!" MOMENTS:**
+
+1. **Overlap Zone**: `SLOW_RATE delay=3-6s` vs `order timeout=5s` → ~50% requests timeout, ~50% pass. Đây là **intermittent failure** — loại khó debug nhất.
+2. **No retry**: Order-service không retry → 1 timeout = 1 lost payment.
+3. **Silent degradation**: Cả 2 tasks RUNNING, CPU/Memory bình thường, **KHÔNG alarm nào fire**.
+
+### Bước 3.3: Check CloudWatch Alarms
+
+```bash
+# Kiểm tra TẤT CẢ alarms
+aws cloudwatch describe-alarms \
+    --alarm-names obs-lab-payment-service-memory-high \
+                  obs-lab-payment-service-cpu-high \
+                  obs-lab-payment-service-running-task-low \
+                  obs-lab-order-service-memory-high \
+                  obs-lab-order-service-cpu-high \
+                  obs-lab-order-service-running-task-low \
+    --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' --output table
+```
+
+👁️ **Tất cả alarms: OK.** Monitoring hiện tại **hoàn toàn MÙ** trước cascading failure.
+
+### Bước 3.4: Check App Logs (bằng chứng duy nhất)
+
+```bash
+# Order-service logs — sẽ thấy timeout errors
+aws logs tail /ecs/obs/order-service --since 5m --format short 2>/dev/null \
+    | grep -i "timeout\|error\|payment" | head -10
+
+# Payment-service logs — sẽ thấy slow requests
+aws logs tail /ecs/obs/payment-service --since 5m --format short 2>/dev/null \
+    | grep -i "slow\|delay" | head -10
+```
+
+### Bước 3.5: Watch Telegram
+
+👁️ **Kết quả:** Không có Telegram alert nào.
+
+🚨 **CRITICAL LEARNING:** Cascading failure xảy ra ở **application layer**, trong khi monitoring hiện tại chỉ cover **infrastructure layer**. Đây là gap lớn nhất trong hệ thống observability hiện tại.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+Xóa `PAYMENT_SLOW_RATE` khỏi `data-plane/payment-service/main.tf`:
+
+```hcl
+  # Environment Variables — khôi phục gốc
+  environment = {
+    SERVICE_NAME                = var.service_name
+    PORT                        = tostring(var.container_port)
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    # PAYMENT_SLOW_RATE đã XÓA — app sẽ dùng default 0.20
+  }
+```
+
+```bash
+cd terraform/data-plane/payment-service
+terraform apply -auto-approve
+```
+
+Đợi deployment hoàn tất (~2-3 phút), verify lại 5 requests:
+
+```bash
+ORDER_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name order-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $ORDER_TASK --container order-service \
+    --interactive --command \
+    "python -c \"
+import urllib.request
+resp = urllib.request.urlopen('http://localhost:5001/health', timeout=10)
+print('Order health:', resp.read().decode())
+\""
+```
+
+✅ **Kỳ vọng:** Response time trở lại bình thường.
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---|---|
+| 1. Tại sao order trả payment_error? | Payment delay > order timeout (5s) → `ReadTimeout` → catch Exception → `payment_error`. |
+| 2. Tại sao chỉ ~50% request fail? | Payment delay random 3-6s, overlap với timeout 5s → intermittent. |
+| 3. Tại sao không có alarm? | Monitoring chỉ check infra (CPU/Memory/TaskCount), không check HTTP error rate. |
+| 4. Timeout 5s có hợp lý? | Payment P99 latency = 6s → timeout < P99 = **guaranteed failure**. Cần tăng hoặc thêm retry. |
+| 5. Systemic Gap? | Cần **HTTP error rate alarm** + **latency percentile alarm** (P95/P99). |
+
+**Action Items:**
+1. 📝 **Critical:** Thêm application-level metrics: HTTP 5xx rate, P95 latency (từ OTel → CloudWatch).
+2. 📝 **Important:** Review timeout budget: `order timeout` > `payment P99 latency` + safety margin.
+3. 📝 **Backlog:** Implement retry with exponential backoff trong order-service (nhưng cần idempotency key — payment đã có!).
+4. 📝 **Backlog:** Circuit breaker pattern trong order-service cho payment calls.
+
+---
+
+# 🧪 Experiment 6: Cloud Map DNS Failure (Service Discovery Disruption)
+
+**SEV-2** | **Blast Radius:** 2 ECS Services | **Thời gian:** ~25 phút
+
+> Experiment 2 block ALL traffic bằng SG. Experiment 6 **chỉ phá service discovery** — payment task vẫn RUNNING nhưng order-service không tìm thấy nó qua DNS.
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu **Cloud Map DNS resolution flow**: Order gọi `payment-service.ecommerce.local` → Cloud Map trả IP → HTTP request.
+- Phân biệt **ConnectionError** (DNS fail / IP unreachable) vs **Timeout** (Exp 5) — app handle khác nhau không?
+- Khám phá **DNS TTL cache**: Sau khi deregister, bao lâu thì DNS trả NXDOMAIN?
+- Confirm lại **Zombie Task blind spot** từ Exp 2: task RUNNING nhưng DNS không trỏ tới nó → unreachable.
+- Hiểu tại sao Cloud Map-only services cần **synthetic health check** (không có ALB health check).
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Deregister Cloud Map instance nhưng quên re-register khi rollback → payment biến mất khỏi DNS vĩnh viễn.
+- ❌ DNS TTL cache → request đầu vẫn OK (cached IP) → nhầm tưởng inject fail.
+- ❌ Nhầm Service ID (Cloud Map) với Service Name (ECS).
+
+---
+
+## 🛑 Phase 0: Pre-flight Check (Steady State)
+
+```bash
+# 1. Cả 2 services RUNNING
+for svc in payment-service order-service; do
+  echo "=== $svc ==="
+  aws ecs describe-services --cluster obs-cluster --services $svc \
+    --query 'services[0].{Status:status, Running:runningCount}' --output table
+done
+
+# 2. Lấy Cloud Map namespace và service IDs
+NAMESPACE_ID=$(aws ssm get-parameter --name "/obs/lab/compute/cloudmap_namespace_id" \
+    --query 'Parameter.Value' --output text)
+echo "Namespace ID: $NAMESPACE_ID"
+
+# 3. List Cloud Map services trong namespace
+aws servicediscovery list-services \
+    --filters Name=NAMESPACE_ID,Values=$NAMESPACE_ID \
+    --query 'Services[*].{Name:Name,Id:Id}' --output table
+```
+
+✅ **Kỳ vọng:** Thấy cả `payment-service` và `order-service` trong Cloud Map.
+
+```bash
+# 4. Lấy payment-service Cloud Map Service ID
+PAYMENT_CM_SVC_ID=$(aws servicediscovery list-services \
+    --filters Name=NAMESPACE_ID,Values=$NAMESPACE_ID \
+    --query "Services[?Name=='payment-service'].Id" --output text)
+echo "Payment Cloud Map Service ID: $PAYMENT_CM_SVC_ID"
+
+# 5. List instances (IP addresses) registered cho payment
+aws servicediscovery list-instances --service-id $PAYMENT_CM_SVC_ID \
+    --query 'Instances[*].{Id:Id,IP:Attributes.AWS_INSTANCE_IPV4,Port:Attributes.AWS_INSTANCE_PORT}' \
+    --output table
+```
+
+✅ Kỳ vọng: Ít nhất 1 instance với IP và port 5002.
+
+---
+
+## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 6. Verify DNS resolution từ TRONG order-service container
+ORDER_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name order-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $ORDER_TASK --container order-service \
+    --interactive --command \
+    "python -c \"
+import socket
+ip = socket.gethostbyname('payment-service.ecommerce.local')
+print(f'DNS resolved: payment-service.ecommerce.local → {ip}')
+\""
+
+# 7. Lưu instance ID để rollback
+PAYMENT_INSTANCE_ID=$(aws servicediscovery list-instances \
+    --service-id $PAYMENT_CM_SVC_ID \
+    --query 'Instances[0].Id' --output text)
+echo "Instance ID to deregister: $PAYMENT_INSTANCE_ID"
+
+# Lưu IP để re-register
+PAYMENT_IP=$(aws servicediscovery list-instances \
+    --service-id $PAYMENT_CM_SVC_ID \
+    --query 'Instances[0].Attributes.AWS_INSTANCE_IPV4' --output text)
+echo "Payment IP: $PAYMENT_IP"
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: DNS resolves OK, Instance ID = `$PAYMENT_INSTANCE_ID`, IP = `$PAYMENT_IP`.
+
+---
+
+## 💥 Phase 2: Inject Failure
+
+```bash
+# 8. Deregister payment-service instance khỏi Cloud Map
+aws servicediscovery deregister-instance \
+    --service-id $PAYMENT_CM_SVC_ID \
+    --instance-id $PAYMENT_INSTANCE_ID
+
+echo "⏰ $(date +%H:%M:%S) — Instance deregistered. DNS sẽ stale trong ~60s (TTL)."
+```
+
+> ⚠️ **QUAN TRỌNG:** ECS task payment-service VẪN RUNNING! Chỉ DNS record bị xóa → "Phantom service".
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Deregistered payment-service from Cloud Map.
+
+---
+
+## 🔍 Phase 3: Observe & Triage (The Investigation)
+
+### Bước 3.1: Đợi DNS TTL expire (~60-120s)
+
+```bash
+# Kiểm tra DNS mỗi 15 giây
+for i in $(seq 1 8); do
+  echo "--- Check $i ($(date +%H:%M:%S)) ---"
+  aws ecs execute-command --cluster obs-cluster \
+      --task $ORDER_TASK --container order-service \
+      --interactive --command \
+      "python -c \"
+import socket
+try:
+    ip = socket.gethostbyname('payment-service.ecommerce.local')
+    print(f'RESOLVED: {ip} (still cached?)')
+except socket.gaierror as e:
+    print(f'NXDOMAIN: {e} (DNS propagated!)')
+\""
+  sleep 15
+done
+```
+
+👁️ **Kết quả kỳ vọng:**
+- Check 1-4: `RESOLVED: 10.x.x.x (still cached?)` — DNS TTL chưa expire
+- Check 5-8: `NXDOMAIN: [Errno -2] Name or service not known` — DNS đã propagate
+
+### Bước 3.2: Gọi order-service sau khi DNS fail
+
+```bash
+aws ecs execute-command --cluster obs-cluster \
+    --task $ORDER_TASK --container order-service \
+    --interactive --command \
+    "python -c \"
+import urllib.request, json, time
+start = time.time()
+try:
+    data = json.dumps({'product_id': 'dns-test', 'quantity': 1}).encode()
+    req = urllib.request.Request('http://localhost:5001/orders',
+        data=data, headers={'Content-Type': 'application/json'}, method='POST')
+    resp = urllib.request.urlopen(req, timeout=10)
+    elapsed = time.time() - start
+    print(f'Status: {resp.status}, Time: {elapsed:.2f}s')
+    print(resp.read().decode()[:200])
+except Exception as e:
+    elapsed = time.time() - start
+    print(f'ERROR after {elapsed:.2f}s: {e}')
+\""
+```
+
+👁️ **Kết quả:**
+
+| Scenario | Response time | Error type |
+|---|---|---|
+| DNS cached | ~5s | `ReadTimeout` (IP vẫn resolve, nhưng task có thể unreachable) |
+| DNS expired | **< 1s** | `ConnectionError: Name or service not known` |
+
+💡 **KEY INSIGHT:** `ConnectionError` fail **rất nhanh** (< 1s) so với `Timeout` (5s). Đây là thông tin quan trọng cho timeout budget design.
+
+### Bước 3.3: Check CloudWatch Alarms
+
+```bash
+aws cloudwatch describe-alarms \
+    --alarm-names obs-lab-payment-service-running-task-low \
+                  obs-lab-order-service-running-task-low \
+    --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' --output table
+```
+
+👁️ **Cả 2 alarms: OK.** Payment task vẫn RUNNING (nhưng unreachable qua DNS).
+
+🚨 **ZOMBIE TASK CONFIRMED (lần 2):** Đây là blind spot từ Exp 2 — task RUNNING nhưng DNS không trỏ tới nó. Không có alarm nào fire.
+
+### Bước 3.4: Check payment-service trực tiếp (vẫn alive!)
+
+```bash
+# Payment task VẪN RUNNING và healthy!
+PAYMENT_TASK=$(aws ecs list-tasks --cluster obs-cluster \
+    --service-name payment-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command --cluster obs-cluster \
+    --task $PAYMENT_TASK --container payment-service \
+    --interactive --command \
+    "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5002/health').read().decode())\""
+```
+
+👁️ Payment trả 200 OK. Service **alive** nhưng **invisible** qua DNS.
+
+### Bước 3.5: Watch Telegram
+
+👁️ **Kết quả:** Không có Telegram alert nào. Blind spot confirmed.
+
+---
+
+## 🔄 Phase 4: Rollback & Recovery
+
+**Option A: Re-register thủ công**
+```bash
+aws servicediscovery register-instance \
+    --service-id $PAYMENT_CM_SVC_ID \
+    --instance-id $PAYMENT_INSTANCE_ID \
+    --attributes AWS_INSTANCE_IPV4=$PAYMENT_IP,AWS_INSTANCE_PORT=5002
+```
+
+**Option B: Force redeploy (ECS tự re-register)**
+```bash
+aws ecs update-service --cluster obs-cluster \
+    --service payment-service --force-new-deployment
+```
+
+Verify DNS đã trở lại (~60s sau re-register):
+```bash
+aws ecs execute-command --cluster obs-cluster \
+    --task $ORDER_TASK --container order-service \
+    --interactive --command \
+    "python -c \"
+import socket
+ip = socket.gethostbyname('payment-service.ecommerce.local')
+print(f'DNS restored: payment-service.ecommerce.local → {ip}')
+\""
+```
+
+✅ **Kỳ vọng:** DNS resolve lại thành công.
+
+---
+
+## 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---|---|
+| 1. Tại sao order nhận ConnectionError? | Cloud Map DNS trả NXDOMAIN cho `payment-service.ecommerce.local`. |
+| 2. DNS TTL cache bao lâu? | ~60-120s (Cloud Map default). Trong thời gian cache, request vẫn tới IP cũ. |
+| 3. ConnectionError vs Timeout? | ConnectionError fail < 1s (fast fail), Timeout fail ~5s. App hiện catch cùng `Exception` → không phân biệt. |
+| 4. Zombie Task detected? | ✅ Payment RUNNING nhưng DNS deregistered → unreachable. Không alarm. |
+| 5. Systemic Gap? | Cần **synthetic health check**: periodic DNS resolve + HTTP call → alarm nếu fail. |
+
+**Action Items:**
+1. 📝 **Critical:** Implement synthetic health check (Lambda / CloudWatch Synthetics) gọi `payment-service.ecommerce.local:5002/health` định kỳ.
+2. 📝 **Important:** Phân biệt error types trong order-service: `ConnectionError` vs `Timeout` → metric riêng.
+3. 📝 **Backlog:** DNS cache warm-up strategy: pre-resolve DNS on startup, periodic re-resolve.
+4. 📝 **Backlog:** Evaluate chuyển sang ALB-backed services (có built-in health check) cho critical services.
+
+---
+
 # 📖 Glossary & Cheat Sheets (Iteration A++)
 
 ### ExitCode signatures — bảng định mệnh của mọi SRE
@@ -1200,9 +2125,10 @@ Sau khi đo TTD nhiều lần, cân nhắc:
 | 2 | Network Partition (SG) | ✅ Done (Blind Spot discovered) | A | Zombie Task, Cloud Map-only blind spot |
 | 3 | Poison Config (Bad Image / OOM) | ✅ Done + alert wired | A | ExitCode signatures, leading vs lagging |
 | 3.5 | **Memory Pressure Drill** (recurring) | ✅ Done | A | ECS Exec, leading indicator verify, alarm tuning |
-| 4 | **Task Role Blackhole (Runtime IAM)** | 🔜 Next | B | Runtime IAM vs Birth IAM, app-level error handling |
-| 5 | Cascading failure (Payment slow → Order timeout) | 🔜 | C (sau onboard Order) | Service-to-service timeout, retry storm |
-| 6 | Cloud Map DNS failure | 🔜 | C | Service discovery resilience |
+| 4 | **Task Role Blackhole (Runtime IAM)** | 📝 Written | B | Runtime vs Birth IAM, Silent Killer, app-level monitoring gap |
+| 4B | **Order-Service Poison Config** | 📝 Written | B | Alarm `for_each` verification, blast radius isolation, TTD comparison |
+| 5 | **Cascading Failure (Payment Slow → Order Timeout)** | 📝 Written | C | Service-to-service timeout, overlap zone, intermittent failure |
+| 6 | **Cloud Map DNS Failure** | 📝 Written | C | DNS TTL, ConnectionError vs Timeout, synthetic health check |
 | 7 | AWS FIS AZ failure | 🔜 | Phase 8 (ROADMAP) | Multi-AZ recovery, native AWS chaos |
 
 ---

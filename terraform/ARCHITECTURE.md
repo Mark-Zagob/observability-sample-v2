@@ -332,7 +332,7 @@ Lab này cung cấp **2 cách tổ chức Terraform** để so sánh trade-offs:
 | Layer | Directory | State Key | Scope | Tốc độ thay đổi |
 | --- | --- | --- | --- | --- |
 | **Control Plane** | `control-plane/lab/` | `control-plane/lab/terraform.tfstate` | VPC, IAM, SGs, RDS, ECR, ECS Cluster, ALB, ACM | Weekly — cần review cẩn thận |
-| **Data Plane** | `data-plane/` | `data-plane/{service}/terraform.tfstate` | ECS Service, Task Definition per microservice | Daily/Hourly — App Team tự quản lý |
+| **Data Plane** | `data-plane/{service}/` | `data-plane/{service}/terraform.tfstate` | ECS Service, Task Definition per microservice | Daily/Hourly — App Team tự quản lý |
 
 **C. SSM Service Catalog (Integration Pattern)**
 Control Plane export metadata vào SSM Parameter Store theo convention `/{project}/{env}/{domain}/{resource}`. Data Plane đọc SSM parameters thay vì dùng `terraform_remote_state` — giúp **loose coupling** giữa 2 state files:

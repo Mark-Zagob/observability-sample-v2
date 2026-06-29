@@ -370,35 +370,33 @@ module "payment_service" {
   }
 }
 
-# Step 2: Order Service (uncomment when ready)
-# module "order_service" {
-#   source         = "../../modules/compute/ecs-service"
-#   project_name   = var.project_name
-#   service_name   = "order-service"
-#   cluster_id     = module.ecs_cluster.cluster_id
-#   image          = local.service_images["order-service"]
-#   container_port = 5001
-#   aws_region     = var.aws_region
-#   subnets         = module.network.private_subnet_ids
-#   security_groups = [module.security.application_security_group_id]
-#   execution_role_arn = module.security.ecs_task_execution_role_arn
-#   task_role_arn      = module.security.ecs_task_role_arn
-#   enable_load_balancer = false
-#   enable_service_discovery = true
-#   namespace_id             = module.ecs_cluster.namespace_id
-#   cpu    = 256
-#   memory = 512
-#   environment = {
-#     SERVICE_NAME        = "order-service"
-#     PORT                = "5001"
-#     DB_HOST             = module.database.rds_address
-#     DB_PORT             = tostring(module.database.rds_port)
-#     DB_NAME             = module.database.rds_db_name
-#     PAYMENT_SERVICE_URL = "http://payment-service.ecommerce.local:5002"
-#   }
-#   secrets = { DB_SECRET = module.database.db_secret_arn }
-#   common_tags = { Module = "ecs-service", Step = "2" }
-# }
+# Step 2: Order Service
+module "order_service" {
+  source         = "../../modules/compute/ecs-service"
+  project_name   = var.project_name
+  service_name   = "order-service"
+  cluster_id     = module.ecs_cluster.cluster_id
+  image          = local.service_images["order-service"]
+  container_port = 5001
+  aws_region     = var.aws_region
+  subnets         = module.network.private_subnet_ids
+  security_groups = [module.security.application_security_group_id]
+  execution_role_arn = module.security.ecs_task_execution_role_arn
+  task_role_arn      = module.security.ecs_task_role_arn
+  enable_load_balancer = false
+  enable_service_discovery = true
+  namespace_id             = module.ecs_cluster.namespace_id
+  cpu    = 256
+  memory = 512
+  environment = {
+    SERVICE_NAME                = "order-service"
+    PORT                        = "5001"
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    PAYMENT_SERVICE_URL         = "http://payment-service.ecommerce.local:5002"
+  }
+  secrets = { DB_SECRET = module.database.db_secret_arn }
+  common_tags = { Module = "ecs-service", Service = "order-service", Step = "2" }
+}
 
 # Step 3: API Gateway (uncomment when ready)
 # module "api_gateway" {

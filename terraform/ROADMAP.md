@@ -221,7 +221,7 @@ Mục tiêu tối thượng: Xây dựng một Internal Developer Platform (IDP)
 
 | Phase | Focus | Services / Modules | Status | Post-Mortem / Learnings |
 | :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | Sync Tracer Bullet | Web UI, API GW, Payment, Order (ECS Fargate) | ⚪ Not Started | |
+| **Phase 1** | Sync Tracer Bullet | Web UI, API GW, Payment, Order (ECS Fargate) | 🟡 In Progress (Payment ✅, Order ✅, API GW ⚪, Web UI ⚪) | Chaos Drills 1-3.5 done. Cloud Map blind spot discovered. |
 | **Phase 2** | Async Backbone | Cache, Streaming, Notif/Inv Workers | ⚪ Not Started | |
 | **Phase 3** | Platform Shield | Bastion, CI/CD (OIDC+OPA), Budgets | ⚪ Not Started | |
 | **Phase 4** | Security & Pooling | Auth (#7), RDS Proxy | ⚪ Not Started | |

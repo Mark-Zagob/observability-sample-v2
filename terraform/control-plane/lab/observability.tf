@@ -65,9 +65,11 @@ module "alerting" {
 #   Loại trừ: UserInitiated và ServiceSchedulerInitiated (normal stop).
 
 locals {
-  ecs_cluster_arn   = module.ecs_cluster.cluster_arn
-  ecs_cluster_name  = module.ecs_cluster.cluster_name
-  monitored_service = "payment-service"
+  ecs_cluster_arn  = module.ecs_cluster.cluster_arn
+  ecs_cluster_name = module.ecs_cluster.cluster_name
+
+  # Thêm service mới vào list này khi onboard
+  monitored_services = toset(["payment-service", "order-service"])
 }
 
 # --- Rule 1: Deployment circuit-breaker failure (CRITICAL) ---
@@ -139,18 +141,25 @@ resource "aws_cloudwatch_event_target" "task_stopped_to_sns" {
 #   Alarm 2 — CPUUtilization > 80%     (AWARENESS)
 #   Alarm 3 — RunningTaskCount < 1     (LAGGING indicator)
 #
+#   Dùng for_each để tạo alarm cho mọi service trong monitored_services.
+#
 # Verify:
 #   aws cloudwatch describe-alarms --alarm-names \
 #     obs-lab-payment-service-memory-high \
+#     obs-lab-order-service-memory-high \
 #     obs-lab-payment-service-cpu-high \
+#     obs-lab-order-service-cpu-high \
 #     obs-lab-payment-service-running-task-low \
+#     obs-lab-order-service-running-task-low \
 #     --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}'
 
 # --- Alarm 1: Memory > 85% (LEADING: predicts OOM kill) ---
 
 resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
-  alarm_name        = "${var.project_name}-${var.environment}-${local.monitored_service}-memory-high"
-  alarm_description = "MemoryUtilization > 85% — investigate before OOM kill (Experiment 3B leading indicator)"
+  for_each = local.monitored_services
+
+  alarm_name        = "${var.project_name}-${var.environment}-${each.key}-memory-high"
+  alarm_description = "${each.key} MemoryUtilization > 85% — investigate before OOM kill"
 
   namespace   = "AWS/ECS"
   metric_name = "MemoryUtilization"
@@ -165,7 +174,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
 
   dimensions = {
     ClusterName = local.ecs_cluster_name
-    ServiceName = local.monitored_service
+    ServiceName = each.key
   }
 
   alarm_actions = [module.alerting.sns_warning_arn]
@@ -174,7 +183,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
   tags = {
     Module      = "observability"
     Severity    = "warning"
-    Service     = local.monitored_service
+    Service     = each.key
     Type        = "leading"
     Environment = var.environment
     Project     = var.project_name
@@ -184,8 +193,10 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
 # --- Alarm 2: CPU > 80% sustained (AWARENESS: workload anomaly) ---
 
 resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
-  alarm_name        = "${var.project_name}-${var.environment}-${local.monitored_service}-cpu-high"
-  alarm_description = "CPUUtilization > 80% for 5min — check for traffic spike or runaway process"
+  for_each = local.monitored_services
+
+  alarm_name        = "${var.project_name}-${var.environment}-${each.key}-cpu-high"
+  alarm_description = "${each.key} CPUUtilization > 80% for 5min — check for traffic spike or runaway process"
 
   namespace   = "AWS/ECS"
   metric_name = "CPUUtilization"
@@ -200,7 +211,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
 
   dimensions = {
     ClusterName = local.ecs_cluster_name
-    ServiceName = local.monitored_service
+    ServiceName = each.key
   }
 
   alarm_actions = [module.alerting.sns_warning_arn]
@@ -209,7 +220,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
   tags = {
     Module      = "observability"
     Severity    = "warning"
-    Service     = local.monitored_service
+    Service     = each.key
     Type        = "awareness"
     Environment = var.environment
     Project     = var.project_name
@@ -219,8 +230,10 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
 # --- Alarm 3: RunningTaskCount < 1 (LAGGING: service is down) ---
 
 resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
-  alarm_name        = "${var.project_name}-${var.environment}-${local.monitored_service}-running-task-low"
-  alarm_description = "RunningTaskCount = 0 — payment-service has no running tasks (outage)"
+  for_each = local.monitored_services
+
+  alarm_name        = "${var.project_name}-${var.environment}-${each.key}-running-task-low"
+  alarm_description = "${each.key} RunningTaskCount = 0 — no running tasks (outage)"
 
   # IMPORTANT: Different namespace from Alarm 1 & 2.
   # ECS/ContainerInsights is only populated when Container Insights is enabled.
@@ -238,7 +251,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
 
   dimensions = {
     ClusterName = local.ecs_cluster_name
-    ServiceName = local.monitored_service
+    ServiceName = each.key
   }
 
   alarm_actions = [module.alerting.sns_critical_arn] # critical — service is down
@@ -247,7 +260,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
   tags = {
     Module      = "observability"
     Severity    = "critical"
-    Service     = local.monitored_service
+    Service     = each.key
     Type        = "lagging"
     Environment = var.environment
     Project     = var.project_name

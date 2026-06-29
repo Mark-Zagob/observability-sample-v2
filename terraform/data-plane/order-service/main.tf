@@ -1,13 +1,9 @@
 #--------------------------------------------------------------
-# DATA PLANE — PAYMENT SERVICE
+# DATA PLANE — ORDER SERVICE
 # Đọc "Service Catalog" từ SSM Parameter Store
 #--------------------------------------------------------------
 
 # 1. Đọc Network Metadata từ SSM
-data "aws_ssm_parameter" "vpc_id" {
-  name = "/obs/lab/network/vpc_id"
-}
-
 data "aws_ssm_parameter" "private_subnets" {
   name = "/obs/lab/network/private_subnets"
 }
@@ -39,11 +35,7 @@ data "aws_ssm_parameter" "ecr_url" {
   name = "/obs/lab/ecr/${var.service_name}"
 }
 
-# 5. Đọc Database Metadata từ SSM (Do Module Database tự export)
-data "aws_ssm_parameter" "db_endpoint" {
-  name = "/obs/lab/database/endpoint"
-}
-
+# 5. Đọc Database Secret ARN từ SSM
 data "aws_ssm_parameter" "db_secret_arn" {
   name = "/obs/lab/database/secret-arn"
 }
@@ -54,21 +46,21 @@ data "aws_ssm_parameter" "db_secret_arn" {
 locals {
   # Tách subnets từ StringList "subnet-1,subnet-2" thành List
   private_subnet_ids = split(",", data.aws_ssm_parameter.private_subnets.value)
-  
+
   # Construct Image URL: ECR URL + Image Tag từ variables
-  payment_image = format("%s:%s", data.aws_ssm_parameter.ecr_url.value, var.image_tag)
+  order_image = format("%s:%s", data.aws_ssm_parameter.ecr_url.value, var.image_tag)
 }
 
 #--------------------------------------------------------------
 # DEPLOY ECS SERVICE
 #--------------------------------------------------------------
-module "payment_service" {
-  source = "../modules/compute/ecs-service"
-  
+module "order_service" {
+  source = "../../modules/compute/ecs-service"
+
   project_name   = var.project_name
   service_name   = var.service_name
   cluster_id     = data.aws_ssm_parameter.ecs_cluster_id.value
-  image          = local.payment_image
+  image          = local.order_image
   container_port = var.container_port
   aws_region     = "ap-southeast-2"
 
@@ -91,9 +83,10 @@ module "payment_service" {
 
   # Environment Variables
   environment = {
-    SERVICE_NAME                  = var.service_name
-    PORT                          = tostring(var.container_port)
+    SERVICE_NAME                = var.service_name
+    PORT                        = tostring(var.container_port)
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    PAYMENT_SERVICE_URL         = "http://payment-service.ecommerce.local:5002"
   }
 
   # Secrets (From SSM)
@@ -101,7 +94,7 @@ module "payment_service" {
     DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
   }
 
-  common_tags = { 
+  common_tags = {
     Module  = "ecs-service"
     Service = var.service_name
     Plane   = "Data"
