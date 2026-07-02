@@ -133,6 +133,12 @@ variable "enable_execute_command" {
   default     = true
 }
 
+variable "enable_app_error_metric" {
+  description = "Create CloudWatch Metric Filter to count app-level ERROR logs. Alarm is in control-plane."
+  type        = bool
+  default     = true
+}
+
 #--------------------------------------------------------------
 # Application Configuration
 #--------------------------------------------------------------

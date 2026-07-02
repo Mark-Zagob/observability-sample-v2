@@ -268,7 +268,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
 }
 
 # ============================================================
-# 4. CLOUDWATCH METRIC FILTER + ALARM — Application Error Rate
+# 4. CLOUDWATCH ALARM — Application Error Rate
 # ============================================================
 #
 #   Bridges the gap: Infra Monitoring → Application Monitoring (APM).
@@ -280,10 +280,10 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
 #     - Unhandled exceptions
 #     - Business logic errors (e.g., insufficient inventory)
 #
-#   How it works:
-#     1. Metric Filter scans ECS log group for JSON logs with "level": "ERROR"
-#     2. Each ERROR log increments custom metric AppErrorCount
-#     3. Alarm fires when AppErrorCount > 0 in 5 minutes
+#   Architecture:
+#     - METRIC FILTER lives in ecs-service module (data-plane) — co-located with log group
+#     - ALARM lives here (control-plane) — doesn't need log group to exist
+#     - Alarm will be INSUFFICIENT_DATA until data-plane deploys and generates metrics
 #
 #   App logs are JSON structured (pythonjsonlogger):
 #     {"timestamp": "...", "level": "ERROR", "name": "order-service", "message": "..."}
@@ -293,25 +293,6 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_task_low" {
 #     obs-lab-payment-service-app-error-rate \
 #     obs-lab-order-service-app-error-rate \
 #     --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}'
-
-resource "aws_cloudwatch_log_metric_filter" "app_errors" {
-  for_each = local.monitored_services
-
-  name           = "${var.project_name}-${var.environment}-${each.key}-app-errors"
-  log_group_name = "/ecs/${var.project_name}/${each.key}"
-  # Match JSON structured logs with level ERROR (pythonjsonlogger format)
-  pattern = "{ $.level = \"ERROR\" }"
-
-  metric_transformation {
-    name          = "AppErrorCount"
-    namespace     = "${var.project_name}/ApplicationMetrics"
-    value         = "1"
-    default_value = "0"
-    dimensions = {
-      ServiceName = each.key
-    }
-  }
-}
 
 resource "aws_cloudwatch_metric_alarm" "app_error_rate" {
   for_each = local.monitored_services

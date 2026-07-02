@@ -23,3 +23,30 @@ resource "aws_cloudwatch_log_group" "otel" {
     Service = var.service_name
   })
 }
+
+#--------------------------------------------------------------
+# CloudWatch Metric Filter — Application Error Rate
+#--------------------------------------------------------------
+# Scans this service's log group for JSON logs with "level": "ERROR".
+# Creates custom metric in CloudWatch: {project}/ApplicationMetrics/AppErrorCount.
+# The corresponding ALARM lives in control-plane/observability.tf
+# (alarms don't need the log group to exist).
+#--------------------------------------------------------------
+
+resource "aws_cloudwatch_log_metric_filter" "app_errors" {
+  count = var.enable_app_error_metric ? 1 : 0
+
+  name           = "${var.project_name}-${var.service_name}-app-errors"
+  log_group_name = aws_cloudwatch_log_group.service.name
+  pattern        = "{ $.level = \"ERROR\" }"
+
+  metric_transformation {
+    name          = "AppErrorCount"
+    namespace     = "${var.project_name}/ApplicationMetrics"
+    value         = "1"
+    default_value = "0"
+    dimensions = {
+      ServiceName = var.service_name
+    }
+  }
+}
