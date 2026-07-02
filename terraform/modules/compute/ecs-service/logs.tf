@@ -41,10 +41,9 @@ resource "aws_cloudwatch_log_metric_filter" "app_errors" {
   pattern        = "{ $.level = \"ERROR\" }"
 
   metric_transformation {
-    name          = "AppErrorCount"
-    namespace     = "${var.project_name}/ApplicationMetrics"
-    value         = "1"
-    default_value = "0"
+    name      = "AppErrorCount"
+    namespace = "${var.project_name}/ApplicationMetrics"
+    value     = "1"
     dimensions = {
       ServiceName = var.service_name
     }
