@@ -127,15 +127,24 @@ inventory_checks_counter = meter.create_counter(
 # Database + Cache (using shared helpers)
 # ============================================================
 def _build_database_url():
-    """Build DATABASE_URL from DB_SECRET (Secrets Manager JSON) or env var.
+    """Build DATABASE_URL from DB_SECRET + DB_HOST/DB_PORT/DB_NAME, or env var.
 
-    ECS injects DB_SECRET as JSON: {"username":"...", "password":"...", "host":"...", "port":5432, "dbname":"..."}
-    On-premises/docker-compose uses DATABASE_URL directly.
+    AWS ECS Fargate:
+      - DB_SECRET  = JSON from RDS managed secret: {"username":"...", "password":"..."}
+      - DB_HOST    = RDS endpoint hostname (from SSM)
+      - DB_PORT    = RDS port (from SSM)
+      - DB_NAME    = Database name (from SSM)
+
+    On-premises/docker-compose:
+      - DATABASE_URL = full connection string directly
     """
     db_secret = os.getenv("DB_SECRET")
     if db_secret:
         s = json.loads(db_secret)
-        return f"postgresql://{s['username']}:{s['password']}@{s['host']}:{s['port']}/{s.get('dbname', 'orders')}"
+        host = os.getenv("DB_HOST", s.get("host", "localhost"))
+        port = os.getenv("DB_PORT", str(s.get("port", 5432)))
+        dbname = os.getenv("DB_NAME", s.get("dbname", "orders"))
+        return f"postgresql://{s['username']}:{s['password']}@{host}:{port}/{dbname}"
     # secretlint-disable-next-line
     return os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 

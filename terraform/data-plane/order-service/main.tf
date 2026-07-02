@@ -35,9 +35,21 @@ data "aws_ssm_parameter" "ecr_url" {
   name = "/obs/lab/ecr/${var.service_name}"
 }
 
-# 5. Đọc Database Secret ARN từ SSM
+# 5. Đọc Database config từ SSM
 data "aws_ssm_parameter" "db_secret_arn" {
   name = "/obs/lab/database/secret-arn"
+}
+
+data "aws_ssm_parameter" "db_host" {
+  name = "/obs/lab/database/host"
+}
+
+data "aws_ssm_parameter" "db_port" {
+  name = "/obs/lab/database/port"
+}
+
+data "aws_ssm_parameter" "db_name" {
+  name = "/obs/lab/database/name"
 }
 
 #--------------------------------------------------------------
@@ -87,9 +99,12 @@ module "order_service" {
     PORT                        = tostring(var.container_port)
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
     PAYMENT_SERVICE_URL         = "http://payment-service.ecommerce.local:5002"
+    DB_HOST                     = data.aws_ssm_parameter.db_host.value
+    DB_PORT                     = data.aws_ssm_parameter.db_port.value
+    DB_NAME                     = data.aws_ssm_parameter.db_name.value
   }
 
-  # Secrets (From SSM)
+  # Secrets (From SSM → Secrets Manager ARN)
   secrets = {
     DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
   }
