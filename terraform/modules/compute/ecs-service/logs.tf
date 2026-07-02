@@ -45,7 +45,7 @@ resource "aws_cloudwatch_log_metric_filter" "app_errors" {
     namespace = "${var.project_name}/ApplicationMetrics"
     value     = "1"
     dimensions = {
-      ServiceName = var.service_name
+      ServiceName = "$.name"
     }
   }
 }
