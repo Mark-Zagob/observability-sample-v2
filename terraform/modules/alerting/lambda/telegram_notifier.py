@@ -60,21 +60,78 @@ def _severity_label(topic_arn: str) -> str:
 # Message formatters
 # ---------------------------------------------------------------------------
 
+def _extract_service_name(alarm_name: str) -> str:
+    """Extract service name from alarm like 'obs-lab-payment-service-memory-high'."""
+    # Pattern: {project}-{env}-{service-name}-{metric-type}
+    # Try to find known service name patterns
+    for svc in ("payment-service", "order-service", "api-gateway", "web-ui"):
+        if svc in alarm_name:
+            return svc
+    # Fallback: return full alarm name
+    return alarm_name
+
+
+def _alarm_type_badge(alarm_name: str) -> str:
+    """Return a badge based on alarm type."""
+    if "app-error" in alarm_name:
+        return "📋 APP"
+    if "memory" in alarm_name:
+        return "🧠 MEM"
+    if "cpu" in alarm_name:
+        return "⚙️ CPU"
+    if "running-task" in alarm_name:
+        return "💀 TASK"
+    return "📊 METRIC"
+
+
 def _format_cloudwatch_alarm(payload: dict, severity: str) -> str:
     """Format a CloudWatch Alarm state-change notification."""
-    alarm_name = payload.get("AlarmName", "Unknown")
-    state      = payload.get("NewStateValue", "?")
-    reason     = payload.get("NewStateReason", "")[:500]
-    region     = payload.get("Region", "")
-    account    = payload.get("AWSAccountId", "")
+    alarm_name  = payload.get("AlarmName", "Unknown")
+    state       = payload.get("NewStateValue", "?")
+    reason      = payload.get("NewStateReason", "")
+    region      = payload.get("Region", "")
+    description = payload.get("AlarmDescription", "")
+    timestamp   = payload.get("StateChangeTime", "")[:19]  # trim to YYYY-MM-DDTHH:MM:SS
 
-    return (
-        f"<b>{severity}: CloudWatch Alarm</b>\n"
-        f"<i>Alarm:</i>  <code>{alarm_name}</code>\n"
-        f"<i>State:</i>  {state}\n"
-        f"<i>Region:</i> {region}  |  <i>Account:</i> {account}\n"
-        f"<i>Reason:</i>\n<code>{reason}</code>"
-    )
+    service = _extract_service_name(alarm_name)
+    badge   = _alarm_type_badge(alarm_name)
+
+    # State-based header
+    if state == "ALARM":
+        header = f"🔴 ALARM FIRING"
+    elif state == "OK":
+        header = f"🟢 RECOVERED"
+    else:
+        header = f"🟡 {state}"
+
+    # Truncate reason smartly — keep first line only for readability
+    reason_short = reason.split(".")[0][:200] if reason else ""
+
+    lines = [
+        f"<b>{header}</b>",
+        f"━━━━━━━━━━━━━━━━━━",
+        f"📌 <b>{service}</b>  [{badge}]",
+        f"",
+        f"<b>Alarm:</b>  <code>{alarm_name}</code>",
+    ]
+
+    if description:
+        lines.append(f"<b>What:</b>   {description[:200]}")
+
+    if reason_short:
+        lines.append(f"<b>Why:</b>    <code>{reason_short}</code>")
+
+    lines.append(f"")
+
+    if timestamp:
+        lines.append(f"🕐 {timestamp}  |  🌏 {region}")
+    else:
+        lines.append(f"🌏 {region}")
+
+    lines.append(f"━━━━━━━━━━━━━━━━━━")
+    lines.append(f"{severity}")
+
+    return "\n".join(lines)
 
 
 def _format_eventbridge_event(payload: dict, severity: str) -> str:
@@ -82,35 +139,73 @@ def _format_eventbridge_event(payload: dict, severity: str) -> str:
     detail_type = payload.get("detail-type", "?")
     source      = payload.get("source", "?")
     region      = payload.get("region", "?")
+    timestamp   = payload.get("time", "")[:19]
     detail      = payload.get("detail", {})
 
-    # For ECS events, surface the most useful fields directly
+    # ECS-specific fields
     cluster_arn  = detail.get("clusterArn", "")
     service_arn  = detail.get("serviceArn", "") or detail.get("group", "")
     reason       = detail.get("reason", "") or detail.get("stoppedReason", "")
     rollout      = detail.get("rolloutState", "")
     event_name   = detail.get("eventName", "")
+    stop_code    = detail.get("stopCode", "")
+    exit_code    = detail.get("containers", [{}])[0].get("exitCode", "") if detail.get("containers") else ""
+    last_status  = detail.get("lastStatus", "")
 
-    lines = [f"<b>{severity}: {detail_type}</b>"]
+    cluster_name = cluster_arn.split("/")[-1] if cluster_arn else ""
+    svc_name     = service_arn.split("/")[-1] if service_arn else ""
+
+    # Determine event icon
+    if "FAILED" in detail_type.upper() or "FAILED" in str(rollout).upper():
+        icon = "🔴"
+    elif stop_code in ("TaskFailedToStart", "EssentialContainerExited"):
+        icon = "🔴"
+    elif "COMPLETED" in detail_type.upper() or "STEADY_STATE" in str(rollout).upper():
+        icon = "🟢"
+    else:
+        icon = "🟡"
+
+    lines = [
+        f"<b>{icon} {detail_type}</b>",
+        f"━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if svc_name:
+        lines.append(f"📌 <b>{svc_name}</b>")
+        lines.append(f"")
+
     if event_name:
-        lines.append(f"<i>Event:</i>    <code>{event_name}</code>")
-    if cluster_arn:
-        cluster_name = cluster_arn.split("/")[-1]
-        lines.append(f"<i>Cluster:</i>  <code>{cluster_name}</code>")
-    if service_arn:
-        svc_name = service_arn.split("/")[-1]
-        lines.append(f"<i>Service:</i>  <code>{svc_name}</code>")
+        lines.append(f"<b>Event:</b>    <code>{event_name}</code>")
+    if cluster_name:
+        lines.append(f"<b>Cluster:</b>  <code>{cluster_name}</code>")
     if rollout:
-        lines.append(f"<i>Rollout:</i>  {rollout}")
+        rollout_icon = "❌" if "FAILED" in rollout else "✅" if "COMPLETED" in rollout or "STEADY" in rollout else "🔄"
+        lines.append(f"<b>Rollout:</b>  {rollout_icon} {rollout}")
+    if stop_code:
+        lines.append(f"<b>StopCode:</b> <code>{stop_code}</code>")
+    if exit_code != "":
+        lines.append(f"<b>ExitCode:</b> <code>{exit_code}</code>")
+    if last_status:
+        lines.append(f"<b>Status:</b>   {last_status}")
     if reason:
-        lines.append(f"<i>Reason:</i>   <code>{reason[:400]}</code>")
+        lines.append(f"<b>Reason:</b>")
+        lines.append(f"<code>{reason[:300]}</code>")
 
-    lines.append(f"<i>Source:</i>  {source}  |  <i>Region:</i> {region}")
+    lines.append(f"")
 
-    # If no ECS-specific fields found, dump full detail for debugging
-    if len(lines) == 2:
+    time_region = []
+    if timestamp:
+        time_region.append(f"🕐 {timestamp}")
+    time_region.append(f"🌏 {region}")
+    lines.append("  |  ".join(time_region))
+
+    lines.append(f"━━━━━━━━━━━━━━━━━━")
+    lines.append(f"{severity}  |  <i>{source}</i>")
+
+    # If no ECS-specific fields found, dump full detail
+    if not any([cluster_arn, service_arn, event_name, rollout, stop_code]):
         summary = json.dumps(detail, default=str)[:600]
-        lines.append(f"<i>Detail:</i>\n<code>{summary}</code>")
+        lines.insert(2, f"<code>{summary}</code>")
 
     return "\n".join(lines)
 
