@@ -1606,7 +1606,7 @@ for i in $(seq 1 5); do
       "python -c \"
 import urllib.request, time
 start = time.time()
-resp = urllib.request.urlopen('http://localhost:5001/health', timeout=10)
+resp = urllib.request.urlopen('http://localhost:5001/health/live', timeout=10)
 elapsed = time.time() - start
 print(f'Status: {resp.status}, Time: {elapsed:.2f}s')
 \""
