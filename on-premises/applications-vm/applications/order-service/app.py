@@ -414,7 +414,11 @@ def process_order():
     # Step 2: Check inventory
     with tracer.start_as_current_span("check_inventory") as span:
         rows = db.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-        current_stock = rows[0]["stock"] if rows else 0
+
+        # [FIX] Handle SQL NULL (Python None) safely - Fail-safe to 0
+        raw_stock = rows[0]["stock"] if rows else None
+        current_stock = raw_stock if raw_stock is not None else 0
+
         in_stock = current_stock >= quantity
 
         span.set_attribute("inventory.current_stock", current_stock)

@@ -91,16 +91,15 @@ app.register_blueprint(health_bp)
 @payment_breaker
 def call_external_gateway(provider, delay):
     """
-    Gọi ra external API. Dùng httpbin.org để simulate network delay.
-    Nếu delay > timeout, requests sẽ ném exception -> Trigger Circuit Breaker.
+    [FIX] Simulate gateway latency locally.
+    Không gọi httpbin.org để tránh bị Rate-Limit / Network Jitter khi Load Test.
     """
-    # Dùng httpbin.org/delay/{n} để simulate gateway phản hồi chậm
-    url = f"https://httpbin.org/delay/{int(delay)}" 
+    time.sleep(delay) 
     
-    # BẮT BUỘC: Connect timeout 2s, Read timeout 5s
-    # Nếu httpbin mất 6s để trả lời, code sẽ không bị block vô hạn!
-    response = requests.get(url, timeout=(2.0, 5.0)) 
-    response.raise_for_status()
+    # Giả lập Business Failure (10% chance)
+    if random.random() < FAILURE_RATE:
+        raise Exception("Gateway rejected card")
+        
     return True
 
 @app.route("/charge", methods=["POST"])
@@ -179,15 +178,15 @@ def charge():
         duration = time.time() - start_time
         gateway_duration.record(duration, {"provider": provider})
 
-    # --- BƯỚC 3: SUCCESS ---
-    txn_id = f"txn-{random.randint(10000, 99999)}"
-    
-    # Cập nhật Redis: Đánh dấu giao dịch đã HOÀN TẤT
-    if redis_client:
-        redis_client.set(idempotency_key, txn_id, ex=86400)
-    
-    # Enrich span với txn_id
-    span.set_attribute("app.transaction_id", txn_id)
+        # --- BƯỚC 3: SUCCESS ---
+        txn_id = f"txn-{random.randint(10000, 99999)}"
+        
+        # Cập nhật Redis: Đánh dấu giao dịch đã HOÀN TẤT
+        if redis_client:
+            redis_client.set(idempotency_key, txn_id, ex=86400)
+        
+        # Enrich span với txn_id
+        span.set_attribute("app.transaction_id", txn_id)
 
     payments_counter.add(1, {"status": "success", "provider": provider})
     payment_amount.record(amount, {"status": "success", "provider": provider})
