@@ -1576,7 +1576,7 @@ aws ecs execute-command --cluster obs-cluster \
     --interactive --command \
     "python -c \"
 import urllib.request
-resp = urllib.request.urlopen('http://localhost:5001/health')
+resp = urllib.request.urlopen('http://localhost:5001/health/live')
 print('Order health:', resp.read().decode())
 \""
 

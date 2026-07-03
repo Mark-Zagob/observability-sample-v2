@@ -24,6 +24,14 @@ locals {
     environment = [for k, v in var.environment : { name = k, value = v }]
     secrets     = [for k, v in var.secrets : { name = k, valueFrom = v }]
 
+    healthCheck = {
+      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${var.container_port}${var.health_check_path}')\" || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
+
     logConfiguration = {
       logDriver = "awslogs"
       options = {

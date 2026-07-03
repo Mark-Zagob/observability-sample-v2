@@ -124,6 +124,16 @@ variable "enable_adot_sidecar" {
 }
 
 #--------------------------------------------------------------
+# Health Check
+#--------------------------------------------------------------
+
+variable "health_check_path" {
+  description = "HTTP path for container health check. Use /health/live (liveness) when deps like Redis are not deployed, /health (readiness) when all deps are available."
+  type        = string
+  default     = "/health/live"
+}
+
+#--------------------------------------------------------------
 # ECS Exec (shell into running containers)
 #--------------------------------------------------------------
 
