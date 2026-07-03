@@ -1674,7 +1674,7 @@ import urllib.request, json, time
 start = time.time()
 try:
     data = json.dumps({'product_id': 'test-$i', 'quantity': 1}).encode()
-    req = urllib.request.Request('http://localhost:5001/orders',
+    req = urllib.request.Request('http://localhost:5001/process',
         data=data, headers={'Content-Type': 'application/json'}, method='POST')
     resp = urllib.request.urlopen(req, timeout=15)
     elapsed = time.time() - start

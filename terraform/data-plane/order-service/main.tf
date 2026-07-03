@@ -102,6 +102,10 @@ module "order_service" {
     DB_HOST                     = data.aws_ssm_parameter.db_host.value
     DB_PORT                     = data.aws_ssm_parameter.db_port.value
     DB_NAME                     = data.aws_ssm_parameter.db_name.value
+    # Phase 1: Redis/Kafka not deployed yet → disable to avoid 62s retry blocks
+    # Phase 2: Remove these lines when ElastiCache + MSK are deployed
+    ENABLE_REDIS                = "false"
+    ENABLE_KAFKA                = "false"
   }
 
   # Secrets (From SSM → Secrets Manager ARN)

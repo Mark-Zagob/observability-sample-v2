@@ -150,13 +150,15 @@ def _build_database_url():
 
 DATABASE_URL = _build_database_url()
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+ENABLE_REDIS = os.getenv("ENABLE_REDIS", "true").lower() == "true"
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "true").lower() == "true"
 
 db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
                   pool_active_counter=db_pool_active,
                   query_duration_histogram=db_query_duration,
                   pool_wait_histogram=db_pool_wait)  # <-- Thêm dòng này
 cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
-                   cache_duration=cache_duration)
+                   cache_duration=cache_duration) if ENABLE_REDIS else None
 
 # ============================================================
 # Kafka Producer Setup
@@ -168,7 +170,9 @@ kafka_producer = None
 
 
 def get_kafka_producer():
-    """Lazy init Kafka producer with retry"""
+    """Lazy init Kafka producer with retry. Returns None if ENABLE_KAFKA=false."""
+    if not ENABLE_KAFKA:
+        return None
     global kafka_producer
     if kafka_producer is None:
         def _connect():
@@ -224,6 +228,10 @@ def publish_event(event_type, order_id, data):
 
         try:
             producer = get_kafka_producer()
+            if producer is None:
+                logger.debug("Kafka disabled, skipping event",
+                             extra={"event_type": event_type, "order_id": order_id})
+                return
             producer.produce(
                 topic=KAFKA_TOPIC,
                 key=order_id.encode("utf-8"),
@@ -252,10 +260,10 @@ RequestsInstrumentor().instrument()
 PAYMENT_SERVICE = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:5002")
 
 # --- Health checks ---
-health_bp = create_health_blueprint("order-service", checks={
-    "db": lambda: db.check_health(),
-    "cache": lambda: cache.check_health(),
-})
+_health_checks = {"db": lambda: db.check_health()}
+if cache is not None:
+    _health_checks["cache"] = lambda: cache.check_health()
+health_bp = create_health_blueprint("order-service", checks=_health_checks)
 app.register_blueprint(health_bp)
 
 
@@ -264,7 +272,7 @@ def list_products():
     """List product catalog (cache-aside pattern)"""
     with tracer.start_as_current_span("get_product_catalog") as span:
         # 1. Try cache first
-        products = cache.get("product:catalog")
+        products = cache.get("product:catalog") if cache else None
 
         if products is not None:
             span.set_attribute("cache.hit", True)
@@ -283,7 +291,8 @@ def list_products():
             p["price"] = float(p["price"])
 
         # 3. Set cache
-        cache.set("product:catalog", products)
+        if cache:
+            cache.set("product:catalog", products)
 
         span.set_attribute("products.count", len(products))
         return jsonify({"products": products, "source": "database"})
@@ -333,7 +342,7 @@ def process_order():
         span.set_attribute("product.id", product_id)
 
         product = None
-        cached_catalog = cache.get("product:catalog")
+        cached_catalog = cache.get("product:catalog") if cache else None
         if cached_catalog:
             for p in cached_catalog:
                 if p["id"] == product_id:
@@ -420,7 +429,8 @@ def process_order():
         span.set_attribute("stock.deducted", quantity)
 
         # Invalidate product cache since stock changed
-        cache.delete("product:catalog")
+        if cache:
+            cache.delete("product:catalog")
 
     # Step 5: Process payment
     payment = {"status": "skipped"}
@@ -481,7 +491,9 @@ def process_order():
     #    ECS sends SIGTERM on scale-in/deploy → Flask doesn't catch it → Kafka messages may be lost.
     #    Acceptable risk for Phase 1 (no Kafka Workers yet). See ROADMAP.md Phase 2 Drill 3.
     try:
-        get_kafka_producer().flush(timeout=2)
+        producer = get_kafka_producer()
+        if producer:
+            producer.flush(timeout=2)
     except Exception:
         pass
 
