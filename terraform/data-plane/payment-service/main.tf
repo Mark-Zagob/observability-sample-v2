@@ -82,6 +82,9 @@ module "payment_service" {
     SERVICE_NAME                  = var.service_name
     PORT                          = tostring(var.container_port)
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    # Phase 1: Redis not deployed yet → disable idempotency
+    # Phase 2: Remove this line when ElastiCache is deployed
+    ENABLE_REDIS                  = "false"
   }
 
   # Secrets: none — payment-service uses Redis only, no PostgreSQL

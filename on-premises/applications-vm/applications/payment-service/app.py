@@ -49,7 +49,8 @@ gateway_duration = meter.create_histogram(name="payment_gateway_duration_seconds
 # Redis Idempotency Store (Fix Bom #1)
 # ============================================================
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+ENABLE_REDIS = os.getenv("ENABLE_REDIS", "true").lower() == "true"
+redis_client = redis.from_url(REDIS_URL, decode_responses=True) if ENABLE_REDIS else None
 
 # ============================================================
 # Circuit Breaker (Fix Bom #3)
@@ -82,7 +83,8 @@ def redis_health_check():
         return True 
 
 # Truyền hàm đã wrap vào thay vì lambda raw
-health_bp = create_health_blueprint("payment-service", checks={"redis": redis_health_check})
+_health_checks = {"redis": redis_health_check} if redis_client else {}
+health_bp = create_health_blueprint("payment-service", checks=_health_checks)
 app.register_blueprint(health_bp)
 
 # Hàm gọi Gateway giả lập qua HTTP thật (để test timeout)
@@ -121,17 +123,18 @@ def charge():
 
     # --- BƯỚC 1: IDEMPOTENCY CHECK (THE SHIELD) ---
     idempotency_key = f"idempotency:payment:{order_id}"
-    # SET NX: Chỉ set nếu key CHƯA TỒN TẠI. EX: Tự động xóa sau 24h (86400s)
-    is_new_transaction = redis_client.set(idempotency_key, "processing", nx=True, ex=86400)
-    
-    if not is_new_transaction:
-        # Request trùng lặp! User bấm retry hoặc Network retry.
-        logger.warning("Idempotency check failed: Duplicate request", extra={"order_id": order_id})
-        return jsonify({
-            "status": "idempotent_hit",
-            "message": "Transaction already processed or in progress",
-            "order_id": order_id
-        }), 200 # Trả về 200 để client không bị lỗi, nhưng không trừ tiền
+    if redis_client:
+        # SET NX: Chỉ set nếu key CHƯA TỒN TẠI. EX: Tự động xóa sau 24h (86400s)
+        is_new_transaction = redis_client.set(idempotency_key, "processing", nx=True, ex=86400)
+
+        if not is_new_transaction:
+            # Request trùng lặp! User bấm retry hoặc Network retry.
+            logger.warning("Idempotency check failed: Duplicate request", extra={"order_id": order_id})
+            return jsonify({
+                "status": "idempotent_hit",
+                "message": "Transaction already processed or in progress",
+                "order_id": order_id
+            }), 200 # Trả về 200 để client không bị lỗi, nhưng không trừ tiền
 
     # --- BƯỚC 2: TRACE & GATEWAY CALL ---
     with tracer.start_as_current_span("call_payment_gateway") as span:
@@ -157,17 +160,20 @@ def charge():
         except requests.exceptions.Timeout:
             logger.error("Gateway Timeout", extra={"order_id": order_id})
             # Xóa key Redis để user có thể retry lại (vì giao dịch chưa hoàn tất)
-            redis_client.delete(idempotency_key) 
+            if redis_client:
+                redis_client.delete(idempotency_key) 
             return problem_response(504, "Gateway Timeout", "Payment gateway took too long", instance="/charge")
             
         except pybreaker.CircuitBreakerError:
             logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
-            redis_client.delete(idempotency_key)
+            if redis_client:
+                redis_client.delete(idempotency_key)
             return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
             
         except Exception as e:
             logger.error("Payment failed", extra={"order_id": order_id, "error": str(e)})
-            redis_client.delete(idempotency_key)
+            if redis_client:
+                redis_client.delete(idempotency_key)
             return problem_response(500, "Payment Error", str(e), instance="/charge")
 
         duration = time.time() - start_time
@@ -177,7 +183,8 @@ def charge():
     txn_id = f"txn-{random.randint(10000, 99999)}"
     
     # Cập nhật Redis: Đánh dấu giao dịch đã HOÀN TẤT
-    redis_client.set(idempotency_key, txn_id, ex=86400)
+    if redis_client:
+        redis_client.set(idempotency_key, txn_id, ex=86400)
     
     # Enrich span với txn_id
     span.set_attribute("app.transaction_id", txn_id)
