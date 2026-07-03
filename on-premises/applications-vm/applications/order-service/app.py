@@ -160,6 +160,51 @@ db = DatabasePool(DATABASE_URL, minconn=2, maxconn=DB_POOL_MAX,
 cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
                    cache_duration=cache_duration) if ENABLE_REDIS else None
 
+
+# ============================================================
+# Auto-migration: Tạo schema + seed data nếu chưa có
+# ============================================================
+# Tương đương docker-entrypoint-initdb.d/init.sql trên on-prem.
+# Idempotent: CREATE TABLE IF NOT EXISTS + ON CONFLICT DO NOTHING.
+def _ensure_schema():
+    """Ensure DB tables and seed data exist. Idempotent — safe to run on every startup."""
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY, order_id VARCHAR(8) UNIQUE NOT NULL,
+                product_id INTEGER NOT NULL, product_name VARCHAR(100),
+                quantity INTEGER NOT NULL DEFAULT 1, total_amount DECIMAL(10,2) NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending', payment_txn_id VARCHAR(20),
+                created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS products (
+                id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL,
+                price DECIMAL(10,2) NOT NULL, stock INTEGER DEFAULT 100,
+                category VARCHAR(50) DEFAULT 'general'
+            );
+            CREATE TABLE IF NOT EXISTS processed_events (
+                event_id VARCHAR(36) NOT NULL, event_type VARCHAR(50) NOT NULL,
+                processed_by VARCHAR(50) NOT NULL, processed_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (event_id, processed_by)
+            );
+            CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+            CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+            CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+            INSERT INTO products (name, price, stock, category) VALUES
+                ('Widget A',   29.99, 100, 'widgets'),
+                ('Widget B',   49.99,  50, 'widgets'),
+                ('Gadget X',   99.99,  30, 'gadgets'),
+                ('Gadget Y',  149.99,  20, 'gadgets'),
+                ('Premium Z', 299.99,  10, 'premium')
+            ON CONFLICT DO NOTHING;
+        """, fetch=False)
+        logger.info("Schema migration completed (idempotent)")
+    except Exception as e:
+        logger.error("Schema migration failed", extra={"error": str(e)})
+        raise
+
+_ensure_schema()
+
 # ============================================================
 # Kafka Producer Setup
 # ============================================================

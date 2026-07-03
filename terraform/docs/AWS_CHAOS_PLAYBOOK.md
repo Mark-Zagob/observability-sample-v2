@@ -1597,23 +1597,38 @@ aws ecs execute-command --cluster obs-cluster \
 ## 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
 
 ```bash
-# 4. Gửi 5 request tới order-service, ghi nhận response time và kết quả
+# 4. Gửi 5 request tới order-service /process, ghi nhận response time và kết quả
+# ⚠️ Dùng integer product_id (1-5), KHÔNG dùng string (DB column products.id là INTEGER)
 for i in $(seq 1 5); do
   echo "--- Request $i ---"
   aws ecs execute-command --cluster obs-cluster \
       --task $ORDER_TASK --container order-service \
       --interactive --command \
       "python -c \"
-import urllib.request, time
+import urllib.request, json, time
 start = time.time()
-resp = urllib.request.urlopen('http://localhost:5001/health/live', timeout=10)
-elapsed = time.time() - start
-print(f'Status: {resp.status}, Time: {elapsed:.2f}s')
+try:
+    data = json.dumps({'product_id': $i, 'quantity': 1}).encode()
+    req = urllib.request.Request('http://localhost:5001/process',
+        data=data, headers={'Content-Type': 'application/json'}, method='POST')
+    resp = urllib.request.urlopen(req, timeout=15)
+    elapsed = time.time() - start
+    body = json.loads(resp.read().decode())
+    payment_status = body.get('payment', {}).get('status', 'unknown')
+    print(f'Status: {resp.status}, Time: {elapsed:.2f}s, Payment: {payment_status}')
+except urllib.error.HTTPError as e:
+    elapsed = time.time() - start
+    print(f'HTTP {e.code} after {elapsed:.2f}s')
+    print(e.read().decode())
 \""
+  sleep 2
 done
 ```
 
-📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: 5/5 requests OK, avg response time = ___s.
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: x/5 requests OK, avg response time = ___s.
+
+> **Lưu ý Phase 1 (AWS):** `ENABLE_REDIS=false`, `ENABLE_KAFKA=false` → idempotency/cache/events disabled.
+> Default `SLOW_RATE=0.20` → ~20% payment requests chậm 3-6s → một số request sẽ timeout (expected).
 
 ---
 
@@ -1626,10 +1641,12 @@ Trong `data-plane/payment-service/main.tf`, thêm env var vào block `environmen
 ```hcl
   # Environment Variables
   environment = {
-    SERVICE_NAME                = var.service_name
-    PORT                        = tostring(var.container_port)
+    SERVICE_NAME                  = var.service_name
+    PORT                          = tostring(var.container_port)
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
-    PAYMENT_SLOW_RATE           = "1.0"     # ← INJECT: 100% requests slow 3-6s
+    # Phase 1: Redis not deployed yet → disable idempotency
+    ENABLE_REDIS                  = "false"
+    PAYMENT_SLOW_RATE             = "1.0"     # ← INJECT: 100% requests slow 3-6s
   }
 ```
 
@@ -1661,6 +1678,7 @@ watch -n 10 "aws ecs describe-services --cluster obs-cluster \
 
 ```bash
 # Gọi từ TRONG order-service container
+# ⚠️ Phải dùng integer product_id (1-5) — DB column products.id là INTEGER
 ORDER_TASK=$(aws ecs list-tasks --cluster obs-cluster \
     --service-name order-service --query 'taskArns[0]' --output text)
 
@@ -1673,7 +1691,7 @@ for i in $(seq 1 5); do
 import urllib.request, json, time
 start = time.time()
 try:
-    data = json.dumps({'product_id': 'test-$i', 'quantity': 1}).encode()
+    data = json.dumps({'product_id': $i, 'quantity': 1}).encode()
     req = urllib.request.Request('http://localhost:5001/process',
         data=data, headers={'Content-Type': 'application/json'}, method='POST')
     resp = urllib.request.urlopen(req, timeout=15)
@@ -1681,22 +1699,26 @@ try:
     body = json.loads(resp.read().decode())
     payment_status = body.get('payment', {}).get('status', 'unknown')
     print(f'Status: {resp.status}, Time: {elapsed:.2f}s, Payment: {payment_status}')
-except Exception as e:
+except urllib.error.HTTPError as e:
     elapsed = time.time() - start
-    print(f'ERROR after {elapsed:.2f}s: {e}')
+    print(f'HTTP {e.code} after {elapsed:.2f}s')
+    print(e.read().decode())
 \""
   sleep 2
 done
 ```
 
-👁️ **Kết quả kỳ vọng (chuỗi cascading):**
+👁️ **Kết quả kỳ vọng (chuỗi cascading — PAYMENT_SLOW_RATE=1.0):**
 
-| Request | Order response | Payment status | Response time | Giải thích |
+| Request | HTTP Code | Payment status | Response time | Giải thích |
 |---|---|---|---|---|
-| 1 | 200 | `payment_error` | ~5s | Payment delay 3-6s, order timeout=5s → **50/50 chance** |
-| 2 | 200 | `success` | ~4s | Payment delay <5s → vừa kịp |
-| 3 | 200 | `payment_error` | ~5s | Payment delay >5s → order timeout |
+| 1 | 502 | `payment_error` | ~5s | Payment delay 3-6s, order timeout=5s → **timeout** |
+| 2 | 200 | `success` | ~4s | Payment delay < 5s → vừa kịp (may mắn) |
+| 3 | 502 | `payment_error` | ~5s | Payment delay > 5s → order timeout |
 | ... | Intermittent | Intermittent | 4-6s | **Unpredictable** — đây chính là vấn đề |
+
+> **Lưu ý:** HTTP 502 = `payment_error` được map bởi `map_order_status_to_http()` trong order-service.
+> Order vẫn được tạo trong DB (status=`payment_error`), chỉ payment bị fail.
 
 💡 **THE "AHA!" MOMENTS:**
 
@@ -1745,11 +1767,13 @@ aws logs tail /ecs/obs/payment-service --since 5m --format short 2>/dev/null \
 Xóa `PAYMENT_SLOW_RATE` khỏi `data-plane/payment-service/main.tf`:
 
 ```hcl
-  # Environment Variables — khôi phục gốc
+  # Environment Variables — khôi phục gốc (XÓA PAYMENT_SLOW_RATE, giữ ENABLE_REDIS)
   environment = {
-    SERVICE_NAME                = var.service_name
-    PORT                        = tostring(var.container_port)
+    SERVICE_NAME                  = var.service_name
+    PORT                          = tostring(var.container_port)
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+    # Phase 1: Redis not deployed yet → disable idempotency
+    ENABLE_REDIS                  = "false"
     # PAYMENT_SLOW_RATE đã XÓA — app sẽ dùng default 0.20
   }
 ```
@@ -1770,7 +1794,7 @@ aws ecs execute-command --cluster obs-cluster \
     --interactive --command \
     "python -c \"
 import urllib.request
-resp = urllib.request.urlopen('http://localhost:5001/health', timeout=10)
+resp = urllib.request.urlopen('http://localhost:5001/health/live')
 print('Order health:', resp.read().decode())
 \""
 ```
