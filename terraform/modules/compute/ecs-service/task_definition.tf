@@ -42,13 +42,31 @@ locals {
     }
   }
 
-  # --- ADOT Sidecar Container (optional) ---
+  # --- ADOT Sidecar Container (Enhanced for Phase 1.5) ---
   adot_container = var.enable_adot_sidecar ? [{
     name      = "aws-otel-collector"
     image     = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
-    essential = false # Don't kill the app if ADOT crashes
+    essential = false # 🌟 CRITICAL: App KHÔNG chết nếu Sidecar crash (Trả lời Câu hỏi 2)
+    
+    # Báo cho ADOT biết nó cần đọc config từ Environment Variable
+    command = ["--config=env:AOT_CONFIG_CONTENT"]
+    
+    # Cấp phát resource cố định cho Sidecar (Tránh noisy neighbor với App)
+    cpu    = 128  # 0.125 vCPU
+    memory = 256  # 256 MB RAM (Dư dả cho limit_mib: 128 trong YAML)
 
-    command = ["--config=/etc/ecs/ecs-default-config.yaml"]
+    environment = [
+      {
+        name  = "AOT_CONFIG_CONTENT"
+        # Đọc file YAML ta vừa tạo ở Step 2 và nhúng trực tiếp vào Task Def
+        value = file("${path.module}/otel-config-aws.yaml")
+      },
+      {
+        name  = "AMP_ENDPOINT"
+        # Data Plane sẽ truyền biến này vào khi gọi module
+        value = var.amp_endpoint 
+      }
+    ]
 
     portMappings = [
       { containerPort = 4317, protocol = "tcp" }, # OTLP gRPC
@@ -62,6 +80,15 @@ locals {
         "awslogs-region"        = var.aws_region
         "awslogs-stream-prefix" = "otel"
       }
+    }
+    
+    # Health check cho chính Sidecar
+    healthCheck = {
+      command     = ["CMD-SHELL", "echo 'health'"] # ADOT không có health endpoint chuẩn, dùng dummy
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 10
     }
   }] : []
 

@@ -35,6 +35,10 @@ data "aws_ssm_parameter" "ecr_url" {
   name = "/obs/lab/ecr/${var.service_name}"
 }
 
+# 6. Đọc Observability Metadata từ SSM
+data "aws_ssm_parameter" "amp_endpoint" {
+  name = "/obs/lab/observability/amp_endpoint"
+}
 
 #--------------------------------------------------------------
 # LOCALS: Construct Image URL
@@ -76,6 +80,10 @@ module "payment_service" {
   # Sizing
   cpu    = var.cpu
   memory = var.memory
+
+  # 🌟 BẬT OBSERVABILITY BRIDGE
+  enable_adot_sidecar = true
+  amp_endpoint        = data.aws_ssm_parameter.amp_endpoint.value
 
   # Environment Variables
   environment = {

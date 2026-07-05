@@ -174,3 +174,9 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "amp_endpoint" {
+  description = "Amazon Managed Prometheus endpoint URL (injected into ADOT sidecar)"
+  type        = string
+  default     = ""
+}

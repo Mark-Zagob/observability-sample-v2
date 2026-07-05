@@ -328,3 +328,58 @@ resource "aws_cloudwatch_metric_alarm" "app_error_rate" {
     Project     = var.project_name
   }
 }
+
+#============================================================
+# PHASE 1.5: OBSERVABILITY BRIDGE — AMP & ADOT IAM
+#============================================================
+
+# 1. Tạo AMP Workspace (Nơi lưu trữ Metrics)
+resource "aws_prometheus_workspace" "main" {
+  alias = "${var.project_name}-${var.environment}-amp"
+  
+  tags = {
+    Module      = "observability"
+    Plane       = "Control"
+    Environment = var.environment
+    Project     = var.project_name
+  }
+}
+
+# 2. Export AMP Endpoint & ID ra SSM để Data Plane đọc
+resource "aws_ssm_parameter" "amp_workspace_id" {
+  name  = "/${var.project_name}/${var.environment}/observability/amp_workspace_id"
+  type  = "String"
+  value = aws_prometheus_workspace.main.id
+}
+
+resource "aws_ssm_parameter" "amp_endpoint" {
+  name  = "/${var.project_name}/${var.environment}/observability/amp_endpoint"
+  type  = "String"
+  value = aws_prometheus_workspace.main.prometheus_endpoint
+}
+
+# 3. 🛡️ IAM LEAST PRIVILEGE (Trả lời Câu hỏi 4)
+# Gắn quyền aps:RemoteWrite trực tiếp vào Task Role (App-level)
+# VÀ scope chặt chẽ vào ĐÚNG ARN của workspace này (không dùng wildcard "*")
+resource "aws_iam_role_policy" "ecs_task_amp_remote_write" {
+  name = "${var.project_name}-ecs-task-amp-remote-write"
+  role = module.security.ecs_task_role_name # Đọc từ module security
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAMPRemoteWrite"
+        Effect = "Allow"
+        Action = [
+          "aps:RemoteWrite",
+          "aps:GetSeries",
+          "aps:GetLabels",
+          "aps:GetMetricMetadata"
+        ]
+        # 🌟 BẠN HỎI: "Làm sao để scope chặt?" -> Đây là câu trả lời!
+        Resource = [aws_prometheus_workspace.main.arn]
+      }
+    ]
+  })
+}
