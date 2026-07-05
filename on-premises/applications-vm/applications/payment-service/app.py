@@ -26,6 +26,8 @@ from shared.logging_config import setup_logging
 from shared.otel_setup import init_otel
 from shared.health import create_health_blueprint
 from shared.errors import problem_response
+from shared.shutdown_handler import shutdown_manager
+from shared.idempotency import IdempotencyGuard
 
 # Auto-instrumentation
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
@@ -51,6 +53,20 @@ gateway_duration = meter.create_histogram(name="payment_gateway_duration_seconds
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 ENABLE_REDIS = os.getenv("ENABLE_REDIS", "true").lower() == "true"
 redis_client = redis.from_url(REDIS_URL, decode_responses=True) if ENABLE_REDIS else None
+
+idempotency_guard = IdempotencyGuard(redis_client) if redis_client else None
+
+def close_redis_on_shutdown():
+    """Đóng Redis connections khi process tắt."""
+    if redis_client:
+        logger.info("Closing Redis connections...")
+        redis_client.close()
+
+shutdown_manager.register(
+    callback=close_redis_on_shutdown,
+    name="Redis Client",
+    timeout_seconds=5
+)
 
 # ============================================================
 # Circuit Breaker (Fix Bom #3)
@@ -120,34 +136,52 @@ def charge():
     provider = random.choice(PROVIDERS)
     logger.info("Processing payment", extra={"order_id": order_id, "amount": amount, "provider": provider})
 
-    # --- BƯỚC 1: IDEMPOTENCY CHECK (THE SHIELD) ---
-    idempotency_key = f"idempotency:payment:{order_id}"
-    if redis_client:
-        # SET NX: Chỉ set nếu key CHƯA TỒN TẠI. EX: Tự động xóa sau 24h (86400s)
-        is_new_transaction = redis_client.set(idempotency_key, "processing", nx=True, ex=86400)
-
-        if not is_new_transaction:
-            # Request trùng lặp! User bấm retry hoặc Network retry.
-            logger.warning("Idempotency check failed: Duplicate request", extra={"order_id": order_id})
-            return jsonify({
-                "status": "idempotent_hit",
-                "message": "Transaction already processed or in progress",
-                "order_id": order_id
-            }), 200 # Trả về 200 để client không bị lỗi, nhưng không trừ tiền
-
-    # --- BƯỚC 2: TRACE & GATEWAY CALL ---
+    # ────────────────────────────────────────────────────────────
+    # 🛡️ BƯỚC 1: IDEMPOTENCY CHECK (THE SHIELD) — FIX BOMB #4
+    # ────────────────────────────────────────────────────────────
+    if idempotency_guard:
+        status = idempotency_guard.acquire(order_id)
+        
+        if status == "blocked":
+            # Request trùng lặp! Kiểm tra cached result
+            cached_result = idempotency_guard.get_cached_result(order_id)
+            
+            if cached_result:
+                # Transaction đã success trước đó → trả về cached result
+                logger.warning(
+                    "Idempotency hit: returning cached success",
+                    extra={"order_id": order_id}
+                )
+                return jsonify(cached_result), 200
+            else:
+                # Transaction đang "processing" hoặc "failed"
+                # Trả về 409 Conflict để client biết không nên retry ngay
+                logger.warning(
+                    "Idempotency hit: transaction in progress or failed",
+                    extra={"order_id": order_id}
+                )
+                return jsonify({
+                    "status": "in_progress",
+                    "message": "Transaction is being processed, please wait 60s before retry",
+                    "order_id": order_id,
+                    "retry_after_seconds": 60
+                }), 409
+    
+    # ────────────────────────────────────────────────────────────
+    # BƯỚC 2: TRACE & GATEWAY CALL
+    # ────────────────────────────────────────────────────────────
     with tracer.start_as_current_span("call_payment_gateway") as span:
-        # Enrich Trace (Fix Bom #4): Gắn order_id vào span để debug trên X-Ray
         span.set_attribute("app.order_id", order_id)
         span.set_attribute("app.provider", provider)
         
         delay = random.uniform(0.5, 1.5)
         is_slow = random.random() < SLOW_RATE
         if is_slow:
-            delay = random.uniform(3.0, 6.0) # Cố tình làm chậm > 5s để test Timeout
+            delay = random.uniform(3.0, 6.0)
             span.set_attribute("app.slow", True)
-
+        
         start_time = time.time()
+        
         try:
             # Gọi qua Circuit Breaker
             call_external_gateway(provider, delay)
@@ -155,49 +189,52 @@ def charge():
             # Simulate Business Failure (10% chance)
             if random.random() < FAILURE_RATE:
                 raise Exception("Gateway rejected card")
-
+                
         except requests.exceptions.Timeout:
             logger.error("Gateway Timeout", extra={"order_id": order_id})
-            # Xóa key Redis để user có thể retry lại (vì giao dịch chưa hoàn tất)
-            if redis_client:
-                redis_client.delete(idempotency_key) 
+            # 🆕 Mark as failed để user retry được ngay (không cần chờ 60s)
+            if idempotency_guard:
+                idempotency_guard.mark_failed(order_id, "Gateway Timeout")
             return problem_response(504, "Gateway Timeout", "Payment gateway took too long", instance="/charge")
             
         except pybreaker.CircuitBreakerError:
             logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
-            if redis_client:
-                redis_client.delete(idempotency_key)
+            if idempotency_guard:
+                idempotency_guard.mark_failed(order_id, "Circuit Breaker OPEN")
             return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
             
         except Exception as e:
             logger.error("Payment failed", extra={"order_id": order_id, "error": str(e)})
-            if redis_client:
-                redis_client.delete(idempotency_key)
+            if idempotency_guard:
+                idempotency_guard.mark_failed(order_id, str(e))
             return problem_response(500, "Payment Error", str(e), instance="/charge")
-
+        
         duration = time.time() - start_time
         gateway_duration.record(duration, {"provider": provider})
-
-        # --- BƯỚC 3: SUCCESS ---
+        
+        # ────────────────────────────────────────────────────────────
+        # BƯỚC 3: SUCCESS — Mark và cache result
+        # ────────────────────────────────────────────────────────────
         txn_id = f"txn-{random.randint(10000, 99999)}"
-        
-        # Cập nhật Redis: Đánh dấu giao dịch đã HOÀN TẤT
-        if redis_client:
-            redis_client.set(idempotency_key, txn_id, ex=86400)
-        
-        # Enrich span với txn_id
         span.set_attribute("app.transaction_id", txn_id)
-
-    payments_counter.add(1, {"status": "success", "provider": provider})
-    payment_amount.record(amount, {"status": "success", "provider": provider})
-
-    return jsonify({
-        "status": "success",
-        "order_id": order_id,
-        "transaction_id": txn_id,
-        "provider": provider,
-        "amount": amount,
-    })
+        
+        payments_counter.add(1, {"status": "success", "provider": provider})
+        payment_amount.record(amount, {"status": "success", "provider": provider})
+        
+        # 🆕 Build result dict
+        result = {
+            "status": "success",
+            "order_id": order_id,
+            "transaction_id": txn_id,
+            "provider": provider,
+            "amount": amount,
+        }
+        
+        # 🆕 Mark as success với TTL 24h
+        if idempotency_guard:
+            idempotency_guard.mark_success(order_id, result)
+        
+        return jsonify(result)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5002)

@@ -180,3 +180,17 @@ variable "amp_endpoint" {
   type        = string
   default     = ""
 }
+
+#--------------------------------------------------------------
+# Graceful Shutdown Configuration (Fix BOMB #1)
+#--------------------------------------------------------------
+variable "stop_timeout" {
+  description = "Seconds to wait for container to stop gracefully before SIGKILL. Must be > Gunicorn graceful_timeout (25s). AWS max: 120s."
+  type        = number
+  default     = 60  # 🌟 Production standard: 60s
+  
+  validation {
+    condition     = var.stop_timeout >= 30 && var.stop_timeout <= 120
+    error_message = "stopTimeout must be between 30 and 120 seconds (AWS Fargate limit)."
+  }
+}

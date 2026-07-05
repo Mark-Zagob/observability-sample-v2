@@ -31,6 +31,7 @@ from shared.otel_setup import init_otel
 from shared.db_utils import DatabasePool, RedisCache, retry_connect
 from shared.health import create_health_blueprint
 from shared.errors import problem_response
+from shared.shutdown_handler import shutdown_manager
 
 # ----------------------------------------------------------
 # Auto-instrumentation imports
@@ -227,6 +228,25 @@ def get_kafka_producer():
                 "acks": "all",
                 "retries": 3,
                 "retry.backoff.ms": 100,
+                
+                # 🌟 FIX BOMB #2: Natural Batching Configuration
+                # Thay vì flush() sau mỗi request, để librdkafka tự batch:
+                
+                # linger.ms: Chờ tối đa 50ms để gom nhiều messages thành 1 batch
+                # Trade-off: 50ms latency thêm vs giảm network calls đáng kể
+                "linger.ms": 50,
+                
+                # batch.size: Kích thước batch tối đa (16KB)
+                # Khi batch đầy hoặc linger.ms hết giờ → gửi đi
+                "batch.size": 16384,
+                
+                # queue.buffering.max.messages: Buffer tối đa 100k messages
+                # Nếu buffer đầy → produce() sẽ block hoặc throw exception
+                # Đây là "Backpressure" mechanism của Kafka
+                "queue.buffering.max.messages": 100000,
+                
+                # compression.type: Nén batch để giảm network bandwidth
+                "compression.type": "lz4",
             })
             producer.list_topics(timeout=5)
             return producer
@@ -294,7 +314,104 @@ def publish_event(event_type, order_id, data):
                          extra={"event_type": event_type, "order_id": order_id,
                                 "error": str(e)})
 
+# ────────────────────────────────────────────────────────────
+# Graceful Shutdown Registration (Fix BOMB #2)
+# ────────────────────────────────────────────────────────────
+def flush_kafka_on_shutdown():
+    """
+    Flush toàn bộ Kafka buffer khi process chuẩn bị tắt.
+    
+    Timeout = 10s:
+    - Đủ thời gian để gửi hết messages đang buffer
+    - Nhỏ hơn ECS stopTimeout (60s) để tránh bị SIGKILL
+    - Nếu flush timeout → log warning nhưng vẫn exit (fail-safe)
+    """
+    global kafka_producer
+    if kafka_producer:
+        logger.info("Flushing Kafka producer before exit (timeout=10s)...")
+        try:
+            # flush() sẽ block cho đến khi tất cả messages được gửi đi
+            # hoặc timeout (10s)
+            kafka_producer.flush(timeout=10)
+            logger.info("Kafka producer flushed successfully")
+        except Exception as e:
+            logger.error(f"Failed to flush Kafka producer: {e}")
+            # Không raise — vẫn exit process (fail-safe)
 
+# Đăng ký callback với shutdown manager
+shutdown_manager.register(
+    callback=flush_kafka_on_shutdown,
+    name="Kafka Producer",
+    timeout_seconds=10
+)
+
+# 🆕 BOMB #3 FIX: Đóng PostgreSQL pool TRƯỚC KHI process exit
+def close_db_pool_on_shutdown():
+    """
+    Đóng TẤT CẢ PostgreSQL connections khi ECS Fargate gửi SIGTERM.
+    
+    Tại sao PHẢI làm điều này?
+    ─────────────────────────
+    1. RDS db.t3.micro có max_connections ≈ 150 (hard limit)
+    2. Order Service mở 10 connections/task (DB_POOL_MAX = 10)
+    3. Khi Rolling Update, task cũ chết → connections trở thành "Ghost"
+    4. Task mới mở 10 connections mới → Ghost vẫn chiếm slots
+    5. Sau ~15 lần deploy → "FATAL: sorry, too many clients already"
+    6. Toàn bộ Order Service down → Cascading Failure
+    
+    Cơ chế phòng vệ:
+    ─────────────────
+    - SIGTERM → shutdown_manager.exit_gracefully()
+    - Gọi close_db_pool_on_shutdown() (timeout 5s)
+    - psycopg2 pool.closeall() gửi TCP FIN cho tất cả connections
+    - PostgreSQL nhận FIN → giải phóng backend process
+    - Slots được trả về pool → Task mới có thể connect
+    
+    Order of cleanup:
+    ─────────────────
+    1. Kafka flush (10s) — push buffered messages
+    2. PostgreSQL close (5s) — release connection slots
+    3. Process exit (sys.exit(0))
+    
+    Total: ~15s, NHỎ HƠN ECS stopTimeout (60s) → An toàn
+    """
+    if db and hasattr(db, '_pool') and db._pool is not None:
+        logger.info("Closing PostgreSQL connection pool before exit...")
+        db.close_pool()
+
+# Đăng ký callback với shutdown manager
+shutdown_manager.register(
+    callback=close_db_pool_on_shutdown,
+    name="PostgreSQL Pool",
+    timeout_seconds=5
+)
+
+
+def close_redis_on_shutdown():
+    """
+    Đóng Redis connections khi process tắt.
+    
+    Tại sao cần cho Order Service?
+    ──────────────────────────────
+    - Order Service dùng Redis làm cache cho product catalog
+    - redis-py duy trì connection pool nội bộ
+    - Nếu không close → ElastiCache giữ clients trong CLIENT LIST
+    - Sau nhiều deploys → maxclients exhaustion
+    
+    Trade-off:
+    ─────────
+    - Cache-aside pattern: Redis down = cache miss, không phải outage
+    - Nhưng connection leak = operational debt tích lũy
+    """
+    if cache is not None and hasattr(cache, '_client') and cache._client is not None:
+        logger.info("Closing Redis connection pool before exit...")
+        cache.close()
+
+shutdown_manager.register(
+    callback=close_redis_on_shutdown,
+    name="Redis Cache",
+    timeout_seconds=5
+)
 # ============================================================
 # Flask App
 # ============================================================
@@ -539,12 +656,12 @@ def process_order():
     # ⚠️ Phase 2 TODO: Add signal.signal(SIGTERM, shutdown_handler) for graceful shutdown.
     #    ECS sends SIGTERM on scale-in/deploy → Flask doesn't catch it → Kafka messages may be lost.
     #    Acceptable risk for Phase 1 (no Kafka Workers yet). See ROADMAP.md Phase 2 Drill 3.
-    try:
-        producer = get_kafka_producer()
-        if producer:
-            producer.flush(timeout=2)
-    except Exception:
-        pass
+    # try:
+    #     producer = get_kafka_producer()
+    #     if producer:
+    #         producer.flush(timeout=2)
+    # except Exception:
+    #     pass
 
     # Record metrics
     duration = time.time() - start_time

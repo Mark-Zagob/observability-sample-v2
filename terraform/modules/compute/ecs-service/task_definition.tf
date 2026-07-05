@@ -16,6 +16,11 @@ locals {
     image     = var.image
     essential = true
 
+    # 🌟 FIX BOMB #1: Cấp cho App 60s để graceful shutdown
+    # Khi ECS scale-in/deploy, nó gửi SIGTERM và chờ 60s trước khi SIGKILL.
+    # Gunicorn (graceful_timeout=25s) sẽ flush xong request và tắt sạch sẽ trong 25s.
+    # 35s còn lại là buffer an toàn cho OS/ECS Agent dọn dẹp.
+    stopTimeout = var.stop_timeout
     portMappings = [{
       containerPort = var.container_port
       protocol      = "tcp"

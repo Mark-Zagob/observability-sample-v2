@@ -72,6 +72,21 @@ class DatabasePool:
     def __init__(self, db_url, minconn=2, maxconn=10, pool_active_counter=None,
                  query_duration_histogram=None, pool_wait_histogram=None): # <-- Thêm param
         self._params = parse_db_url(db_url)
+        # 🆕 BOMB #3 ENHANCEMENT: TCP Keep-Alive settings
+        # Giúp PostgreSQL phát hiện "dead" connections nhanh hơn
+        # Thay vì giữ idle connection 8 tiếng (mặc định), chỉ giữ 5 phút
+        self._params['keepalives'] = 1              # Enable TCP keepalive
+        self._params['keepalives_idle'] = 60        # 60s before first probe
+        self._params['keepalives_interval'] = 15    # 15s between probes
+        self._params['keepalives_count'] = 3        # 3 failed probes → close
+        
+        # 🆕 Connection timeout: Fail-fast nếu PostgreSQL không respond
+        self._params['connect_timeout'] = 5         # 5s timeout khi connect
+        
+        # 🆕 Statement timeout: Prevent runaway queries
+        # Nếu query chạy > 30s → PostgreSQL tự kill query (không phải connection)
+        # Phòng vệ chống lại "Connection Thrashing" khi có slow query
+        self._params['options'] = '-c statement_timeout=30000'  # 30s in ms
         self._minconn = minconn
         self._maxconn = maxconn
         self._pool = None
@@ -147,6 +162,45 @@ class DatabasePool:
         self.execute("SELECT 1", fetch=True)
         return True
 
+    def close_pool(self):
+        """
+        🛡️ BOMB #3 FIX: Đóng TẤT CẢ connections trong pool.
+        
+        Khi nào cần gọi?
+        - Khi process nhận SIGTERM (trước khi exit)
+        - Khi test teardown
+        - Khi tái sử dụng pool object
+        
+        Tại sao phải gọi tường minh?
+        - Python interpreter KHÔNG đảm bảo gọi __del__ khi exit
+        - psycopg2 ThreadedConnectionPool KHÔNG auto-close khi process chết
+        - Nếu không gọi, PostgreSQL giữ connections ở 'idle' state (Ghost Connections)
+        - RDS max_connections sẽ bị exhaust sau vài lần Rolling Update
+        
+        Cơ chế:
+        - closeall() gửi TCP FIN cho tất cả connections
+        - PostgreSQL nhận ra client disconnect → giải phóng backend process
+        - Slots trong max_connections được trả về pool
+        """
+        if self._pool is not None:
+            try:
+                self._pool.closeall()
+                logger.info(
+                    "PostgreSQL connection pool closed",
+                    extra={
+                        "minconn": self._minconn,
+                        "maxconn": self._maxconn,
+                        "closed_connections": self._maxconn  # Approximate
+                    }
+                )
+            except Exception as e:
+                # Không raise — fail-safe, process vẫn exit
+                logger.error(
+                    "Failed to close PostgreSQL pool",
+                    extra={"error": str(e)}
+                )
+            finally:
+                self._pool = None
 
 # ----------------------------------------------------------
 # Redis helpers
@@ -222,3 +276,30 @@ class RedisCache:
         """Check Redis connectivity. Returns True or raises."""
         self._get_client().ping()
         return True
+
+    def close(self):
+        """
+        🛡️ BOMB #3 FIX: Đóng Redis connection pool.
+        
+        Tại sao cần?
+        - redis-py duy trì connection pool nội bộ (mặc định 2^31 connections)
+        - Khi process exit, pool KHÔNG tự đóng → Redis giữ clients trong CLIENT LIST
+        - Redis maxclients (mặc định 10000) sẽ bị exhaust sau nhiều deploys
+        - ElastiCache có thể tính phí cho idle connections
+        
+        Cơ chế:
+        - redis.close() đóng tất cả connections trong pool
+        - Gửi QUIT command tới Redis server
+        - Redis giải phóng client slot và file descriptors
+        """
+        if self._client is not None:
+            try:
+                self._client.close()
+                logger.info("Redis connection pool closed")
+            except Exception as e:
+                logger.error(
+                    "Failed to close Redis client",
+                    extra={"error": str(e)}
+                )
+            finally:
+                self._client = None

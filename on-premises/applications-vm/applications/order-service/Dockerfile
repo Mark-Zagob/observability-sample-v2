@@ -30,6 +30,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY shared/ ./shared/
 COPY order-service/app.py .
+COPY order-service/gunicorn.conf.py .
 
 # Health check
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
@@ -38,7 +39,5 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
 USER appuser
 
 EXPOSE 5001
-CMD ["gunicorn", "--workers", "2", "--threads", "8", "--worker-class", "gthread", \
-     "--bind", "0.0.0.0:5001", \
-     "--access-logfile", "-", "--timeout", "30", \
-     "--worker-tmp-dir", "/dev/shm", "app:app"]
+# 🌟 FIX BOMB #1: Dùng config file thay vì hardcode CLI args
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "--bind", "0.0.0.0:5001", "app:app"]

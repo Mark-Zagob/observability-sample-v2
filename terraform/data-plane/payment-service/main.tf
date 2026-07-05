@@ -81,6 +81,9 @@ module "payment_service" {
   cpu    = var.cpu
   memory = var.memory
 
+  # 🌟 FIX BOMB #1: Tăng thời gian chờ graceful shutdown
+  stop_timeout = 60
+
   # 🌟 BẬT OBSERVABILITY BRIDGE
   enable_adot_sidecar = true
   amp_endpoint        = data.aws_ssm_parameter.amp_endpoint.value
