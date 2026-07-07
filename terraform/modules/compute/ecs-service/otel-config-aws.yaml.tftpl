@@ -1,0 +1,132 @@
+# terraform/modules/compute/ecs-service/otel-config-aws.yaml.tftpl
+#--------------------------------------------------------------
+# ADOT Collector Configuration — Production-Grade
+# Template Variables: ${aws_region}, ${sampling_rate}
+#--------------------------------------------------------------
+
+extensions:
+  # 🛡️ SigV4 Auth: Dùng IAM Role của Task ký request lên AMP (Zero hardcoded keys)
+  sigv4auth:
+    service: "aps"
+    region: "${aws_region}"
+
+  # 🏥 HEALTH CHECK EXTENSION (MỚI)
+  # Expose HTTP endpoint tại localhost:13133 để ECS Agent probe.
+  # Nếu OTel Collector process bị deadlock/crash, endpoint này trả 503 -> ECS restart sidecar.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+    path: "/"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # 🛡️ APP RESILIENCE — Bảo vệ Sidecar khỏi OOM khi App spike
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+
+  # ⚡ BATCH — Gom telemetry lại trước khi export (giảm API calls, giảm chi phí)
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+  # 💰 FINOPS GUARDRAIL #1 — Drop health check probes (Cardinality Bomb)
+  filter/drop_health:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["http.route"] == "/health/live"'
+        - 'attributes["http.route"] == "/health/ready"'
+        - 'attributes["http.route"] == "/health"'
+    metrics:
+      datapoint:
+        - 'attributes["http.route"] == "/health/live"'
+        - 'attributes["http.route"] == "/health/ready"'
+        - 'attributes["http.route"] == "/health"'
+
+  # 💰 FINOPS GUARDRAIL #2 (MỚI) — Sampling Strategy
+  # - Giữ 100% traces có ERROR (để debug)
+  # - Chỉ giữ ${sampling_rate}% traces thành công (để tiết kiệm X-Ray cost)
+  # Khi traffic thấp (Phase 1-2), set sampling_rate = 100
+  # Khi traffic cao (Phase 4+), giảm xuống 10 hoặc 5
+  probabilistic_sampler:
+    sampling_percentage: ${sampling_rate}
+    # Hash seed đảm bảo cùng 1 trace luôn được sample thống nhất
+    # trên mọi services (Order -> Payment -> Worker đều quyết định giống nhau)
+    hash_seed: 22
+
+  # 🎯 ADVANCED: Tail-based Sampling (Optional — uncomment khi scale lớn)
+  # Giữ lại 100% traces có lỗi HOẶC latency > 2s, drop phần còn lại.
+  # Lưu ý: tail_sampling tốn RAM hơn vì phải buffer traces để quyết định.
+  # tail_sampling:
+  #   decision_wait: 10s       # Chờ 10s để collect toàn bộ spans của trace
+  #   num_traces: 1000         # Buffer tối đa 1000 traces
+  #   expected_new_traces_per_sec: 100
+  #   policies:
+  #     - name: errors-policy
+  #       type: status_code
+  #       status_code: {status_codes: [ERROR]}
+  #     - name: latency-policy
+  #       type: latency
+  #       latency: {threshold_ms: 2000}
+  #     - name: default-rate
+  #       type: probabilistic
+  #       probabilistic: {sampling_percentage: ${sampling_rate}}
+
+exporters:
+  # Traces -> AWS X-Ray
+  awsxray:
+    region: "${aws_region}"
+    # 🌟 Index tất cả attributes để query được trên X-Ray Console
+    index_all_attributes: true
+
+  # Metrics -> Amazon Managed Prometheus (AMP)
+  prometheusremotewrite:
+    endpoint: "${env:AMP_ENDPOINT}"
+    auth:
+      authenticator: sigv4auth
+    # 🌟 Biến resource attributes (service.name, service.version) thành labels
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  # 🏥 BẮT BUỘC: Khai báo health_check trong extensions list
+  extensions: [health_check, sigv4auth]
+
+  # 📋 Telemetry nội bộ của chính OTel Collector (self-monitoring)
+  telemetry:
+    logs:
+      level: "info"
+    metrics:
+      level: "basic"
+      address: "0.0.0.0:8888"  # OTel self-metrics endpoint
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # 🌟 THỨ TỰ PROCESSORS RẤT QUAN TRỌNG:
+      # 1. memory_limiter (bảo vệ RAM trước)
+      # 2. filter/drop_health (drop rác)
+      # 3. probabilistic_sampler (drop bớt để giảm cost)
+      # 4. batch (gom lại trước khi export)
+      processors:
+        - memory_limiter
+        - filter/drop_health
+        - probabilistic_sampler
+        - batch
+      exporters: [awsxray]
+
+    metrics:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - filter/drop_health
+        - batch
+      exporters: [prometheusremotewrite]

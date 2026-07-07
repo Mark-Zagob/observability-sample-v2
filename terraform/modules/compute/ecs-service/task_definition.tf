@@ -62,9 +62,12 @@ locals {
 
     environment = [
       {
-        name  = "AOT_CONFIG_CONTENT"
-        # Đọc file YAML ta vừa tạo ở Step 2 và nhúng trực tiếp vào Task Def
-        value = file("${path.module}/otel-config-aws.yaml")
+        name = "AOT_CONFIG_CONTENT"
+        # 🌟 RENDER TEMPLATE: inject aws_region và sampling_rate vào YAML
+        value = templatefile("${path.module}/otel-config-aws.yaml.tftpl", {
+          aws_region    = var.aws_region
+          sampling_rate = var.traces_sampling_rate
+        })
       },
       {
         name  = "AMP_ENDPOINT"
@@ -76,6 +79,8 @@ locals {
     portMappings = [
       { containerPort = 4317, protocol = "tcp" }, # OTLP gRPC
       { containerPort = 4318, protocol = "tcp" }, # OTLP HTTP
+      { containerPort = 13133, protocol = "tcp" }, # 🌟 Health check endpoint
+      { containerPort = 8888, protocol = "tcp" }   # 🌟 OTel self-metrics
     ]
 
     logConfiguration = {
@@ -87,13 +92,17 @@ locals {
       }
     }
     
-    # Health check cho chính Sidecar
+    # 🌟 REAL HEALTH CHECK (không còn dummy "echo 'health'")
     healthCheck = {
-      command     = ["CMD-SHELL", "echo 'health'"] # ADOT không có health endpoint chuẩn, dùng dummy
+      # Dùng wget (có sẵn trong ADOT image dựa trên Debian) để probe endpoint
+      command = [
+        "CMD-SHELL",
+        "wget --no-verbose --tries=1 --spider http://localhost:13133/ || exit 1"
+      ]
       interval    = 30
       timeout     = 5
       retries     = 3
-      startPeriod = 10
+      startPeriod = 60  # Chờ OTel collector khởi động xong (nó load config chậm hơn App)
     }
   }] : []
 

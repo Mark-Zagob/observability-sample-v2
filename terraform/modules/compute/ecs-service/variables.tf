@@ -194,3 +194,14 @@ variable "stop_timeout" {
     error_message = "stopTimeout must be between 30 and 120 seconds (AWS Fargate limit)."
   }
 }
+
+variable "traces_sampling_rate" {
+  description = "Percentage of traces to sample (0-100). Set 100 for dev/lab, 10 for prod."
+  type        = number
+  default     = 100
+  
+  validation {
+    condition     = var.traces_sampling_rate >= 0 && var.traces_sampling_rate <= 100
+    error_message = "traces_sampling_rate must be between 0 and 100."
+  }
+}

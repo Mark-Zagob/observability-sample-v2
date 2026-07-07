@@ -101,9 +101,11 @@ module "order_service" {
   # 🌟 FIX BOMB #1: Tăng thời gian chờ graceful shutdown
   stop_timeout = 60
 
-  # 🌟 BẬT OBSERVABILITY BRIDGE
-  enable_adot_sidecar = true
-  amp_endpoint        = data.aws_ssm_parameter.amp_endpoint.value
+  # 🌟 BẬT OBSERVABILITY BRIDGE với FinOps sampling
+  enable_adot_sidecar  = true
+  amp_endpoint         = data.aws_ssm_parameter.amp_endpoint.value
+  traces_sampling_rate = 100  # Phase 1.5: lấy 100% traces để debug. Phase 4: giảm xuống 10.
+
 
   # Environment Variables
   environment = {
