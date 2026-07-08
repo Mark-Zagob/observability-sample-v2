@@ -2349,7 +2349,13 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
 **Action Items:**
 
 - 📝 Backlog (Priority Medium): CloudWatch Metric Filter trên ADOT logs → đếm "Dropping data" → alarm khi rate > 0. Đây là meta-monitoring cho telemetry pipeline.
-- 📝 Backlog: Thêm ADOT self-metrics (`localhost:8888/metrics`) vào Prometheus scrape → dashboard cho `otelcol_process_memory_rss`, `otelcol_exporter_send_failed_spans`.
+- 📝 Backlog: Thêm ADOT self-metrics (`localhost:8888/metrics`) vào Prometheus scrape → dashboard cho `otelcol_process_memory_rss`, `otelcol_exporter_send_failed_spans`.  
+> 🛡️ Production Guardrail: Intelligent Drop (Tail-based Sampling)  
+Trong production, chúng ta KHÔNG drop mù quáng (blind drop). 
+Cần thêm `tail_sampling` processor vào `otel-config-aws.yaml.tftpl` ĐỨNG SAU `memory_limiter` và TRƯỚC `batch`:
+- Luôn giữ lại 100% traces có `status_code=ERROR` hoặc `latency > 2s`.
+- Chỉ sample 10% traces `OK` để tiết kiệm chi phí X-Ray.
+> Bài học SRE: "Drop data là chấp nhận được, nhưng drop blind là tội lỗi. Phải drop có chủ đích."
 
 ---
 
@@ -2593,7 +2599,14 @@ for l in resp.read().decode().split('\n'):
 
 - 📝 **Important:** Thêm ADOT self-metrics endpoint (`localhost:8888`) vào Prometheus/AMP scrape config → dashboard cho pipeline health.
 - 📝 **Backlog:** Implement Watchdog Pattern — một Lambda chạy mỗi 5 phút, query AMP cho metric `up{job="order-service"}`. Nếu không có data trong 10 phút → alert "Telemetry Pipeline Dead".
-
+- 🛡️ Production Guardrail: The Dead Man's Switch (Meta-Monitoring)
+Không tin tưởng tuyệt đối vào Log của Pipeline (vì khi pipeline nghẽn, log có thể bị FireLens drop).
+Action Item: Tạo một Lambda Function (Heartbeat) chạy định kỳ 5 phút nhờ EventBridge.
+Lambda dùng AWS SDK query thẳng vào AMP Workspace bằng PromQL: `count(up{job="order-service"})`.
+- Nếu query ra kết quả > 0 -> Push metric `PipelineHealth = 1` về CloudWatch.
+- Nếu Lambda fail / không có data -> Push `PipelineHealth = 0`.
+- CloudWatch Alarm: `PipelineHealth < 1` với `treat_missing_data = breaching`.
+> Bài học SRE: "Hệ thống giám sát phải có nhịp tim riêng. Khi nó im lặng, đó là dấu hiệu của cái chết."
 ---
 
 ## 🧪 Experiment 9: The Cardinality Bomb (FinOps Guardrail)
@@ -2835,7 +2848,10 @@ for l in resp.read().decode().split('\n'):
         - key: request_id
           action: delete
 ```
-
+- 🛡️ Production Guardrail: Shift-Left FinOps & Sanitize Labels
+Dev có thể vô tình gắn `user_id` (UUID) vào metric gây nổ hóa đơn AMP.
+1. Runtime Guardrail: Thêm `transform/sanitize_labels` processor vào ADOT config để dùng Regex xóa bỏ mọi label có dạng UUID (`user_id`, `session_id`, `request_id`) TRƯỚC khi metric được push lên AMP.
+2. FinOps Alarm: Tạo CloudWatch Alarm monitor metric `AWS/Usage` namespace, metric name `ActiveSeries`. Đặt threshold hard-limit (ví dụ: 10,000 series cho Lab) để alert sớm trước khi AWS tính tiền.
 ---
 
 ## 🧪 Experiment 10: The Zombie Sidecar (Non-Essential Container Death)
@@ -2852,6 +2868,15 @@ for l in resp.read().decode().split('\n'):
 **TTD target:** ∞ — Không có alert nào fire. Đây là blind spot nghiêm trọng nhất của Phase 1.5.
 
 ### ⚠️ Bẫy thường gặp
+- ⚠️ BẪY CHẾT NGƯỜI (THE ECS HEALTH CHECK ILLUSION):
+Nhiều SRE cấu hình block `healthCheck` cho ADOT Sidecar trong `task_definition.tf`:
+```
+  healthCheck = {
+    command = ["CMD-SHELL", "wget ... http://localhost:13133/ || exit 1"]
+  }
+```
+- 🚨 SỰ THẬT PHŨ PHÀNG: ECS KHÔNG BAO GIỜ restart một container dựa trên block `healthCheck` này! 
+Khác với Kubernetes (nơi `livenessProbe` fail sẽ giết Pod), block `healthCheck` của ECS chỉ mang tính chất Informational (báo cáo `HEALTHY`/`UNHEALTHY` lên Console). Nếu ADOT bị crash process nhưng container vẫn sống (zombie), `wget` sẽ fail, ECS báo `UNHEALTHY`, nhưng Task vẫn RUNNING và ECS không làm gì cả.
 
 - ❌ Nghĩ rằng ECS sẽ auto-restart non-essential container → SAI. ECS chỉ restart containers thông qua service-level mechanisms (ALB health check → task replacement), không phải container-level.
 - ❌ Dùng `aws ecs stop-task` → dừng TOÀN BỘ task (cả app) → không phải experiment này.
@@ -3070,18 +3095,12 @@ aws ecs describe-tasks --cluster $CLUSTER --tasks $NEW_TASK_ARN \
 
 **Action Items:**
 
-📝 **Critical — Decision Required:** Đổi `essential = true` cho ADOT sidecar?
-
-| Option | Pros | Cons |
-|--------|------|------|
-| `essential = false` (hiện tại) | App sống khi sidecar crash | Telemetry mất vĩnh viễn, không auto-restart |
-| `essential = true` (đề xuất) | Sidecar crash → task restart → sidecar mới | App bị restart theo (downtime ~30s) |
-
-**Recommendation:** Đổi sang `essential = true` khi:
-
-- Telemetry là critical cho SLO monitoring
-- App có `graceful_timeout = 25s` (đã có trong `gunicorn.conf.py`) → restart nhanh, mất ít request
-- Circuit Breaker sẽ rollback nếu sidecar liên tục crash
+- ✅ KEEP `essential = false` (Bảo vệ App khỏi bị kéo chết theo khi ADOT bị OOM do Trace Storm).
+- ✅ IMPLEMENT "App-level Watchdog" (Suicide Pattern):
+    - App (Python) sẽ tự spawn một background thread định kỳ 30s ping `http://localhost:13133/` (ADOT Health Extension). 
+    - Nếu ping fail 3 lần liên tiếp, App tự gọi `os._exit(1)`. 
+    - Lúc này, App container (vốn là `essential = true`) chết -> ECS Service Scheduler lập tức phát hiện `EssentialContainerExited` -> Spawn một Task mới hoàn toàn (App mới + Sidecar mới).
+> Triết lý: "App mù với việc data được lưu ở đâu, nhưng phải tỉnh táo để biết các thành phần local của nó có đang sống sót hay không."
 
 - 📝 **Important:** CloudWatch Metric Filter trên ECS Container Insights:
 

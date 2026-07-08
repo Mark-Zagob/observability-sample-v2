@@ -28,7 +28,7 @@ from shared.health import create_health_blueprint
 from shared.errors import problem_response
 from shared.shutdown_handler import shutdown_manager
 from shared.idempotency import IdempotencyGuard
-
+#from shared.otel_watchdog import start_otel_watchdog / add watchdog
 # Auto-instrumentation
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
@@ -237,4 +237,6 @@ def charge():
         return jsonify(result)
 
 if __name__ == "__main__":
+    # Chỉ chạy watchdog khi app thực sự chạy (tránh chạy 2 lần do Flask reloader)
+    #start_otel_watchdog(interval=30, max_failures=3)
     app.run(host="0.0.0.0", port=5002)

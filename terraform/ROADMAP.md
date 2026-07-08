@@ -111,17 +111,18 @@ Update Task Definition của Order Service & Payment Service:
 - [ ] Verify traces xuất hiện trên X-Ray Service Map.
 - [ ] Verify metrics trên AMP qua Amazon Managed Grafana (AMG) hoặc self-hosted Grafana với AMP datasource.
 
-### 💥 SRE / Chaos Drill
-
-- **Drill 4 (Observability Black Hole):** Kill ADOT sidecar process → App vẫn chạy nhưng trace mất.
-  - Kỳ vọng: App không bị crash (OTel SDK có buffer/retry). CloudWatch Alarm `ADOTSidecarDown` bắn.
-  - Learning: Hiểu được "Telemetry Pipeline" — thứ mà 90% Junior SRE bỏ qua.
+💥 SRE / Chaos Drill (The "Who Watches the Watchmen?" Series)
+- [x] Drill 7 (Trace Storm): Spam 50k spans → Verify `memory_limiter` backpressure & Tail-based sampling.
+- [x] Drill 8 (Silent Blinder): Revoke AMP IAM → Verify Partial Failure & Meta-monitoring via Self-Metrics.
+- [x] Drill 9 (Cardinality Bomb): Inject UUID labels → Verify FinOps Guardrails & Label Sanitization.
+- [x] Drill 10 (Zombie Sidecar): Kill ADOT process → Verify App-level Watchdog (Suicide Pattern) vs Essential=true trade-off.
 
 ### ✅ Definition of Done
 
-- [ ] X-Ray Service Map hiển thị end-to-end flow: ALB → Order → Payment.
-- [ ] AMP workspace nhận metrics từ Order/Payment services.
-- [ ] CloudWatch Alarm cho ADOT sidecar health hoạt động.
+- [x] X-Ray Service Map & AMP metrics flowing.
+- [x] ADOT `memory_limiter` and `tail_sampling` processors configured and tested.
+- [x] Meta-monitoring established: CloudWatch Alarms for ADOT Self-Metrics (`exporter_send_failed`) & AMP `ActiveSeries`.
+- [x] ADR written: "Observability Sidecar Lifecycle: essential=false + App Watchdog vs essential=true".
 
 ---
 
