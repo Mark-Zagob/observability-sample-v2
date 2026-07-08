@@ -2075,7 +2075,1024 @@ print(f'DNS restored: payment-service.ecommerce.local → {ip}')
 4. 📝 **Backlog:** Evaluate chuyển sang ALB-backed services (có built-in health check) cho critical services.
 
 ---
+# ============================================================
+# PHASE 1.5: OBSERVABILITY BRIDGE — CHAOS DRILLS
+# ============================================================
+#
+# Triết lý của Phase 1.5:
+#   "Telemetry Pipeline là một distributed system khác."
+#
+# Nếu Phase 1 test "App có chết không?", thì Phase 1.5 test:
+#   - "Khi App spam telemetry, pipeline có tự bảo vệ không?"
+#   - "Khi pipeline chết, App có bị vạ lây không?"
+#   - "Khi pipeline câm lặng, ta có BIẾT nó đang chết không?"
+#
+# Common theme: Mọi experiment trong Phase 1.5 đều KHÔNG trigger
+# Telegram alert — đây chính là bài học lớn nhất:
+#   🚨 "Who watches the watchmen?" — Chưa ai cả. Đó là gap cần fix.
+# ============================================================
 
+## 🔭 Phase 1.5 Pre-flight Checklist (Observability Pipeline)
+
+Chạy TRƯỚC mọi experiment trong Phase 1.5. Đảm bảo telemetry pipeline đang KHỎE.
+
+```bash
+# 1. Verify ADOT sidecar đang RUNNING trong task
+CLUSTER=obs-cluster
+SERVICE=order-service
+TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER --service-name $SERVICE \
+  --query 'taskArns[0]' --output text)
+
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].containers[].{Name:name,Status:lastStatus,Health:healthStatus,ExitCode:exitCode}' \
+  --output table
+# ✅ Kỳ vọng: 2 containers — order-service (RUNNING/HEALTHY) + aws-otel-collector (RUNNING/HEALTHY)
+
+# 2. Verify ADOT health check endpoint (từ TRONG container app)
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:13133/').read().decode())\""
+# ✅ Kỳ vọng: {"status":"Server available","up_since":"...","uptime":"..."}
+
+# 3. Verify AMP workspace đang nhận data (check active series)
+WORKSPACE_ID=$(aws ssm get-parameter \
+  --name "/obs/lab/observability/amp_workspace_id" \
+  --query 'Parameter.Value' --output text)
+
+aws amp list-workspaces --query "workspaces[?workspaceId=='$WORKSPACE_ID'].{Status:status}" \
+  --output table
+# ✅ Kỳ vọng: Status = ACTIVE
+
+# 4. Verify X-Ray đang nhận traces (check sampling rules)
+aws xray get-sampling-rules --query 'SamplingRuleRecords[0].SamplingRule.{RuleName:RuleName,Rate:FixedRate}' \
+  --output table
+# ✅ Kỳ vọng: Rule tồn tại
+
+# 5. Verify IAM policy cho AMP RemoteWrite
+TASK_ROLE_NAME=$(aws ssm get-parameter \
+  --name "/obs/lab/security/ecs_task_role_name" \
+  --query 'Parameter.Value' --output text)
+
+aws iam list-role-policies --role-name $TASK_ROLE_NAME \
+  --query 'PolicyNames[?contains(@, `amp`)]' --output table
+# ✅ Kỳ vọng: Có policy chứa "amp" trong tên
+```
+
+❌ Nếu BẤT KỲ check nào fail → DỪNG LẠI. Fix pipeline trước khi drill.
+
+---
+
+## 🧪 Experiment 7: The Trace Storm (Sidecar Resource Contention)
+
+**SEV-4** | **Blast Radius:** 1 ECS Task (in-place) | **Thời gian:** ~15 phút
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu **Backpressure mechanism** của OTel Collector: `memory_limiter` processor bảo vệ sidecar khỏi OOM khi app spam telemetry.
+- Kiểm chứng **Failure Isolation**: `essential = false` + `BatchSpanProcessor` (non-blocking) đảm bảo App KHÔNG bao giờ bị crash bởi chính telemetry của mình.
+- Quan sát trực tiếp **Resource Contention** giữa App và Sidecar trong cùng một Fargate Task (dùng chung CPU/RAM pool).
+- Hiểu tại sao thứ tự processors trong OTel config lại QUAN TRỌNG: `memory_limiter` PHẢI đứng đầu tiên.
+
+**TTD target:** Không có Telegram alert (đây là expected behavior — hệ thống tự xử lý).
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Chạy storm script quá lâu (> 5 phút) → ADOT buffer đầy → drop spans → tưởng pipeline hỏng.
+- ❌ Nhìn ADOT RAM tăng → hoảng → restart task → mất bằng chứng.
+- ❌ Nhầm `SimpleSpanProcessor` (blocking) với `BatchSpanProcessor` (non-blocking) → script storm bị block, tưởng app bị ảnh hưởng.
+
+### 🛑 Phase 0: Pre-flight Check
+
+```bash
+# Chạy Phase 1.5 Pre-flight Checklist ở trên
+# Đảm bảo ADOT sidecar RUNNING + HEALTHY
+
+# Ghi nhận baseline RAM của sidecar
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].containers[?name==`aws-otel-collector`].{Name:name,Status:lastStatus}' \
+  --output table
+```
+
+✅ Kỳ vọng: `aws-otel-collector = RUNNING`.
+
+### 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 1. Ghi nhận ADOT self-metrics TRƯỚC storm (port 8888)
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request, json
+resp = urllib.request.urlopen('http://localhost:8888/metrics')
+lines = resp.read().decode().split('\n')
+# Filter for memory-related metrics
+for l in lines:
+    if 'otelcol_process_memory' in l or 'otelcol_exporter_sent' in l:
+        print(l)
+\""
+# 📝 Ghi lại: baseline memory = ___MB, sent_spans = ___
+
+# 2. Mở 3 terminals song song (chuẩn bị cho Phase 3)
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: ADOT healthy, memory = ___MB.
+
+### 💥 Phase 2: Inject Failure (The Trace Storm)
+
+Dùng ECS Exec vào app container (KHÔNG phải sidecar), chạy script Python tạo 50,000 spans càng nhanh càng tốt. Script tạo OTel SDK instance riêng, push thẳng vào `localhost:4317` (ADOT gRPC endpoint).
+
+```bash
+# Terminal 1: Inject — chạy trace storm generator
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry import trace
+import time
+
+# Tạo TracerProvider RIÊNG cho storm test (không ảnh hưởng app)
+tp = TracerProvider()
+# SimpleSpanProcessor = push ngay lập tức, không batch → maximum pressure
+tp.add_span_processor(SimpleSpanProcessor(
+    OTLPSpanExporter(endpoint='localhost:4317', insecure=True)
+))
+trace.set_tracer_provider(tp)
+t = trace.get_tracer('storm-generator')
+
+print('🌊 Starting trace storm: 50,000 spans...')
+start = time.time()
+for i in range(50000):
+    with t.start_as_current_span('storm-span') as sp:
+        sp.set_attribute('storm.index', i)
+        sp.set_attribute('storm.type', 'trace-storm-drill')
+        # Thêm padding để tăng payload size (~200 bytes/span)
+        for j in range(5):
+            sp.set_attribute(f'storm.padding.{j}', 'X' * 50)
+    if i % 10000 == 0 and i > 0:
+        elapsed = time.time() - start
+        rate = i / elapsed
+        print(f'  ⚡ {i:>6} spans | {elapsed:.1f}s | {rate:.0f} spans/sec')
+
+elapsed = time.time() - start
+print(f'✅ Done: 50,000 spans in {elapsed:.1f}s ({50000/elapsed:.0f} spans/sec)')
+\""
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: 50,000 spans burst via SimpleSpanProcessor.
+
+### 🔍 Phase 3: Observe & Triage (The Investigation)
+
+Mở 3 terminals song song:
+
+**Terminal 2: Watch ADOT Sidecar Logs (The Defense)**
+
+```bash
+LOG_GROUP="/ecs/otel-sidecar"  # Adjust to your actual log group
+aws logs tail $LOG_GROUP --since 5m --format short --follow
+```
+
+👁️ **The SRE Lens** — Bạn sẽ thấy chuỗi events này:
+
+```
+[INFO]  otelcol@0.1.0 — Received span batch  {"spans": 1024}
+[WARN]  memorylimiter — Memory usage is above limit. Dropping data.
+        {"cur_mem_mib": 135, "limit_mib": 128, "spike_limit_mib": 32}
+[WARN]  memorylimiter — Dropping spans due to memory pressure.
+        {"dropped_spans": 4521}
+[INFO]  memorylimiter — Memory usage recovered below limit.
+        {"cur_mem_mib": 95, "limit_mib": 128}
+```
+
+💡 **THE "AHA!" MOMENT:**
+
+`memory_limiter` hoạt động như một van xả áp suất:
+
+- Khi RAM ADOT vượt 128 MiB (`limit_mib`) → bắt đầu drop spans
+- Drop KHÔNG gây crash — ADOT vẫn sống, chỉ từ chối nhận thêm data
+- Khi RAM giảm xuống dưới threshold → nhận data trở lại
+
+Đây là **Backpressure pattern** — pipeline tự bảo vệ mình thay vì chết và kéo theo app.
+
+**Terminal 3: Watch App Health (The Isolation Proof)**
+
+```bash
+# Liên tục gọi health check của app — PHẢI trả 200 suốt storm
+while true; do
+  STATUS=$(aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+    --container order-service --interactive \
+    --command "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5001/health/live').status)\"" \
+    --output text 2>/dev/null)
+  echo "$(date +%H:%M:%S) — App health: $STATUS"
+  sleep 5
+done
+```
+
+👁️ **Kết quả:** `App health: 200` — liên tục, không gián đoạn.
+
+💡 **Tại sao App không bị ảnh hưởng?** 3 lớp bảo vệ hoạt động đồng thời:
+
+| Lớp | Cơ chế | Code |
+|-----|--------|------|
+| 1. App SDK | `BatchSpanProcessor` gom spans vào queue nội bộ. Khi queue đầy → drop spans, KHÔNG block app thread. | `shared/otel_setup.py` |
+| 2. ADOT Sidecar | `memory_limiter` từ chối nhận data khi RAM > 128 MiB. App SDK nhận lỗi → drop. | `otel-config-aws.yaml.tftpl` |
+| 3. ECS Fargate | `essential = false` — nếu sidecar crash, ECS KHÔNG giết app. | `task_definition.tf` |
+
+**Terminal 1 (sau khi storm xong): Verify X-Ray received traces**
+
+```bash
+# Check X-Ray trace count trong 5 phút vừa qua
+aws xray get-trace-summaries \
+  --start-time $(date -u -d '5 min ago' +%FT%TZ) \
+  --end-time $(date -u +%FT%TZ) \
+  --filter-expression 'service.id(name: "storm-generator")' \
+  --query '{TotalCount:ApproximateTotalCount, Traces: length(TraceSummaries)}' \
+  --output json
+```
+
+👁️ **Kết quả:** X-Ray nhận được một phần spans (không phải toàn bộ 50,000). Phần còn lại bị `memory_limiter` drop.
+
+📝 **Ghi vào notebook:**
+
+```
+[HH:MM:SS] Inject: 50,000 spans burst started
+[HH:MM:SS] ADOT log: memory_limiter WARN — dropping data
+[HH:MM:SS] App health: 200 (unaffected throughout)
+[HH:MM:SS] Storm completed in ___s (___ spans/sec)
+[HH:MM:SS] X-Ray received: ___ traces (partial — expected)
+[HH:MM:SS] Telegram: NO alert (expected — system self-healed)
+```
+
+### 🔄 Phase 4: Rollback & Recovery
+
+Không cần rollback — storm script tự kết thúc. ADOT `memory_limiter` tự phục hồi khi RAM giảm.
+
+```bash
+# Verify ADOT đã phục hồi (health check OK)
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:13133/').read().decode())\""
+# ✅ Kỳ vọng: {"status":"Server available", ...}
+```
+
+### 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---------|---------|
+| 1. What happened? | App tạo 50,000 spans/sec → ADOT RAM tăng vượt 128 MiB. |
+| 2. Why didn't ADOT crash (OOM Kill)? | `memory_limiter` processor drop spans khi RAM vượt threshold. |
+| 3. Why didn't App crash? | `BatchSpanProcessor` trong OTel SDK là non-blocking. Queue đầy → drop, không block app thread. |
+| 4. Why is processor ORDER important? | `memory_limiter` PHẢI đứng đầu pipeline. Nếu đứng sau batch, data đã được buffer vào RAM trước khi limiter kịp chặn. |
+| 5. Systemic Gap? | Không có alert khi `memory_limiter` drop data. Team không biết telemetry bị mất một phần. |
+
+**Action Items:**
+
+- 📝 Backlog (Priority Medium): CloudWatch Metric Filter trên ADOT logs → đếm "Dropping data" → alarm khi rate > 0. Đây là meta-monitoring cho telemetry pipeline.
+- 📝 Backlog: Thêm ADOT self-metrics (`localhost:8888/metrics`) vào Prometheus scrape → dashboard cho `otelcol_process_memory_rss`, `otelcol_exporter_send_failed_spans`.
+
+---
+
+## 🧪 Experiment 8: The Silent Blinder (Telemetry Pipeline Blackhole)
+
+**SEV-2** | **Blast Radius:** 1 ECS Service (telemetry only) | **Thời gian:** ~20 phút
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu "Who watches the watchmen?" — bài toán meta-monitoring mà 90% team bỏ qua.
+- Phân biệt **Partial Telemetry Failure**: cắt `aps:RemoteWrite` → metrics mất nhưng traces (X-Ray) vẫn sống.
+- Khám phá **Blind Spot** lớn nhất của Phase 1.5: không có alarm nào fire khi pipeline câm lặng.
+- Hiểu cơ chế **SigV4 authentication** của ADOT: mỗi request được ký bằng IAM credentials của Task Role. Mất quyền = mất tất cả.
+
+**TTD target:** ∞ (infinity) — KHÔNG có alert nào fire. Đây chính là bài học.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Cắt NHẦM policy (gỡ cả X-Ray permissions) → không thấy được partial failure pattern.
+- ❌ Force deploy sau khi gỡ policy → task mới có thể fail nếu execution role cũng bị ảnh hưởng. (Experiment này CHỈ gỡ inline policy trên Task Role, không ảnh hưởng execution role.)
+- ❌ Mở X-Ray Console thấy traces vẫn có → kết luận "pipeline OK" → bỏ lỡ việc metrics đã mất hoàn toàn.
+
+### 🛑 Phase 0: Pre-flight Check
+
+```bash
+# Chạy Phase 1.5 Pre-flight Checklist
+# Đặc biệt verify:
+#   - ADOT sidecar RUNNING + HEALTHY
+#   - AMP workspace ACTIVE
+#   - IAM policy "amp-remote-write" tồn tại trên Task Role
+
+TASK_ROLE_NAME=$(aws ssm get-parameter \
+  --name "/obs/lab/security/ecs_task_role_name" \
+  --query 'Parameter.Value' --output text)
+echo "Task Role: $TASK_ROLE_NAME"
+
+# List inline policies
+aws iam list-role-policies --role-name $TASK_ROLE_NAME \
+  --query 'PolicyNames' --output table
+# ✅ Kỳ vọng: Có policy tên "obs-ecs-task-amp-remote-write" (hoặc tương tự)
+```
+
+### 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 1. Ghi nhận policy ARN và nội dung hiện tại
+POLICY_NAME=$(aws iam list-role-policies --role-name $TASK_ROLE_NAME \
+  --query 'PolicyNames[?contains(@, `amp`)]' --output text)
+echo "Policy Name: $POLICY_NAME"
+
+# 2. Backup policy document (để rollback nếu cần)
+aws iam get-role-policy --role-name $TASK_ROLE_NAME --policy-name $POLICY_NAME \
+  --query 'PolicyDocument' --output json > /tmp/amp-policy-backup.json
+cat /tmp/amp-policy-backup.json
+# 📝 Lưu lại nội dung policy
+
+# 3. Verify metrics đang flow vào AMP (generate 1 request để tạo metric)
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5001/health/live').status)\""
+# ✅ Kỳ vọng: 200
+
+# 4. Check ADOT self-metrics — exporter status
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request
+resp = urllib.request.urlopen('http://localhost:8888/metrics')
+for l in resp.read().decode().split('\n'):
+    if 'exporter_sent' in l or 'exporter_send_failed' in l:
+        print(l)
+\""
+# 📝 Ghi lại: sent_metrics = ___, send_failed = 0
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: AMP policy attached, metrics flowing, send_failed = 0.
+
+### 💥 Phase 2: Inject Failure (The IAM Blackhole for Telemetry)
+
+Gỡ inline policy `aps:RemoteWrite` khỏi Task Role. ADOT sidecar sẽ nhận `AccessDenied` khi cố gắng push metrics vào AMP.
+
+```bash
+# Gỡ policy — ADOT mất quyền RemoteWrite vào AMP
+aws iam delete-role-policy \
+  --role-name $TASK_ROLE_NAME \
+  --policy-name $POLICY_NAME
+
+echo "⏰ $(date +%H:%M:%S) — Removed AMP RemoteWrite policy from Task Role"
+echo "⚠️  IAM changes propagate in ~5-10 seconds. Next metric export cycle (10s) will fail."
+```
+
+⚠️ KHÔNG force deploy. IAM policy changes có hiệu lực ngay lập tức cho các API calls mới. ADOT sidecar đang chạy sẽ nhận `AccessDenied` ở lần export tiếp theo (mỗi 10 giây theo config `export_interval_millis: 10000`).
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: Removed `aps:RemoteWrite` policy from Task Role.
+
+### 🔍 Phase 3: Observe & Triage (The Investigation)
+
+Mở 3 terminals:
+
+**Terminal 1: Watch ADOT Logs (The Error Trail)**
+
+```bash
+LOG_GROUP="/ecs/otel-sidecar"
+aws logs tail $LOG_GROUP --since 1m --format short --follow
+```
+
+👁️ **The SRE Lens** — Sau ~10-15 giây, bạn sẽ thấy:
+
+```
+[ERROR] prometheusremotewrite — Failed to export metrics
+  {"error": "AccessDeniedException: User: arn:aws:sts::...:assumed-role/... is not authorized to perform: aps:RemoteWrite on resource: ..."}
+[ERROR] prometheusremotewrite — Failed to export metrics
+  {"error": "AccessDeniedException: ...", "dropped_metrics": 42}
+[ERROR] prometheusremotewrite — Failed to export metrics  (repeats every 10s)
+```
+
+💡 **Partial Failure Pattern:**
+
+Chỉ metrics bị ảnh hưởng. Traces (X-Ray) vẫn hoạt động bình thường vì:
+
+- Metrics exporter dùng `aps:RemoteWrite` → DENIED
+- Traces exporter dùng `xray:PutTraceSegments` → vẫn ALLOWED (policy khác)
+
+Đây là thực tế phổ biến trong production: telemetry pipeline KHÔNG fail toàn bộ — nó fail từng phần, khiến việc phát hiện càng khó hơn.
+
+**Terminal 2: Verify App Still Healthy (The Isolation)**
+
+```bash
+# App hoàn toàn không biết gì về việc telemetry bị mất
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request, json
+# Health check
+r1 = urllib.request.urlopen('http://localhost:5001/health/live')
+print(f'App health: {r1.status}')
+# Business endpoint
+r2 = urllib.request.urlopen('http://localhost:5001/products')
+data = json.loads(r2.read().decode())
+print(f'Products: {len(data.get(\"products\", []))} items, source: {data.get(\"source\")}')
+\""
+```
+
+👁️ **Kết quả:** `App health: 200`, `Products: 5 items` — App hoạt động hoàn toàn bình thường.
+
+**Terminal 3: Check CloudWatch Alarms (The Blind Spot)**
+
+```bash
+aws cloudwatch describe-alarms \
+  --alarm-names obs-lab-order-service-memory-high \
+                obs-lab-order-service-cpu-high \
+                obs-lab-order-service-running-task-low \
+                obs-lab-order-service-app-error-rate \
+  --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' \
+  --output table
+```
+
+👁️ **Kết quả:** TẤT CẢ alarms đều OK.
+
+🚨 **THE "AHA!" MOMENT — The Silent Blinder:**
+
+| Signal | Status | Giải thích |
+|--------|--------|-----------|
+| ECS Task | RUNNING | App + sidecar đều alive |
+| Memory/CPU | OK | Không có resource pressure |
+| App Error Rate | OK | App không có lỗi |
+| EventBridge | No event | Không có task stop, không có deployment fail |
+| Telegram | Silence | KHÔNG có alert nào |
+
+**Kết luận:** Hệ thống đang mù hoàn toàn về metrics, nhưng KHÔNG AI BIẾT. Nếu đây là production:
+
+- Grafana dashboards trống trơn
+- SLO burn rate không tính được
+- Alerting rules không fire
+- Team chỉ phát hiện khi user báo cáo sự cố và mở dashboard thấy... không có data
+
+📝 **Ghi vào notebook:**
+
+```
+[HH:MM:SS] Inject: Removed AMP RemoteWrite policy
+[HH:MM:SS] ADOT log: AccessDenied errors start (every 10s)
+[HH:MM:SS] App health: 200 (unaffected)
+[HH:MM:SS] X-Ray traces: STILL flowing (partial failure!)
+[HH:MM:SS] CloudWatch Alarms: ALL OK
+[HH:MM:SS] Telegram: NO alert — Blind Spot confirmed
+[HH:MM:SS] TTD = ∞ (never detected by existing monitoring)
+```
+
+### 🔄 Phase 4: Rollback & Recovery
+
+Dùng Terraform để heal (giống Experiment 1):
+
+```bash
+cd terraform/control-plane/lab
+terraform apply -auto-approve
+# Terraform sẽ tái tạo inline policy trên Task Role
+```
+
+Verify recovery:
+
+```bash
+# Đợi ~30s cho IAM propagation + 1 export cycle
+sleep 30
+
+# Check ADOT logs — errors should stop
+aws logs tail $LOG_GROUP --since 1m --format short | tail -5
+# ✅ Kỳ vọng: Không còn AccessDenied errors
+
+# Check ADOT self-metrics — send_failed should drop to 0
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request
+resp = urllib.request.urlopen('http://localhost:8888/metrics')
+for l in resp.read().decode().split('\n'):
+    if 'exporter_send_failed' in l:
+        print(l)
+\""
+# ✅ Kỳ vọng: send_failed_metrics = 0 (hoặc không tăng thêm)
+```
+
+### 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---------|---------|
+| 1. What happened? | Mất `aps:RemoteWrite` permission → ADOT không push được metrics vào AMP. |
+| 2. Why didn't the app notice? | OTel SDK fire-and-forget. Export failure chỉ log warning, không ảnh hưởng app logic. |
+| 3. Why was it a PARTIAL failure? | Metrics (AMP) và Traces (X-Ray) dùng IAM permissions KHÁC NHAU. Mất 1 cái, cái kia vẫn sống. |
+| 4. Why didn't any alarm fire? | Không có alarm nào monitor telemetry pipeline health. Tất cả alarms chỉ monitor app + infra. |
+| 5. Systemic Gap? | Meta-monitoring missing. Cần giám sát chính pipeline: ADOT export success rate, self-metrics, log error rate. |
+
+**Action Items:**
+
+- 📝 **Critical (Phase 1.5 follow-up):** CloudWatch Metric Filter trên ADOT Log Group:
+
+```
+  Filter pattern: "AccessDeniedException" OR "Failed to export"
+  → CloudWatch Metric: "ADOTExportFailures"
+  → Alarm: ADOTExportFailures > 0 for 2 minutes → Telegram CRITICAL
+```
+
+- 📝 **Important:** Thêm ADOT self-metrics endpoint (`localhost:8888`) vào Prometheus/AMP scrape config → dashboard cho pipeline health.
+- 📝 **Backlog:** Implement Watchdog Pattern — một Lambda chạy mỗi 5 phút, query AMP cho metric `up{job="order-service"}`. Nếu không có data trong 10 phút → alert "Telemetry Pipeline Dead".
+
+---
+
+## 🧪 Experiment 9: The Cardinality Bomb (FinOps Guardrail)
+
+**SEV-3** | **Blast Radius:** 1 AMP Workspace (cost impact) | **Thời gian:** ~15 phút
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu **Cardinality** — khái niệm quan trọng nhất trong Prometheus/AMP mà Junior SRE thường bỏ qua.
+- Thấy trực tiếp cách một label có giá trị unique (như `user_id`) tạo ra hàng nghìn time series mới.
+- Hiểu **Cost Model** của AMP: $0.03/10,000 samples ingested. High cardinality = cost explosion.
+- Đánh giá hiệu quả của `filter` processor hiện tại — nó chỉ drop theo route, KHÔNG drop theo label cardinality.
+
+**TTD target:** ∞ — Không có alert nào fire cho cardinality explosion.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Chạy bomb quá lâu (> 2 phút) → AMP ingest hàng triệu samples → hóa đơn thực tế tăng.
+- ❌ Nhầm time series (unique label combination) với samples (data points). 10,000 series × 1 sample/10s = 60,000 samples/hour.
+- ❌ Quên rollback → bomb script chạy lại ở lần deploy sau.
+
+### 🛑 Phase 0: Pre-flight Check
+
+```bash
+# Chạy Phase 1.5 Pre-flight Checklist
+# Đặc biệt verify AMP workspace đang ACTIVE
+
+# Check current active series count (baseline)
+aws amp describe-workspace --workspace-id $WORKSPACE_ID \
+  --query 'workspace.{Status:status, Alias:alias}' --output table
+```
+
+### 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 1. Ghi nhận ADOT filter config hiện tại
+# (Đọc từ task definition environment variable)
+aws ecs describe-task-definition \
+  --task-definition $(aws ecs describe-services --cluster $CLUSTER \
+    --services order-service --query 'services[0].taskDefinition' --output text) \
+  --query 'taskDefinition.containerDefinitions[?name==`aws-otel-collector`].environment[?name==`AOT_CONFIG_CONTENT`].value' \
+  --output text | grep -A 5 "filter"
+# 📝 Ghi lại: filter/drop_health chỉ drop theo http.route
+
+# 2. Generate 1 normal request để có baseline metric
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/products')\""
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: filter config noted, normal metrics flowing.
+
+### 💥 Phase 2: Inject Failure (The Cardinality Bomb)
+
+Dùng ECS Exec chạy script Python tạo metric với high-cardinality labels (mỗi sample có `user_id` = UUID khác nhau).
+
+```bash
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry import metrics
+import uuid, time
+
+# Tạo MeterProvider riêng cho bomb test
+reader = PeriodicExportingMetricReader(
+    OTLPMetricExporter(endpoint='localhost:4317', insecure=True),
+    export_interval_millis=5000  # Export mỗi 5s
+)
+mp = MeterProvider(metric_readers=[reader])
+metrics.set_meter_provider(mp)
+meter = metrics.get_meter('cardinality-bomb-test')
+counter = meter.create_counter('test.cardinality.bomb.total')
+
+print('💣 Starting Cardinality Bomb: 5,000 unique time series...')
+print('   Each series = unique (user_id, session_id) combination')
+start = time.time()
+for i in range(5000):
+    # 🚨 HIGH CARDINALITY: mỗi iteration tạo 1 time series MỚI
+    counter.add(1, {
+        'user_id': str(uuid.uuid4()),       # ← UUID = infinite cardinality
+        'session_id': str(uuid.uuid4()),    # ← UUID = infinite cardinality
+        'service': 'cardinality-bomb-test',
+        'environment': 'drill'
+    })
+    if i % 1000 == 0 and i > 0:
+        elapsed = time.time() - start
+        print(f'  💥 {i:>5} unique series created ({elapsed:.1f}s)')
+
+# Chờ 2 export cycles để ADOT push data lên AMP
+print('⏳ Waiting 15s for 3 export cycles...')
+time.sleep(15)
+elapsed = time.time() - start
+print(f'✅ Bomb complete: 5,000 unique series in {elapsed:.1f}s')
+print('⚠️  Each series will continue exporting every 5s until meter is destroyed.')
+\""
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: 5,000 unique time series with UUID labels.
+
+### 🔍 Phase 3: Observe & Triage (The Investigation)
+
+**Terminal 1: Watch ADOT Logs (Processing Overhead)**
+
+```bash
+aws logs tail /ecs/otel-sidecar --since 1m --format short --follow
+```
+
+👁️ Bạn có thể thấy ADOT vẫn export bình thường — nó KHÔNG biết rằng labels có cardinality cao. OTel Collector không có built-in cardinality limiter (ở phiên bản hiện tại).
+
+**Terminal 2: Calculate Cost Impact (The FinOps Lens)**
+
+```bash
+# Tính toán chi phí nếu bomb này chạy liên tục trong production
+python3 -c "
+series = 5000
+export_interval = 10  # seconds (from ADOT config)
+samples_per_hour = series * (3600 / export_interval)
+cost_per_10k = 0.03  # USD per 10,000 samples (AMP pricing)
+hourly_cost = (samples_per_hour / 10000) * cost_per_10k
+monthly_cost = hourly_cost * 24 * 30
+
+print('💰 Cardinality Bomb Cost Analysis:')
+print(f'   Active series:        {series:,}')
+print(f'   Samples/hour:         {samples_per_hour:,.0f}')
+print(f'   Hourly cost:          \${hourly_cost:.2f}')
+print(f'   Monthly cost:         \${monthly_cost:.2f}')
+print(f'')
+print(f'   ⚠️  Nếu Dev gắn user_id vào 10 metrics khác nhau:')
+print(f'   Monthly cost × 10 =   \${monthly_cost * 10:.2f}')
+print(f'')
+print(f'   So sánh: 10 normal metrics (low cardinality) ≈ \$0.50/month')
+print(f'   Cardinality bomb = {monthly_cost * 10 / 0.50:.0f}x cost increase!')
+"
+```
+
+👁️ **Kết quả (ước tính):**
+
+```
+💰 Cardinality Bomb Cost Analysis:
+   Active series:        5,000
+   Samples/hour:         1,800,000
+   Hourly cost:          $5.40
+   Monthly cost:         $3,888.00
+
+   ⚠️  Nếu Dev gắn user_id vào 10 metrics khác nhau:
+   Monthly cost × 10 =   $38,880.00
+
+   So sánh: 10 normal metrics (low cardinality) ≈ $0.50/month
+   Cardinality bomb = 77760x cost increase!
+```
+
+🚨 **THE "AHA!" MOMENT — The FinOps Nightmare:**
+
+Một dòng code vô hại:
+
+```python
+counter.add(1, {"user_id": user.id})  # Dev nghĩ: "Thêm label để filter cho tiện"
+```
+
+Có thể gây ra hóa đơn $38,880/tháng — gấp 77,000 lần chi phí bình thường.
+
+**Terminal 3: Check Existing Guardrails**
+
+```bash
+# Kiểm tra filter config của ADOT — có chặn được cardinality bomb không?
+# (Đọc từ AOT_CONFIG_CONTENT environment variable)
+```
+
+👁️ **Kết quả:** `filter/drop_health` CHỈ drop spans/metrics có `http.route == "/health/live"`. Nó HOÀN TOÀN KHÔNG chặn high-cardinality labels.
+
+💡 **Gap Analysis:**
+
+| Guardrail | Hiện tại | Cần có |
+|-----------|---------|--------|
+| Drop health check spans | ✅ `filter/drop_health` | — |
+| Drop high-cardinality labels | ❌ Không có | `attributes` processor hoặc filter by label pattern |
+| Alert on series count spike | ❌ Không có | CloudWatch Alarm on AMP `ActiveSeries` metric |
+| Cost anomaly detection | ❌ Chưa setup | AWS Cost Anomaly Detection |
+
+📝 **Ghi vào notebook:**
+
+```
+[HH:MM:SS] Inject: 5,000 unique series with UUID labels
+[HH:MM:SS] ADOT: processing normally (no cardinality awareness)
+[HH:MM:SS] Estimated monthly cost: $3,888
+[HH:MM:SS] Existing filter: NOT blocking high-cardinality labels
+[HH:MM:SS] Telegram: NO alert — FinOps blind spot confirmed
+```
+
+### 🔄 Phase 4: Rollback & Recovery
+
+Script bomb tự kết thúc sau khi tạo 5,000 series. Khi Python process exit, `MeterProvider` bị destroy → không export thêm.
+
+Tuy nhiên, AMP vẫn giữ 5,000 series này trong ~5 phút (stale series). Sau đó chúng tự động bị mark inactive.
+
+```bash
+# Verify: đợi 5 phút, check ADOT self-metrics
+sleep 300
+
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request
+resp = urllib.request.urlopen('http://localhost:8888/metrics')
+for l in resp.read().decode().split('\n'):
+    if 'exporter_sent' in l and 'metric' in l:
+        print(l)
+\""
+# ✅ Kỳ vọng: export rate trở lại baseline
+```
+
+### 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---------|---------|
+| 1. What happened? | 5,000 unique time series được tạo với UUID labels → AMP ingest hàng triệu samples. |
+| 2. Why didn't ADOT block it? | OTel Collector KHÔNG có built-in cardinality limiter. `filter` processor chỉ filter theo attribute value, không theo cardinality. |
+| 3. Why is this dangerous in production? | Một Dev vô tình gắn `user_id` vào metric → hóa đơn AMP tăng 77,000x. Không có alert → phát hiện khi nhận hóa đơn cuối tháng. |
+| 4. What's the cardinality rule? | Labels chỉ được có giá trị từ tập hữu hạn nhỏ (như `service_name`, `http_method`, `status_code`). TUYỆT ĐỐI KHÔNG gắn `user_id`, `order_id`, `session_id`, `request_id`. |
+| 5. Systemic Gap? | Cần (1) cardinality guardrail ở ADOT, (2) AMP ActiveSeries alarm, (3) Cost Anomaly Detection. |
+
+**Action Items:**
+
+- 📝 **Critical:** AWS Budgets + Cost Anomaly Detection cho AMP service (setup trong Phase 3 — `budgets` module).
+- 📝 **Important:** CloudWatch Alarm trên AMP metric `AWS/Usage > ActiveSeries` > threshold (ví dụ: 10,000 cho lab, 100,000 cho production).
+- 📝 **Backlog:** Thêm `attributes` processor vào ADOT config để strip known high-cardinality labels:
+
+```yaml
+  processors:
+    attributes/strip_cardinality:
+      actions:
+        - key: user_id
+          action: delete
+        - key: session_id
+          action: delete
+        - key: request_id
+          action: delete
+```
+
+---
+
+## 🧪 Experiment 10: The Zombie Sidecar (Non-Essential Container Death)
+
+**SEV-2** | **Blast Radius:** 1 ECS Task (telemetry loss) | **Thời gian:** ~20 phút
+
+### 📚 Học được gì sau experiment này
+
+- Hiểu sống còn về `essential = false` trong ECS Task Definition: container không essential → khi chết, ECS KHÔNG restart nó.
+- Khám phá **Zombie Sidecar pattern**: sidecar chết âm thầm, app vẫn chạy, telemetry mất vĩnh viễn cho đến lần deploy tiếp theo.
+- Phân biệt với Experiment 1 (IAM Blackhole cho Execution Role): Exp 1 → task không start được → Circuit Breaker rollback. Exp 10 → sidecar chết GIỮA CHỪNG → không có cơ chế nào phát hiện.
+- Hiểu tại sao container-level health check trong Task Definition chỉ mang tính informational, KHÔNG trigger restart.
+
+**TTD target:** ∞ — Không có alert nào fire. Đây là blind spot nghiêm trọng nhất của Phase 1.5.
+
+### ⚠️ Bẫy thường gặp
+
+- ❌ Nghĩ rằng ECS sẽ auto-restart non-essential container → SAI. ECS chỉ restart containers thông qua service-level mechanisms (ALB health check → task replacement), không phải container-level.
+- ❌ Dùng `aws ecs stop-task` → dừng TOÀN BỘ task (cả app) → không phải experiment này.
+- ❌ Kỳ vọng EventBridge `EssentialContainerExited` fire → SAI. Stop code này CHỈ fire khi essential container exit.
+
+### 🛑 Phase 0: Pre-flight Check
+
+```bash
+# Chạy Phase 1.5 Pre-flight Checklist
+# Verify ADOT sidecar đang RUNNING
+
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].containers[].{Name:name,Status:lastStatus,Essential:essential}' \
+  --output table
+# ✅ Kỳ vọng:
+#   order-service       | RUNNING | (không hiển thị = true mặc định)
+#   aws-otel-collector  | RUNNING | false
+```
+
+### 📊 Phase 1: Baseline (Ghi nhận bằng chứng)
+
+```bash
+# 1. Ghi nhận container details
+aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+  --query 'tasks[0].containers[].{Name:name,Status:lastStatus,Health:healthStatus,RuntimeID:runtimeId}' \
+  --output table
+# 📝 Ghi lại runtimeId của aws-otel-collector
+
+# 2. Verify telemetry đang flow
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:13133/').read().decode()[:100])\""
+# ✅ Kỳ vọng: {"status":"Server available",...}
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 🟢 Baseline: Both containers RUNNING, ADOT health OK.
+
+### 💥 Phase 2: Inject Failure (The Assassination)
+
+ECS Exec vào ADOT sidecar container và kill process chính (PID 1).
+
+```bash
+# Kill ADOT collector process
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container aws-otel-collector --interactive \
+  --command "/bin/sh -c 'kill -9 1'"
+```
+
+⚠️ Nếu `kill` không có sẵn trong ADOT image, dùng alternative:
+
+```bash
+# Alternative: dùng Python (nếu có) hoặc /proc
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container aws-otel-collector --interactive \
+  --command "/bin/sh -c 'cat /proc/1/cmdline && echo && echo Sending SIGKILL... && kill -KILL 1'"
+```
+
+📝 **Ghi vào Incident Log:** `[HH:MM]` 💥 Injected: `kill -9 1` on ADOT sidecar container.
+
+### 🔍 Phase 3: Observe & Triage (The Investigation)
+
+Mở 3 terminals:
+
+**Terminal 1: Watch Task Status (The Zombie Revelation)**
+
+```bash
+# Check task status mỗi 10s
+while true; do
+  echo "=== $(date +%H:%M:%S) ==="
+  aws ecs describe-tasks --cluster $CLUSTER --tasks $TASK_ARN \
+    --query 'tasks[0].containers[].{Name:name,Status:lastStatus,ExitCode:exitCode,Health:healthStatus}' \
+    --output table
+  echo ""
+  sleep 10
+done
+```
+
+👁️ **The SRE Lens** — Timeline bạn sẽ thấy:
+
+| Thời điểm | order-service | aws-otel-collector |
+|-----------|---------------|---------------------|
+| T+0s | RUNNING / HEALTHY | RUNNING / HEALTHY |
+| T+10s | RUNNING / HEALTHY | STOPPED / ExitCode: 137 |
+| T+30s | RUNNING / HEALTHY | STOPPED / 137 |
+| T+60s | RUNNING / HEALTHY | STOPPED / 137 |
+| T+120s | RUNNING / HEALTHY | STOPPED / 137 |
+| T+300s | RUNNING / HEALTHY | STOPPED / 137 |
+
+🚨 **THE "AHA!" MOMENT — Non-Essential Containers Don't Restart:**
+
+Sau 5 phút, sidecar VẪN STOPPED. ECS KHÔNG restart nó. Task VẪN RUNNING với app container alive.
+
+Đây là **Zombie Sidecar pattern**:
+
+- App container: sống, serve traffic bình thường
+- Sidecar container: chết, không thu thập telemetry
+- Task: RUNNING — dashboard xanh
+- Telemetry: mất vĩnh viễn cho đến lần deploy tiếp theo
+
+**Terminal 2: Verify App Still Works (The Isolation Proof)**
+
+```bash
+# App hoàn toàn không bị ảnh hưởng
+aws ecs execute-command --cluster $CLUSTER --task $TASK_ARN \
+  --container order-service --interactive \
+  --command "python -c \"
+import urllib.request, json
+r = urllib.request.urlopen('http://localhost:5001/products')
+data = json.loads(r.read().decode())
+print(f'App: HEALTHY — {len(data[\"products\"])} products')
+
+# Thử gọi ADOT health check — sẽ FAIL
+try:
+    urllib.request.urlopen('http://localhost:13133/', timeout=3)
+    print('ADOT: HEALTHY')
+except Exception as e:
+    print(f'ADOT: DEAD — {e}')
+\""
+```
+
+👁️ **Kết quả:**
+
+```
+App: HEALTHY — 5 products
+ADOT: DEAD — <urlopen error [Errno 111] Connection refused>
+```
+
+**Terminal 3: Check EventBridge & Alarms (The Complete Blind Spot)**
+
+```bash
+# Check EventBridge — có event nào cho non-essential container exit không?
+aws events list-rules --name-prefix obs-lab-ecs- \
+  --query 'Rules[*].{Name:Name,State:State}' --output table
+
+# Check alarms
+aws cloudwatch describe-alarms \
+  --alarm-names obs-lab-order-service-running-task-low \
+                obs-lab-order-service-memory-high \
+                obs-lab-order-service-app-error-rate \
+  --query 'MetricAlarms[*].{Name:AlarmName,State:StateValue}' --output table
+```
+
+👁️ **Kết quả:**
+
+- EventBridge rule `ecs-task-stopped-abnormal` filter `stopCode: EssentialContainerExited` → KHÔNG match (vì ADOT là non-essential)
+- Tất cả alarms: OK (task vẫn RUNNING, CPU/Memory bình thường)
+- Telegram: KHÔNG có alert
+
+💡 **So sánh với Experiment 1 (IAM Blackhole):**
+
+| Aspect | Exp 1 (Execution Role) | Exp 10 (Zombie Sidecar) |
+|--------|------------------------|-------------------------|
+| Container bị ảnh hưởng | Task không start được | Sidecar chết giữa chừng |
+| Circuit Breaker | ✅ Trip → rollback | ❌ Không áp dụng |
+| EventBridge event | ✅ `SERVICE_DEPLOYMENT_FAILED` | ❌ Không có event |
+| Telegram alert | 🚨 CRITICAL | ❌ Silence |
+| Phát hiện bởi | Monitoring | Không ai — cho đến khi deploy mới |
+
+📝 **Ghi vào notebook:**
+
+```
+[HH:MM:SS] Inject: kill -9 1 on ADOT sidecar
+[HH:MM:SS] Sidecar: STOPPED (ExitCode 137)
+[HH:MM:SS] App: RUNNING (unaffected — essential=false works!)
+[HH:MM:SS] T+60s: Sidecar still STOPPED (ECS does NOT restart)
+[HH:MM:SS] T+120s: Sidecar still STOPPED
+[HH:MM:SS] EventBridge: NO event (non-essential exit not captured)
+[HH:MM:SS] Telegram: NO alert — Zombie Sidecar confirmed
+[HH:MM:SS] TTD = ∞ (permanent telemetry loss until next deploy)
+```
+
+### 🔄 Phase 4: Rollback & Recovery
+
+ECS KHÔNG auto-restart non-essential container. Recovery options:
+
+**Option A: Force redeploy (Recommended — nhanh nhất)**
+
+```bash
+aws ecs update-service --cluster $CLUSTER \
+  --service order-service --force-new-deployment
+# ECS tạo task mới → cả app + sidecar đều fresh
+```
+
+**Option B: Stop task để service scheduler tạo task mới**
+
+```bash
+aws ecs stop-task --cluster $CLUSTER --task $TASK_ARN \
+  --reason "Chaos Drill 10: Zombie sidecar recovery"
+# Service scheduler sẽ tạo task mới để thay thế
+```
+
+Verify recovery:
+
+```bash
+# Đợi ~60s cho task mới start
+sleep 60
+
+NEW_TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER --service-name order-service \
+  --query 'taskArns[0]' --output text)
+
+aws ecs describe-tasks --cluster $CLUSTER --tasks $NEW_TASK_ARN \
+  --query 'tasks[0].containers[].{Name:name,Status:lastStatus,Health:healthStatus}' \
+  --output table
+# ✅ Kỳ vọng: Cả 2 containers = RUNNING / HEALTHY
+```
+
+### 🧠 Phase 5: Post-Mortem & The 5 Whys
+
+| Câu hỏi | Trả lời |
+|---------|---------|
+| 1. What happened? | ADOT sidecar bị kill → container STOPPED (ExitCode 137). |
+| 2. Why didn't ECS restart the sidecar? | `essential = false` → ECS KHÔNG restart non-essential containers. Chỉ dừng task nếu ESSENTIAL container exit. |
+| 3. Why didn't EventBridge fire? | Rule filter `stopCode: EssentialContainerExited` → không match non-essential container exit. |
+| 4. Why is this worse than Exp 8? | Exp 8 (IAM Blackhole): pipeline fail nhưng container alive → có thể recover bằng cách restore IAM. Exp 10: container DEAD → chỉ recover bằng redeploy. |
+| 5. Systemic Gap? | Cần (1) monitoring cho non-essential container status, (2) cân nhắc đổi `essential = true` cho ADOT sidecar. |
+
+**Action Items:**
+
+📝 **Critical — Decision Required:** Đổi `essential = true` cho ADOT sidecar?
+
+| Option | Pros | Cons |
+|--------|------|------|
+| `essential = false` (hiện tại) | App sống khi sidecar crash | Telemetry mất vĩnh viễn, không auto-restart |
+| `essential = true` (đề xuất) | Sidecar crash → task restart → sidecar mới | App bị restart theo (downtime ~30s) |
+
+**Recommendation:** Đổi sang `essential = true` khi:
+
+- Telemetry là critical cho SLO monitoring
+- App có `graceful_timeout = 25s` (đã có trong `gunicorn.conf.py`) → restart nhanh, mất ít request
+- Circuit Breaker sẽ rollback nếu sidecar liên tục crash
+
+- 📝 **Important:** CloudWatch Metric Filter trên ECS Container Insights:
+
+```
+  Metric: ContainerStopped (filter: containerName = "aws-otel-collector")
+  → Alarm: > 0 → Telegram CRITICAL
+```
+
+- 📝 **Backlog:** Khi migrate sang EKS (Phase 7), dùng DaemonSet cho ADOT Collector → tách biệt lifecycle khỏi app pod. Sidecar pattern trên EKS có thể dùng init container + restart policy.
+
+---
 # 📖 Glossary & Cheat Sheets (Iteration A++)
 
 ### ExitCode signatures — bảng định mệnh của mọi SRE
@@ -2153,6 +3170,43 @@ print(f'DNS restored: payment-service.ecommerce.local → {ip}')
 
 > 📖 Concept guide + Terraform config + Migration path: [`ECS_SERVICE_CONNECT.md`](./ECS_SERVICE_CONNECT.md)
 
+## 📖 Phase 1.5 Glossary Additions
+
+### OTel Collector Processors — Thứ tự QUAN TRỌNG
+
+| Processor | Vai trò | Nếu đặt sai thứ tự |
+|-----------|---------|---------------------|
+| `memory_limiter` | Chặn data khi RAM vượt threshold | Đặt sau `batch` → data đã buffer vào RAM trước khi limiter kịp chặn → OOM |
+| `filter` | Drop data theo điều kiện | Đặt sau `batch` → tốn tài nguyên xử lý data rồi mới drop |
+| `probabilistic_sampler` | Giữ X% traces | Đặt trước `filter` → sample trước khi drop health checks → lãng phí quota |
+| `batch` | Gom data trước khi export | Đặt trước `memory_limiter` → buffer đầy RAM trước khi limiter chặn |
+
+### Essential vs Non-Essential Containers
+
+| Aspect | Essential (`true`) | Non-Essential (`false`) |
+|--------|---------------------|--------------------------|
+| Container exit → Task | Task STOPPED | Task continues |
+| Container exit → Restart | Service scheduler tạo task mới | KHÔNG restart |
+| EventBridge signal | `EssentialContainerExited` | Không có event |
+| Use case | App container, critical sidecar | Logging agent, debug tools |
+| Phase 1.5 recommendation | App container | ADOT sidecar → đổi sang `true` |
+
+### Cardinality Rules (Prometheus/AMP)
+
+| Label Type | Examples | Cardinality | Rule |
+|------------|----------|-------------|------|
+| Low (OK) | `service_name`, `http_method`, `status_code`, `operation` | < 100 values | ✅ Dùng thoải mái |
+| Medium (Caution) | `endpoint`, `db_table`, `cache_key_prefix` | 100-1,000 values | ⚠️ Giới hạn, monitor |
+| High (DANGER) | `user_id`, `session_id`, `request_id`, `order_id` | ∞ values | ❌ TUYỆT ĐỐI KHÔNG gắn vào metric |
+
+### Meta-Monitoring Patterns
+
+| Pattern | Mô tả | Implementation |
+|---------|-------|-----------------|
+| Watchdog | External system checks if telemetry is flowing | Lambda → query AMP `up{job="..."}` → alert nếu no data |
+| Self-metrics | Pipeline exports its own health metrics | ADOT `localhost:8888/metrics` → scrape → alarm |
+| Log-based alert | Alert on pipeline error logs | CloudWatch Metric Filter on ADOT Log Group |
+| Dead man's switch | Pipeline MUST send heartbeat every N minutes | Custom metric → alarm nếu missing |
 ---
 
 # 🔮 Roadmap experiments kế tiếp
@@ -2167,7 +3221,11 @@ print(f'DNS restored: payment-service.ecommerce.local → {ip}')
 | 4B | **Order-Service Poison Config** | 📝 Written | B | Alarm `for_each` verification, blast radius isolation, TTD comparison |
 | 5 | **Cascading Failure (Payment Slow → Order Timeout)** | 📝 Written | C | Service-to-service timeout, overlap zone, intermittent failure |
 | 6 | **Cloud Map DNS Failure** | 📝 Written | C | DNS TTL, ConnectionError vs Timeout, synthetic health check |
-| 7 | AWS FIS AZ failure | 🔜 | Phase 8 (ROADMAP) | Multi-AZ recovery, native AWS chaos |
+| 7 | The Trace Storm (Sidecar Resource Contention) | 📝 Written | Phase 1.5 | Backpressure, memory_limiter, failure isolation |
+| 8 | The Silent Blinder (Telemetry Pipeline Blackhole) | 📝 Written | Phase 1.5 | Meta-monitoring, partial failure, SigV4 auth |
+| 9 | The Cardinality Bomb (FinOps Guardrail) | 📝 Written | Phase 1.5 | Cardinality, AMP cost model, label hygiene |
+| 10 | The Zombie Sidecar (Non-Essential Container Death) | 📝 Written | Phase 1.5 | `essential=false` behavior, zombie sidecar, container lifecycle |
+| 11 | AWS FIS AZ failure | 🔜 | Phase 8 | Multi-AZ recovery, native AWS chaos |
 
 ---
 
