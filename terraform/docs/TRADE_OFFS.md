@@ -639,6 +639,56 @@ terraform {
 > **Learning:** State management là trái tim của IaC. Mất state = mất infrastructure.
 
 ---
+## TO-11: Observability — Dual-Stack Telemetry Routing (Logs vs Metrics/Traces)
+
+### 📋 Context
+Khi đưa ECS Fargate lên AWS, chúng ta cần thu thập 3 trụ cột Observability: Metrics, Traces, và Logs. 
+Vấn đề đặt ra: Liệu có nên "All-in" mọi thứ vào ADOT (AWS Distro for OpenTelemetry) Sidecar và đẩy về các backend Open-source tự host (hoặc managed) giống hệt môi trường On-Premises, hay nên tận dụng các AWS Native Services?
+
+Môi trường On-Premises hiện tại đang dùng: `App -> OTel Collector -> Prometheus (Metrics) + Tempo (Traces) + Loki (Logs)`. Tất cả hội tụ về một Grafana duy nhất.
+
+### 🎯 Options Considered
+
+| Option | Architecture | Storage Admin Effort | Cost | Context Switching |
+|---|---|---|---|---|
+| **A. All-in OTel (On-Prem style)** | App -> ADOT Sidecar -> AMP (Metrics), X-Ray (Traces), **Self-hosted Loki on EFS/ECS** (Logs) | 🔴 High (Phải quản lý EFS, scale Loki, index shards) | 💰💰💰 (EFS cost + ECS compute cho Loki) | 🟢 Low (1 UI: Grafana) |
+| **B. AWS Native All-in** | App -> CloudWatch Agent -> CloudWatch Metrics, CloudWatch Logs, X-Ray | 🟢 Zero | 💰💰 (CW Logs ingestion cost) | 🟡 Medium (CW UI is clunky for traces) |
+| **C. Dual-Stack / Hybrid (Selected)** | App -> ADOT Sidecar (Metrics -> AMP, Traces -> X-Ray). <br> App -> `awslogs` driver (Logs -> CloudWatch Logs) | 🟢 Zero | 💰 (Optimized: AMP/X-Ray for deep debug, CW for cheap log storage) | 🔴 High (Must switch between X-Ray, AMP, CW Logs Insights) |
+
+### ✅ Decision: Option C — Dual-Stack Telemetry Routing
+Chúng ta chấp nhận việc "lệch pha" so với On-Premises:
+1. **Metrics & Traces:** Dùng ADOT Sidecar đẩy về Amazon Managed Prometheus (AMP) và AWS X-Ray. (Giữ nguyên triết lý OTel-Native Bridge, vendor-neutral ở tầng App).
+2. **Logs:** Bỏ qua OTel cho Logs. Dùng `awslogs` driver native của ECS Fargate đẩy thẳng stdout/stderr lên CloudWatch Logs.
+
+### 💡 Consequences
+
+**Positive:**
+- ✅ **Zero Storage Admin cho Logs:** Không phải đau đầu setup Loki, không lo EFS bị đầy, không lo Loki index bị corrupt. CloudWatch Logs tự động scale, nén và archive.
+- ✅ **Tiết kiệm CPU/RAM cho Fargate:** `awslogs` driver chạy ở tầng ECS Agent (infra), không tốn tài nguyên của Task (vốn đã bị chia sẻ cho ADOT Sidecar).
+- ✅ **Log Insights cực mạnh:** CloudWatch Logs Insights cho phép query JSON log bằng ngôn ngữ gần giống SQL, cực kỳ phù hợp để filter `trace_id` hoặc `order_id` mà không cần build custom index.
+- ✅ **Chi phí tối ưu:** Lưu Logs trên CW rẻ hơn nhiều so với việc trả tiền compute cho Loki self-hosted trên ECS.
+
+**Negative:**
+- ❌ **UI Context Switching (Điểm đau nhất):** Khi debug một request, SRE phải:
+  1. Vào X-Ray để xem Trace flow (ALB -> Order -> Payment).
+  2. Copy `trace_id` từ X-Ray.
+  3. Switch sang CloudWatch Logs Insights, paste `trace_id` vào query để tìm log chi tiết.
+  4. Switch sang AMG (Grafana) để xem metric CPU/DB.
+- ❌ **Mất đi "Single Pane of Glass":** Không có một dashboard duy nhất hiển thị cả 3 pillars như Grafana on-prem.
+
+**Mitigation (Cách giảm thiểu):**
+- Thiết lập **Grafana (AMG)** làm Central Dashboard. Dùng CloudWatch Data Source trong Grafana để query Logs, AMP Data Source để query Metrics. (Dù X-Ray trace vẫn phải xem ở AWS Console, nhưng Logs + Metrics đã hội tụ).
+- Enforce **Structured Logging (JSON)** ở tầng App code. Bắt buộc mọi log phải có `trace_id`, `span_id`, `order_id`. Điều này giúp CloudWatch Logs Insights query cực nhanh.
+
+### 🔄 On-Prem Comparison
+
+| Environment | Telemetry Flow | Rationale |
+|---|---|---|
+| **On-Premises** | `OTel Collector -> Loki/Tempo/Prometheus -> Grafana` | Tự do vọc vạch, không tốn tiền cloud, học sâu về storage backend. |
+| **AWS (Lab/Prod)** | `ADOT -> AMP/X-Ray` + `awslogs -> CW Logs` | Tập trung 100% thời gian vào việc viết PromQL, TraceQL, Alerting Rules thay vì làm "Storage Admin" cho Loki/Tempo. |
+
+**Learning Value:** Hiểu được ranh giới giữa "Instrumentation" (OTel SDK) và "Storage/Backend" (AWS Managed). App code hoàn toàn "mù" về hạ tầng, nhưng Platform Engineer phải biết chọn backend nào tối ưu chi phí và vận hành cho Cloud-Native.
+---
 
 ## 🎯 Summary: The "Golden Rules" of AWS Architecture
 

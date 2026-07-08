@@ -215,25 +215,25 @@ resource "aws_security_group_rule" "app_egress_dns_udp" {
 }
 
 # OTLP telemetry to Observability tier
-resource "aws_security_group_rule" "app_egress_otlp_grpc" {
-  security_group_id        = aws_security_group.application.id
-  type                     = "egress"
-  description              = "OTLP gRPC to Observability (traces, metrics)"
-  protocol                 = "tcp"
-  from_port                = 4317
-  to_port                  = 4317
-  source_security_group_id = aws_security_group.observability.id
-}
+# resource "aws_security_group_rule" "app_egress_otlp_grpc" {
+#   security_group_id        = aws_security_group.application.id
+#   type                     = "egress"
+#   description              = "OTLP gRPC to Observability (traces, metrics)"
+#   protocol                 = "tcp"
+#   from_port                = 4317
+#   to_port                  = 4317
+#   source_security_group_id = aws_security_group.observability.id
+# }
 
-resource "aws_security_group_rule" "app_egress_otlp_http" {
-  security_group_id        = aws_security_group.application.id
-  type                     = "egress"
-  description              = "OTLP HTTP to Observability (logs)"
-  protocol                 = "tcp"
-  from_port                = 4318
-  to_port                  = 4318
-  source_security_group_id = aws_security_group.observability.id
-}
+# resource "aws_security_group_rule" "app_egress_otlp_http" {
+#   security_group_id        = aws_security_group.application.id
+#   type                     = "egress"
+#   description              = "OTLP HTTP to Observability (logs)"
+#   protocol                 = "tcp"
+#   from_port                = 4318
+#   to_port                  = 4318
+#   source_security_group_id = aws_security_group.observability.id
+# }
 
 
 ########################################################################
