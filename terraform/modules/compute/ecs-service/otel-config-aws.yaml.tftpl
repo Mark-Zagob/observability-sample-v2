@@ -32,6 +32,16 @@ processors:
     limit_mib: 128
     spike_limit_mib: 32
 
+  transform/sanitize_labels:
+    metric_statements:
+      - context: datapoint
+        statements:
+          # Xóa bỏ mọi label có dạng UUID (thường là user_id, session_id, request_id)
+          - delete_key(attributes, "user_id")
+          - delete_key(attributes, "session_id")
+          - delete_key(attributes, "request_id")
+          - delete_key(attributes, "trace_id") # Trace ID chỉ nên ở Traces, không nên ở Metrics
+
   # ⚡ BATCH — Gom telemetry lại trước khi export (giảm API calls, giảm chi phí)
   batch:
     timeout: 5s

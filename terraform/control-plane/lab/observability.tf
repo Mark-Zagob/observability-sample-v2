@@ -383,3 +383,16 @@ resource "aws_iam_role_policy" "ecs_task_amp_remote_write" {
     ]
   })
 }
+
+resource "aws_cloudwatch_metric_alarm" "amp_cardinality_bomb" {
+  alarm_name          = "${var.project_name}-amp-cardinality-bomb"
+  namespace           = "AWS/Usage"
+  metric_name         = "ActiveSeries"
+  statistic           = "Average"
+  period              = 3600 # 1 hour
+  evaluation_periods  = 1
+  threshold           = 10000 # Hard limit cho Lab (Production có thể là 100,000)
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [module.alerting.sns_critical_arn]
+}
