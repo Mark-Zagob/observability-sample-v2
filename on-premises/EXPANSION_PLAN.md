@@ -3,6 +3,21 @@
 > Đề xuất mở rộng hệ thống e-commerce từ 6 services lên 10 services, tập trung vào **architectural diversity** để maximize kiến thức DevOps/SRE/Platform khi deploy lên AWS.
 
 ---
+## Document Metadata
+| Field | Value |
+|---|---|
+| Document Status | 🔄 In Progress (Syncing with Codebase) |
+| Last Updated | 2026-07-10 |
+| Version | 2.1 (Phase 0 Reality Check & Guardrails Update) |
+| Owner | dungtt (Platform Engineering) |
+
+## Document History
+| Version | Date | Author | Changes |
+|---|---|---|---|
+| 1.0 | 2026-05-20 | dungtt | Initial expansion roadmap (6 → 10 services) |
+| 2.0 | 2026-06-15 | dungtt | Added Saga Orchestration, CQRS, PgBouncer strategy |
+| 2.1 | 2026-07-10 | dungtt | **Reality Check:** Marked Phase 0 App-level as COMPLETED (Codebase over-delivered). Added new Production Guardrails to "Patterns đã có". Updated PgBouncer Risk Assessment based on new DB Driver Resilience. Adjusted Phase 4 SLO math to leverage existing Traffic Source Tagging. |
+---
 
 ## Mục Tiêu
 
@@ -42,6 +57,13 @@ Web UI → API Gateway → Order Service → Payment Service
 - ✅ HTTP Semantic Mapping (`shared/errors.py` — map business status → HTTP code)
 - ✅ Auto-migration (schema on startup, cross-env compatible)
 - ✅ Feature flags (`ENABLE_REDIS`, `ENABLE_KAFKA` cho AWS Phase 1)
+- ✅ Database Driver Resilience (`shared/db_utils.py` — TCP Keep-Alive, `statement_timeout=30s`, `connect_timeout=5s`)
+- ✅ Frontend SRE (`web-ui/app.js` — Page Visibility API chống Phantom Traffic)
+- ✅ OTel Histogram Custom Buckets (`shared/otel_setup.py` — Custom boundaries 5ms→10s để P95/P99 chính xác)
+- ✅ Kafka Natural Batching (`order-service/app.py` — `linger.ms=50`, `batch.size=16KB`, Backpressure buffer)
+- ✅ Traffic Source Tagging (`api-gateway/app.py` — Phân loại `synthetic_probe`, `synthetic_loadtest`, `browser`)
+- ✅ Redis Idempotency State Machine (`shared/idempotency.py` — Split TTLs, Lua Scripts atomicity)
+- ✅ OTel Sidecar Watchdog (`shared/otel_watchdog.py` — Auto-seppuku nếu ADOT sidecar chết trên ECS)
 
 **Thiếu:**
 - ❌ Saga pattern (distributed transaction)
@@ -561,6 +583,14 @@ Hiện tại, mỗi Python service sử dụng `ThreadedConnectionPool` của `p
 
 Thêm PgBouncer làm middleware đứng giữa Python Services và PostgreSQL để multiplex (ghép kênh) connections.
 
+> 🛡️ **SRE REALITY CHECK: Driver-Level Defenses Already Active**
+> Trước khi thêm PgBouncer, cần ghi nhận rằng codebase (`shared/db_utils.py`) đã implement các chốt chặn chống Connection Thrashing ở tầng vi mô:
+> 1. **`statement_timeout=30s`**: Tự động kill các runaway queries (query treo vô hạn), giải phóng connection slot ngay lập tức.
+> 2. **TCP Keep-Alive (60s idle, 15s interval)**: Phát hiện và loại bỏ "Ghost Connections" do network partition/firewall drop.
+> 3. **`close_pool()` on SIGTERM**: Giải phóng slots khi ECS Fargate scale-in/deploy.
+> 
+> **👉 Kết luận:** PostgreSQL sẽ KHÔNG BỊ SẬP (Death Spiral) khi lên 10 services nhờ các chốt chặn trên. Tuy nhiên, việc thêm PgBouncer ở Phase 2 vẫn là **BẮT BUỘC** để *Multiplexing* (ghép kênh), giảm RAM/CPU cho PostgreSQL và chuẩn bị cho mô hình Microservices scale-out hàng chục instances.
+
 ```
 [Python Apps] --(100+ client conns)--> [PgBouncer :6432] --(20 server conns)--> [PostgreSQL :5432]
 ```
@@ -824,7 +854,14 @@ Compensation (shipping fail):
 ### Saga State Machine — Production-Grade Design
 
 Saga Orchestration là pattern khó nhất trong distributed systems. Design dưới đây giải quyết 5 vấn đề kinh điển: **double-refund**, **lost saga**, **zombie saga**, **race condition**, và **crash mid-step**.
-
+#### ⚠️ SRE Caveat: Interaction with `statement_timeout`
+Codebase hiện tại áp dụng `statement_timeout=30000` (30s) cho TẤT CẢ queries qua `shared/db_utils.py`. 
+Khi implement `SagaOrchestrator`, bạn phải lưu ý:
+- **Risk:** Nếu bước gọi HTTP tới Shipping Service mất 25s, và bước ghi `saga_state` mất 6s → Tổng 31s → PostgreSQL sẽ throw `QueryCanceled` và rollback transaction.
+- **Mitigation:** 
+  1. Timeout của HTTP Client (gọi Shipping/Payment) PHẢI `< 20s` (dành 10s buffer cho DB write).
+  2. Trong `SagaOrchestrator`, cần catch ngoại lệ `psycopg2.errors.QueryCanceled` để log và chuyển Saga sang state `COMPENSATING` hoặc `DEAD_LETTER` thay vì để worker crash.
+  3. *Alternative:* Override `statement_timeout` ở mức session cho riêng Saga Worker nếu các bước thực sự cần > 30s (Không khuyến khích).
 #### State Machine Diagram
 
 ```
@@ -2124,36 +2161,27 @@ jobs:
 
 ### Phase 0: Production Readiness (trước khi thêm services)
 
-```
-Effort: ~3-4 ngày
-Dependencies: Không có
-Impact: Tất cả 6 services hiện tại
+### Phase 0: Infrastructure & CI Hardening (App-level ĐÃ HOÀN THÀNH)
+**Effort:** ~2-3 ngày
+**Dependencies:** Không có
+**Impact:** Toàn bộ 6 services hiện tại
 
-Application:
-  1. Thêm /health/live + /health/ready cho 6 services hiện tại
-  2. Thêm healthcheck trong docker-compose.yml
-  3. Chuẩn hóa error response format (RFC 7807)
-  4. Chuẩn hóa logging format (đã có structured JSON, verify consistency)
-  5. Thêm graceful shutdown handler cho Kafka consumers (SIGTERM)
+#### 🟢 Application Level (ĐÃ HOÀN THÀNH - VƯỢT MONG ĐỢI)
+*(Codebase đã tự động implement các guardrails này trong lần refactor Phase 5)*
+- [✅] Health checks: `/health/live` + `/health/ready` (chuẩn K8s/ECS)
+- [✅] RFC 7807 Error Format (`shared/errors.py`)
+- [✅] Graceful Shutdown Manager (`shared/shutdown_handler.py` - Callback registry, flush Kafka, close DB pool)
+- [✅] HTTP Semantic Mapping (Chống bẫy HTTP 200 Trap)
+- [✅] Idempotency State Machine (Redis Lua Script)
 
-Infrastructure:
-  6. Network segmentation: tách Docker networks (frontend, backend, data, observability)
-  7. Resource limits: CPU/memory limits cho tất cả containers
-  8. Log rotation: json-file driver với max-size/max-file
-  9. stop_grace_period: 30s cho tất cả workers
+#### 🟡 Infrastructure Level (CẦN TRIỂN KHAI)
+1. **Network segmentation:** Tách Docker networks (`frontend`, `backend`, `data`, `observability`). Hiện tại đang dùng single bridge `observability` (Rủi ro bảo mật: Web UI có thể ping thẳng PostgreSQL).
+2. **Resource limits:** Thêm `deploy.resources.limits` (CPU/RAM) cho TẤT CẢ containers trong `docker-compose.yml` để chống OOM Killer.
+3. **Log rotation:** Thêm `logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }` cho tất cả services.
+4. **stop_grace_period:** Set `stop_grace_period: 30s` cho Kafka Workers trong `docker-compose.yml` để khớp với `GracefulShutdown` timeout.
 
-CI:
-  10. Setup GitHub Actions: lint (flake8) → build → smoke test
-
-Verify:
-  - curl /health/ready → 200 khi service healthy
-  - Stop PostgreSQL → /health/ready → 503
-  - Error responses đúng format RFC 7807
-  - Web UI không connect được trực tiếp tới PostgreSQL (network segmentation)
-  - docker stats hiển thị memory limits
-  - docker compose down: consumers commit offsets trước khi exit
-  - CI pipeline pass trên GitHub
-```
+#### 🔵 CI/CD Level
+5. **Setup GitHub Actions:** Pipeline `lint (flake8)` → `pytest` → `docker build` → `smoke test`.
 
 ### Phase 1: Auth Service + TLS + Secrets
 
@@ -2328,7 +2356,23 @@ E. Business Metrics Instrumentation
 4. MWMBR Alerts (Multi-Window Multi-Burn-Rate):
    - Cấu hình Fast-burn (14.4x) và Slow-burn (3x) alerts cho các SLOs mới.
    - Áp dụng Traffic Guards (dựa trên span metrics) để tránh phantom alerts khi không có traffic.
+#### Traffic Guards (Leveraging Existing Codebase)
+Codebase (`api-gateway/app.py`) đã tự động gắn label `traffic_source` (`browser`, `synthetic_probe`, `synthetic_loadtest`) vào mọi metrics.
+Khi cấu hình Prometheus Alerting Rules cho Phase 4, **BẮT BUỘC** phải filter label này để tránh Phantom Alerts:
 
+```yaml
+# ✅ ĐÚNG: Chỉ alert khi có lỗi từ người dùng thật (browser)
+expr: |
+  sum(rate(api_gateway_requests_total{status="error", traffic_source="browser"}[5m]))
+  /
+  sum(rate(api_gateway_requests_total{traffic_source="browser"}[5m])) > 0.01
+
+# ❌ SAI: Sẽ alert giả khi Traffic Generator chạy load test bị lỗi
+expr: |
+  sum(rate(api_gateway_requests_total{status="error"}[5m]))
+  /
+  sum(rate(api_gateway_requests_total[5m])) > 0.01
+```
 #### C. Synthetic Monitoring (User-Centric SLIs)
 **Infrastructure:**
 1. Đóng gói Playwright E2E tests thành một Docker container headless Chrome.

@@ -21,7 +21,7 @@
 |-------|-------|
 | **Document Status** | ✅ Reviewed & Approved |
 | **Last Updated** | 2026-07-10 |
-| **Version** | 2.2 (Phase 5 shared refactor) |
+| **Version** | 2.3 (Phase 5 guardrails enhancement) |
 | **Owner** | Platform Engineering Team |
 | **Author(s)** | dungtt, [Co-author if any] |
 | **Reviewers** | [Principal Architect], [SRE Lead], [Security Team] |
@@ -36,6 +36,7 @@
 | 2.0 | 2026-05-20 | dungtt | Added Network, Security, Capacity Planning, Failure Modes sections |
 | 2.1 | 2026-05-28 | dungtt | Enhanced Mermaid diagrams, added metadata, cross-references |
 | 2.2 | 2026-07-10 | dungtt | Phase 5 patterns: Circuit Breaker, IdempotencyGuard, Graceful Shutdown Manager, Auto-migration, HTTP Semantic Mapping, OTel Watchdog. Added ENABLE_REDIS/ENABLE_KAFKA feature flags |
+| 2.3 | 2026-07-10 | dungtt | Added Production Guardrails: DB Driver Resilience, Page Visibility API, OTel Custom Buckets, Kafka Natural Batching, Traffic Source Tagging, Redis Idempotency State Machine details, Graceful Degradation pattern. Updated Gunicorn config details, Nginx DNS re-resolution. Added ADR-011, ADR-012, ADR-013 |
 
 ### Related Architecture Decision Records (ADRs)
 
@@ -51,6 +52,9 @@
 | ADR-008 | OTel Collector as centralized telemetry pipeline | ✅ Accepted | 2026-02-10 |
 | ADR-009 | Blackbox Exporter for 24/7 active probing | ✅ Accepted | 2026-03-15 |
 | ADR-010 | Traffic guards on SLO burn rate alerts | ✅ Accepted | 2026-04-01 |
+| ADR-011 | Custom OTel histogram buckets for accurate P95/P99 | ✅ Accepted | 2026-07-10 |
+| ADR-012 | TCP Keep-Alive and statement_timeout for PostgreSQL resilience | ✅ Accepted | 2026-07-10 |
+| ADR-013 | Page Visibility API to prevent phantom frontend traffic | ✅ Accepted | 2026-07-10 |
 
 > **Note:** Xem chi tiết các ADRs trong [`docs/adrs/`](./docs/adrs/) (nếu có) hoặc trong git commit history.
 
@@ -305,12 +309,36 @@ ALLOW 8585/tcp   # Kafka UI (dev only, restrict in production)
 ALLOW 3000/tcp   # Grafana
 ```
 
-### DNS Resolution
+### DNS Resolution Strategy
 
-- **Docker embedded DNS** (`127.0.0.11`): Services resolve by container name
-- **Nginx resolver config**: `resolver 127.0.0.11 valid=10s ipv6=off;`
-  - Re-resolve upstream IPs every 10s
-  - Prevents stale IP caching when containers rebuild
+**Docker embedded DNS (`127.0.0.11`):**
+- Services resolve peers by container name
+- Docker manages DNS records automatically on container lifecycle events
+
+**Nginx Dynamic Re-resolution:**
+
+```nginx
+resolver 127.0.0.11 valid=10s ipv6=off;
+```
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `valid` | `10s` | Re-query DNS every 10 seconds to catch container IP changes |
+| `ipv6=off` | — | Docker bridge network is IPv4-only; prevents `::1` resolution failures |
+
+**Why critical:**
+- Without dynamic re-resolution, Nginx caches upstream IPs at startup
+- When containers rebuild (new IP), Nginx still sends traffic to old IP → `502 Bad Gateway`
+- The `set $upstream_*` pattern + `resolver` directive forces fresh DNS lookup per request
+
+**Failure scenario prevented:**
+
+```text
+Time 0:00  Nginx starts → resolves api-gateway → 172.18.0.5
+Time 0:30  api-gateway container rebuilds → new IP 172.18.0.8
+Time 0:31  Without resolver: Nginx still sends to 172.18.0.5 → 502
+Time 0:31  With resolver: Nginx re-resolves → 172.18.0.8 → 200 ✓
+```
 
 ---
 
@@ -478,6 +506,42 @@ erDiagram
 | Kafka | 2.0 | 4GB | — | KRaft mode, 3 partitions |
 | OpenSearch (planned) | 2.0 | 3GB | — | JVM heap 1GB + OS overhead |
 
+#### Gunicorn Configuration Deep-Dive
+
+**File:** `gunicorn.conf.py` (per service)
+
+```python
+# Workers — I/O bound workload optimization
+workers = 2                    # CPU cores × 2 + 1 (conservative for containers)
+worker_class = "gthread"       # Threads > processes for I/O bound (DB, Redis, Kafka)
+threads = 8                    # 2 workers × 8 threads = 16 concurrent requests
+
+# Timeouts — Must respect orchestrator lifecycle
+timeout = 30                   # Kill worker if request hangs > 30s
+graceful_timeout = 25          # Wait 25s for in-flight requests on SIGTERM
+# ⚠️ CRITICAL: graceful_timeout (25s) < ECS stopTimeout (60s)
+# Buffer: 60 - 25 = 35s for OS cleanup + network teardown
+
+keepalive = 5                  # Keep-alive for HTTP/1.1 persistent connections
+
+# Signal Hooks (Debugging Aid):
+def worker_int(worker):
+    worker.log.info("🛑 Received SIGINT/SIGTERM, finishing current request gracefully...")
+
+def on_exit(server):
+    server.log.info("👋 Service shut down cleanly.")
+```
+
+**Why `gthread` over `gevent` or `sync`:**
+
+| Worker Class | Use Case | Trade-off |
+|---|---|---|
+| `sync` | CPU-bound, simple requests | Blocks on I/O → poor throughput |
+| `gthread` | I/O-bound (DB, HTTP, Kafka) | GIL limits CPU parallelism, but I/O waits release GIL |
+| `gevent` | High-concurrency, many connections | Monkey-patching complexity, debugging difficulty |
+
+Our workloads are I/O-bound (PostgreSQL queries, Redis cache, Kafka produce/consume), so `gthread` is optimal.
+
 ### Connection Pool Sizing
 
 **Formula (PostgreSQL standard):**
@@ -554,24 +618,90 @@ Order Service → Kafka → [Notification Worker, Inventory Worker]
 - **Scalability**: Mỗi consumer group có thể scale độc lập
 - **Resilience**: Nếu worker down, message vẫn nằm trong Kafka chờ xử lý
 
-### 2. Idempotent Processing
+### 2. Idempotent Processing (Enhanced)
 
-**Kafka Workers** — track processed events in `processed_events` table using composite key `(event_id, processed_by)`. Prevents duplicate processing on Kafka redelivery.
+Two complementary mechanisms protect against duplicate processing:
+
+#### 2a. Kafka Workers — Database Idempotency Table
+
+Track processed events in `processed_events` table using composite key `(event_id, processed_by)`.
+
 ```sql
 -- Check before processing:
 SELECT 1 FROM processed_events WHERE event_id = %s AND processed_by = %s
+
 -- After processing:
 INSERT INTO processed_events (event_id, event_type, processed_by) VALUES (...)
 ```
 
-**Payment Service** — uses `IdempotencyGuard` (`shared/idempotency.py`) with Redis Lua Scripts for atomic state transitions:
+- **Scope:** Notification Worker, Inventory Worker
+- **Guarantee:** At-least-once delivery with deduplication
+
+#### 2b. Payment Service — Redis Lua Script State Machine
+
+`IdempotencyGuard` (`shared/idempotency.py`) uses Redis Lua Scripts for atomic state transitions with split TTLs.
+
+**State Machine:**
+
+```text
+                    ┌──────────────┐
+                    │     none     │ (initial state)
+                    └──────┬───────┘
+                           │ acquire()
+                           ▼
+                    ┌──────────────┐
+                    │  processing  │ TTL = 60s
+                    └──────┬───────┘
+                           │
+              ┌────────────┼────────────┐
+              │ success    │            │ fail
+              ▼            │            ▼
+     ┌──────────────┐      │    ┌──────────────┐
+     │   success    │      │    │    failed    │
+     │  TTL = 24h   │      │    │  TTL = 1h    │
+     └──────────────┘      │    └──────────────┘
+                           │
+                    (60s TTL expires)
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │  none (retry │
+                    │   allowed)   │
+                    └──────────────┘
 ```
-State Machine: none → processing (TTL 60s) → success (TTL 24h)
-                                            → failed (TTL 1h)
+
+**Split TTL Rationale:**
+
+| State | TTL | Why |
+|---|---|---|
+| `processing` | 60s | = Payment Gateway timeout (5s) × 10 + buffer. If process crashes, key auto-expires → user can retry |
+| `success` | 24h | Long enough to catch duplicate charges from user double-click or retry storms |
+| `failed` | 1h | Enough for debugging, but doesn't pollute Redis indefinitely |
+
+**Lua Script Benefits:**
+
+- **Atomic execution:** No race condition between concurrent requests for same `order_id`
+- **Single round-trip:** 1 Redis call instead of `GET` → compare → `SET` (3 calls)
+- **Server-side logic:** Redis decides state transition, client only receives result
+
+**Graceful Degradation:**
+
+```python
+# If Redis is down, idempotency is disabled but payment still processes
+# Acceptable risk: duplicate charge is better than blocked payment
+if redis_unavailable:
+    return "acquired"  # Allow processing, accept duplicate risk
 ```
-- Lua Script ensures atomicity (no race condition between concurrent requests)
-- Cached result: duplicate requests get cached success response (no double charge)
-- Graceful degradation: Redis down → idempotency disabled, payment still processes
+
+**Cached Result Storage:**
+
+When a duplicate request arrives and the original transaction succeeded, the cached result is returned immediately without re-processing:
+
+```python
+cached_result = idempotency_guard.get_cached_result(order_id)
+if cached_result:
+    return jsonify(cached_result), 200  # Instant response, no gateway call
+```
 
 ### 3. Cache-Aside (Redis)
 Product catalog is cached in Redis with 60s TTL. Order Service checks cache first, falls back to PostgreSQL on cache miss, then populates cache.
@@ -879,6 +1009,372 @@ start_otel_watchdog(interval=30, max_failures=3)
 - Auto-detects ECS via `ECS_CONTAINER_METADATA_URI` env var
 - On-prem: disabled automatically (no-op)
 - If ADOT sidecar dies (3 consecutive failures) → `os._exit(1)` → ECS restarts entire task
+---
+### 16. Database Driver Resilience (TCP Keep-Alive & Timeouts)
+
+**File:** `shared/db_utils.py` — `DatabasePool.__init__()`
+
+PostgreSQL connections can silently die due to network partitions, firewall timeouts, or cloud provider maintenance. Without driver-level resilience, these "ghost connections" remain in the pool, causing cascading failures.
+
+**Configuration Applied:**
+
+```python
+self._params['keepalives'] = 1              # Enable TCP keepalive
+self._params['keepalives_idle'] = 60        # 60s before first probe
+self._params['keepalives_interval'] = 15    # 15s between probes  
+self._params['keepalives_count'] = 3        # 3 failed probes → close connection
+
+self._params['connect_timeout'] = 5         # 5s timeout when establishing connection
+self._params['options'] = '-c statement_timeout=30000'  # 30s query timeout
+```
+
+**Defense Layers:**
+
+| Layer | Mechanism | Protection |
+|---|---|---|
+| TCP Keep-Alive | Probes idle connection every 60s | Detects dead connections from network drops |
+| Connect Timeout | 5s limit on connection establishment | Fast-fail when PostgreSQL is unreachable |
+| Statement Timeout | 30s limit per query | Prevents runaway queries from exhausting pool |
+| Pool `close_pool()` | Explicit `closeall()` on SIGTERM | Releases connection slots on graceful shutdown |
+
+**Failure scenario prevented:**
+
+```text
+Without keepalives:
+  Time 0:00   Connection established, query succeeds
+  Time 2:00   Network partition (silent)
+  Time 2:01   App tries query → hangs indefinitely (TCP doesn't know connection is dead)
+  Time 2:31   Query timeout (30s) → error returned
+  Time 2:32   App retries → gets same dead connection from pool → hangs again
+
+With keepalives:
+  Time 0:00   Connection established
+  Time 2:00   Network partition
+  Time 3:00   TCP keepalive probe sent (60s idle)
+  Time 3:15   Probe 2 (no ACK)
+  Time 3:30   Probe 3 (no ACK) → connection marked dead, removed from pool
+  Time 3:31   App gets fresh connection → query succeeds ✓
+```
+
+**Why `statement_timeout=30s`:**
+
+- Prevents a single slow query from holding a connection indefinitely
+- Pool has `maxconn=10`; one runaway query = 10% capacity lost
+- 30s is generous enough for complex JOINs but catches true runaways
+
+---
+
+### 17. Frontend SRE — Page Visibility API (Phantom Traffic Prevention)
+
+**File:** `web-ui/app.js`
+
+**Problem:** When users open the Web UI dashboard but switch to another browser tab (or minimize the window), `setInterval` continues firing auto-refresh requests every 30 seconds. This creates "phantom traffic" — HTTP requests that:
+
+- Inflate `request_rate` metrics artificially
+- Consume backend resources for data nobody is viewing
+- Skew SLO calculations (errors from phantom traffic count against reliability)
+- Generate misleading Grafana dashboards
+
+**Solution:** Use the [Page Visibility API](https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API) to pause auto-refresh when the tab is hidden.
+
+**Implementation:**
+
+```javascript
+let autoRefreshTimer = null;
+
+function startAutoRefresh() {
+    if (autoRefreshTimer) return; // Already running
+    autoRefreshTimer = setInterval(runAutoRefresh, 30000);
+    console.log('▶️ Auto-refresh started (30s interval)');
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+        console.log('⏸️ Auto-refresh paused (tab hidden)');
+    }
+}
+
+// Pause when tab hidden, resume when visible again
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopAutoRefresh();
+    } else {
+        runAutoRefresh();     // Refresh IMMEDIATELY on tab focus
+        startAutoRefresh();   // Then resume interval
+    }
+});
+```
+
+**Impact on Observability:**
+
+| Metric | Without Page Visibility | With Page Visibility |
+|---|---|---|
+| `api_gateway_requests_total` | Inflated by phantom traffic | Accurate — only real user activity |
+| SLO Error Rate | Phantom errors count against budget | Only real user errors counted |
+| Backend CPU | Wasted cycles serving invisible dashboards | Resources available for real traffic |
+| Grafana Dashboards | Misleading "always-on" traffic pattern | Accurate usage patterns |
+
+**Why this matters for SRE:**
+
+Synthetic traffic from Blackbox Exporter and Traffic Generator is already tagged with `traffic_source` labels (see Pattern #20). But phantom traffic from real users' hidden tabs was previously indistinguishable from organic traffic. This pattern closes that observability gap.
+
+---
+
+### 18. OTel Histogram Custom Buckets (Accurate P95/P99)
+
+**File:** `shared/otel_setup.py`
+
+**Problem:** The default OpenTelemetry SDK histogram buckets are designed for millisecond-scale measurements:
+
+```python
+# Default OTel SDK buckets
+[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
+```
+
+When `unit="s"` (seconds), a 400ms request (0.4s) falls into the `[0, 5]` bucket. Prometheus `histogram_quantile()` uses linear interpolation within buckets, so:
+
+- P95 calculation: "95% of requests are in [0, 5]" → interpolated P95 ≈ 4.75s
+- Actual P95: ~0.4s → **10x overestimation!**
+
+This leads to false SLO violations and unnecessary alerting.
+
+**Solution:** Define custom buckets tuned for our latency range (5ms to 10s):
+
+```python
+DURATION_BUCKETS = [
+    0.005,   # 5ms
+    0.01,    # 10ms
+    0.025,   # 25ms
+    0.05,    # 50ms
+    0.1,     # 100ms
+    0.25,    # 250ms
+    0.5,     # 500ms
+    1.0,     # 1s
+    2.5,     # 2.5s
+    5.0,     # 5s
+    10.0,    # 10s
+]
+
+# Apply to ALL histogram metrics ending with "duration_seconds"
+duration_view = View(
+    instrument_name="*duration_seconds",
+    aggregation=ExplicitBucketHistogramAggregation(boundaries=DURATION_BUCKETS),
+)
+```
+
+**Metrics affected:**
+
+- `api_gateway_request_duration_seconds`
+- `order_processing_duration_seconds`
+- `db_query_duration_seconds`
+- `db_pool_wait_duration_seconds`
+- `cache_operation_duration_seconds`
+- `payment_gateway_duration_seconds`
+- `notification_processing_duration_seconds`
+- `inventory_processing_duration_seconds`
+
+**Bucket design rationale:**
+
+| Range | Buckets | What it captures |
+|---|---|---|
+| 5–100ms | 5 buckets | Cache hits, fast DB queries |
+| 100–500ms | 3 buckets | Normal HTTP requests, DB queries |
+| 500ms–2.5s | 2 buckets | Slow requests, payment gateway calls |
+| 2.5–10s | 2 buckets | Timeouts, degraded performance |
+| >10s | overflow | Critical failures |
+
+**Verification:**
+
+```promql
+# Accurate P95 latency
+histogram_quantile(0.95, 
+  rate(api_gateway_request_duration_seconds_bucket[5m])
+)
+# Should return ~0.15s (150ms) for normal traffic, not 4.75s
+```
+
+---
+
+### 19. Kafka Producer Natural Batching (Throughput Optimization)
+
+**File:** `order-service/app.py` — `get_kafka_producer()`
+
+**Problem:** Calling `producer.flush()` after every single event creates excessive network overhead. Each flush = 1 TCP round-trip to the broker, regardless of message size.
+
+**Solution:** Let librdkafka batch messages naturally using `linger.ms` and `batch.size`:
+
+```python
+producer = KafkaProducer({
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "acks": "all",
+    "retries": 3,
+    "retry.backoff.ms": 100,
+    
+    # Natural batching configuration
+    "linger.ms": 50,                        # Wait up to 50ms to fill batch
+    "batch.size": 16384,                    # Max batch size: 16KB
+    "queue.buffering.max.messages": 100000, # In-memory buffer (backpressure)
+    "compression.type": "lz4",              # Compress batches for bandwidth savings
+})
+```
+
+**How it works:**
+
+```text
+Request 1 → produce() → message enters buffer
+Request 2 → produce() → message enters buffer (within 50ms)
+Request 3 → produce() → message enters buffer (within 50ms)
+...50ms passes...
+→ Buffer sent as single batch (3 messages, 1 network call)
+```
+
+**Trade-offs:**
+
+| Parameter | Value | Trade-off |
+|---|---|---|
+| `linger.ms` | 50ms | +50ms max latency per event vs. instant flush |
+| `batch.size` | 16KB | Larger batches = fewer network calls, but more memory |
+| `queue.buffering.max.messages` | 100K | Backpressure: `produce()` blocks if buffer full |
+| `compression.type` | lz4 | ~60% size reduction, minimal CPU overhead |
+
+**Graceful Shutdown integration:**
+
+```python
+def flush_kafka_on_shutdown():
+    """Flush remaining buffer on SIGTERM (10s timeout)"""
+    kafka_producer.flush(timeout=10)
+```
+
+Registered with GracefulShutdown manager (Pattern #11) to ensure no messages are lost when the process receives SIGTERM from ECS/Fargate.
+
+**Throughput impact:**
+
+- Without batching: 100 events/s = 100 network calls/s
+- With batching (50ms linger): 100 events/s ≈ 5 network calls/s (**20x reduction**)
+
+---
+
+### 20. Traffic Source Tagging (Synthetic vs Organic)
+
+**File:** `api-gateway/app.py` — `tag_traffic_source()`
+
+**Problem:** Not all HTTP traffic is equal. Monitoring systems need to distinguish between:
+
+- **Organic traffic:** Real users from browsers/mobile apps
+- **Synthetic probes:** Blackbox Exporter health checks (every 15s)
+- **Synthetic load tests:** Traffic Generator performance tests
+
+Without tagging, synthetic traffic inflates request counts, skews error rates, and triggers phantom SLO alerts.
+
+**Implementation:**
+
+```python
+@app.before_request
+def tag_traffic_source():
+    """Classify traffic by User-Agent header."""
+    user_agent = flask_request.headers.get("User-Agent", "").lower()
+    
+    if "blackbox" in user_agent or "prometheus" in user_agent:
+        source = "synthetic_probe"      # Health check probes
+    elif "python-requests" in user_agent:
+        source = "synthetic_loadtest"   # Traffic Generator
+    elif "mozilla" in user_agent or "chrome" in user_agent or "safari" in user_agent:
+        source = "browser"              # Real users
+    else:
+        source = "unknown"
+    
+    flask_request.environ["traffic_source"] = source
+```
+
+**Applied to metrics:**
+
+```python
+request_counter.add(1, {
+    "endpoint": "/order",
+    "status": status,
+    "traffic_source": traffic_src,  # ← Label for filtering
+})
+```
+
+**SLO calculation with traffic guards:**
+
+```promql
+# SLO: 99.5% of ORGANIC requests succeed
+sum(rate(api_gateway_requests_total{status="success", traffic_source="browser"}[5m]))
+/
+sum(rate(api_gateway_requests_total{traffic_source="browser"}[5m]))
+```
+
+**Alert filtering:**
+
+```yaml
+# Only alert on organic traffic errors
+- alert: APIGatewayHighErrorRate
+  expr: |
+    sum(rate(api_gateway_requests_total{status="error", traffic_source="browser"}[5m]))
+    /
+    sum(rate(api_gateway_requests_total{traffic_source="browser"}[5m]))
+    > 0.01
+```
+
+**Benefits:**
+
+| Use Case | Without Tagging | With Tagging |
+|---|---|---|
+| SLO calculation | Synthetic errors count against budget | Only organic errors counted |
+| Capacity planning | Traffic Generator inflates peak estimates | Accurate organic traffic patterns |
+| Debugging | Can't distinguish probe failures from user failures | Filter by `traffic_source` in Grafana |
+| Cost allocation | All traffic appears equal | Separate synthetic vs organic infrastructure costs |
+
+---
+
+### 21. Graceful Degradation (Redis in Payment Service)
+
+**File:** `payment-service/app.py` — `redis_health_check()`
+
+**Problem:** Payment Service uses Redis for idempotency guards. If Redis goes down, a strict health check would return HTTP 503, causing:
+
+- ECS/Fargate kills and restarts the task
+- All in-flight payments fail during restart
+- Cascading failure: Order Service → Payment Service → all orders blocked
+
+But Redis is **NOT critical** for payment processing — it only prevents duplicate charges. A payment without idempotency is risky but functional.
+
+**Solution:** Health check returns "healthy" even when Redis is down, with a warning log:
+
+```python
+def redis_health_check():
+    try:
+        return redis_client.ping()
+    except Exception as e:
+        # Log warning but return True — service is still functional
+        logger.warning(
+            f"Redis is unavailable: {e}. Degrading gracefully (Idempotency disabled)."
+        )
+        return True  # ← Key difference: returns True instead of raising
+```
+
+| Component Down | Impact | Health Check | User Experience |
+|---|---|---|---|
+| Redis | Idempotency disabled, duplicate charge risk | ✅ Healthy (200) | Payments still work |
+| Payment Gateway (external) | Circuit breaker opens | ✅ Healthy (200) | 503 from circuit breaker |
+| PostgreSQL | Cannot persist orders | ❌ Not Ready (503) | Orders blocked |
+
+**Why this is production-grade:**
+
+- **Blast radius containment:** Redis failure doesn't cascade to Order Service
+- **Self-healing:** When Redis recovers, idempotency automatically re-enables
+- **Observability:** Warning log + `redis_health_check_degraded_total` metric tracks degradation events
+- **SLO protection:** Degraded state is tracked separately from outage state
+
+**Contrast with strict health checks:**
+
+| Approach | Redis Down → | Result |
+|---|---|---|
+| Strict (raise) | 503 → ECS kills task → restart loop → all payments fail | ❌ Cascading failure |
+| Graceful (return True) | Warning log → payments process without idempotency | ✅ Degraded but functional |
 ---
 ## Security Architecture
 
