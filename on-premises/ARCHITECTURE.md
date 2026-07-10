@@ -20,8 +20,8 @@
 | Field | Value |
 |-------|-------|
 | **Document Status** | ✅ Reviewed & Approved |
-| **Last Updated** | 2026-05-28 |
-| **Version** | 2.1 (post-expansion planning) |
+| **Last Updated** | 2026-07-10 |
+| **Version** | 2.2 (Phase 5 shared refactor) |
 | **Owner** | Platform Engineering Team |
 | **Author(s)** | dungtt, [Co-author if any] |
 | **Reviewers** | [Principal Architect], [SRE Lead], [Security Team] |
@@ -35,6 +35,7 @@
 | 1.0 | 2026-01-15 | dungtt | Initial architecture (6 services) |
 | 2.0 | 2026-05-20 | dungtt | Added Network, Security, Capacity Planning, Failure Modes sections |
 | 2.1 | 2026-05-28 | dungtt | Enhanced Mermaid diagrams, added metadata, cross-references |
+| 2.2 | 2026-07-10 | dungtt | Phase 5 patterns: Circuit Breaker, IdempotencyGuard, Graceful Shutdown Manager, Auto-migration, HTTP Semantic Mapping, OTel Watchdog. Added ENABLE_REDIS/ENABLE_KAFKA feature flags |
 
 ### Related Architecture Decision Records (ADRs)
 
@@ -554,13 +555,23 @@ Order Service → Kafka → [Notification Worker, Inventory Worker]
 - **Resilience**: Nếu worker down, message vẫn nằm trong Kafka chờ xử lý
 
 ### 2. Idempotent Processing
-Workers track processed events in `processed_events` table using composite key `(event_id, processed_by)`. Prevents duplicate processing on Kafka redelivery.
+
+**Kafka Workers** — track processed events in `processed_events` table using composite key `(event_id, processed_by)`. Prevents duplicate processing on Kafka redelivery.
 ```sql
 -- Check before processing:
 SELECT 1 FROM processed_events WHERE event_id = %s AND processed_by = %s
 -- After processing:
 INSERT INTO processed_events (event_id, event_type, processed_by) VALUES (...)
 ```
+
+**Payment Service** — uses `IdempotencyGuard` (`shared/idempotency.py`) with Redis Lua Scripts for atomic state transitions:
+```
+State Machine: none → processing (TTL 60s) → success (TTL 24h)
+                                            → failed (TTL 1h)
+```
+- Lua Script ensures atomicity (no race condition between concurrent requests)
+- Cached result: duplicate requests get cached success response (no double charge)
+- Graceful degradation: Redis down → idempotency disabled, payment still processes
 
 ### 3. Cache-Aside (Redis)
 Product catalog is cached in Redis with 60s TTL. Order Service checks cache first, falls back to PostgreSQL on cache miss, then populates cache.
@@ -737,35 +748,49 @@ def process_order():
 - Machine-readable for API clients
 - Standard (RFC 7807) → familiar to developers
 
-### 11. Graceful Shutdown Pattern (Kafka Consumers)
+### 11. Graceful Shutdown Pattern
 
-Kafka consumers phải xử lý `SIGTERM` đúng để commit offsets:
+Tất cả services sử dụng `GracefulShutdown` singleton (`shared/shutdown_handler.py`) với callback registry pattern:
 
 ```python
-import signal
-import sys
+from shared.shutdown_handler import shutdown_manager
 
-consumer_running = True
+# Mỗi module đăng ký cleanup callback riêng
+shutdown_manager.register(
+    callback=flush_kafka_on_shutdown,
+    name="Kafka Producer",
+    timeout_seconds=10
+)
+shutdown_manager.register(
+    callback=close_db_pool_on_shutdown,
+    name="PostgreSQL Pool",
+    timeout_seconds=5
+)
+shutdown_manager.register(
+    callback=close_redis_on_shutdown,
+    name="Redis Cache",
+    timeout_seconds=5
+)
+```
 
-def shutdown_handler(signum, frame):
-    global consumer_running
-    sig_name = signal.Signals(signum).name
-    logger.info(f"Received {sig_name}, shutting down gracefully...",
-                extra={"signal": sig_name})
-    consumer_running = False
+**Cleanup order (Order Service):**
+```
+SIGTERM → shutdown_manager.exit_gracefully()
+  1. Kafka flush (10s)     — push buffered messages
+  2. PostgreSQL close (5s) — release connection slots
+  3. Redis close (5s)      — release client slots
+  4. sys.exit(0)           — clean exit
+Total: ~20s < ECS stopTimeout (60s) → safe
+```
 
-signal.signal(signal.SIGTERM, shutdown_handler)
-signal.signal(signal.SIGINT, shutdown_handler)
+**Kafka Consumers** (notification/inventory workers) — dùng `consumer_running` flag:
 
-# Consumer loop checks consumer_running flag
+```python
 while consumer_running:
     msg = consumer.poll(timeout=1.0)
     # ... process message ...
 
-# Cleanup
 consumer.close()  # Commit final offsets
-db_connection.close()
-logger.info("Consumer stopped cleanly")
 ```
 
 **Docker Compose config:**
@@ -781,6 +806,79 @@ services:
 - Kill consumer mid-processing → duplicate processing on restart
 - Saga state inconsistency if worker dies during compensation
 - Offset commit ensures no message loss or duplicate
+- PostgreSQL ghost connections → RDS `max_connections` exhaustion after rolling updates
+
+### 12. Circuit Breaker Pattern (Payment Gateway)
+
+Payment Service wraps external gateway calls with `pybreaker.CircuitBreaker`:
+
+```python
+payment_breaker = pybreaker.CircuitBreaker(
+    fail_max=3,         # 3 lỗi liên tiếp → mở circuit
+    reset_timeout=30,   # Đóng lại sau 30s
+    name="payment_gateway_breaker"
+)
+
+@payment_breaker
+def call_external_gateway(provider, delay):
+    # Simulated gateway call
+    ...
+```
+
+**Circuit states:** `CLOSED` → 3 failures → `OPEN` (reject all, 503) → 30s → `HALF_OPEN` (1 test request) → success → `CLOSED`.
+
+### 13. Auto-Migration Pattern (Schema on Startup)
+
+Order Service tự tạo schema + seed data khi startup, tương đương `docker-entrypoint-initdb.d/init.sql`:
+
+```python
+def _ensure_schema():
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS orders (...);
+        CREATE TABLE IF NOT EXISTS products (...);
+        INSERT INTO products (...) ON CONFLICT DO NOTHING;
+    """, fetch=False)
+
+_ensure_schema()  # Chạy khi app start
+```
+
+- **Idempotent:** `IF NOT EXISTS` + `ON CONFLICT DO NOTHING`
+- **Cross-env:** Works on both on-prem (Docker Compose) and AWS (ECS Fargate + RDS)
+- On-prem: `init.sql` chạy trước → `_ensure_schema()` skip (table exists)
+- AWS: Không có `init.sql` → `_ensure_schema()` tạo schema tự động
+
+### 14. HTTP Semantic Mapping Pattern
+
+Order Service maps business status → HTTP status code để monitoring hiểu đúng:
+
+```python
+from shared.errors import map_order_status_to_http
+
+http_status = map_order_status_to_http(order_status)
+return jsonify({...}), http_status
+```
+
+| Business Status | HTTP Code | Rationale |
+|---|---|---|
+| `completed` | 200 | Success |
+| `payment_failed` | 402 | Business failure (gateway rejected) |
+| `out_of_stock` | 409 | Business state conflict |
+| `payment_error` | 502 | Dependency failure (timeout) |
+| `db_error` / `kafka_error` | 500 | Internal error |
+
+Prevents the "HTTP 200 Trap" where business failures return 200 → Prometheus/API Gateway misjudge health.
+
+### 15. OTel Sidecar Watchdog (AWS ECS)
+
+`shared/otel_watchdog.py` — background thread checks ADOT sidecar health on ECS:
+
+```python
+start_otel_watchdog(interval=30, max_failures=3)
+```
+
+- Auto-detects ECS via `ECS_CONTAINER_METADATA_URI` env var
+- On-prem: disabled automatically (no-op)
+- If ADOT sidecar dies (3 consecutive failures) → `os._exit(1)` → ECS restarts entire task
 ---
 ## Security Architecture
 
@@ -904,7 +1002,7 @@ DB lock → connection pool exhausted → order-service timeout
   → API Gateway 504 → user retry → more DB load → death spiral
 ```
 
-> **Mitigation:** Circuit breaker (planned), connection pool sizing, `statement_timeout`
+> **Mitigation:** Circuit breaker (✅ `pybreaker` in Payment Service), connection pool sizing, `statement_timeout`
 
 **Pattern 2: Kafka consumer lag cascade**
 
@@ -963,10 +1061,16 @@ Redis restart → cache empty → all requests hit DB
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | All services | OTel Collector endpoint (Observability VM) |
 | `DATABASE_URL` | Order, Notification, Inventory | PostgreSQL connection string |
-| `REDIS_URL` | Order Service | Redis connection string |
+| `REDIS_URL` | Order, Payment | Redis connection string |
 | `KAFKA_BOOTSTRAP_SERVERS` | Order, Notification, Inventory | Kafka broker address |
 | `ORDER_SERVICE_URL` | API Gateway | Order Service endpoint |
 | `PAYMENT_SERVICE_URL` | Order Service | Payment Service endpoint |
+| `ENABLE_REDIS` | Order, Payment | Feature flag: `true`(default)/`false`. Disable Redis on AWS Phase 1 |
+| `ENABLE_KAFKA` | Order | Feature flag: `true`(default)/`false`. Disable Kafka on AWS Phase 1 |
+| `PAYMENT_SLOW_RATE` | Payment | Slow request rate: `0.20`(default). Set `1.0` for chaos testing |
+| `PAYMENT_FAILURE_RATE` | Payment | Business failure rate: `0.10`(default). Gateway reject simulation |
+| `DB_SECRET` | Order (AWS) | JSON from RDS managed secret: `{"username":"...", "password":"..."}` |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` | Order (AWS) | RDS endpoint components (from SSM) |
 
 ---
 

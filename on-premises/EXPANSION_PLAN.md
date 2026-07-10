@@ -32,24 +32,27 @@ Web UI → API Gateway → Order Service → Payment Service
 - ✅ Async Event-driven (Kafka pub/sub)
 - ✅ Cache-Aside (Redis)
 - ✅ BFF (API Gateway)
-- ✅ Idempotent Processing (processed_events table)
+- ✅ Idempotent Processing (processed_events table + Redis Lua Script IdempotencyGuard)
 - ✅ Pessimistic Locking (SELECT FOR UPDATE)
 - ✅ Distributed Trace Propagation (W3C traceparent qua Kafka headers)
+- ✅ Circuit Breaker (`pybreaker` trong Payment Service)
+- ✅ Health check endpoint chuẩn (liveness/readiness via `shared/health.py`)
+- ✅ Structured error response chuẩn (RFC 7807 via `shared/errors.py`)
+- ✅ Graceful shutdown (`shared/shutdown_handler.py` — callback registry pattern)
+- ✅ HTTP Semantic Mapping (`shared/errors.py` — map business status → HTTP code)
+- ✅ Auto-migration (schema on startup, cross-env compatible)
+- ✅ Feature flags (`ENABLE_REDIS`, `ENABLE_KAFKA` cho AWS Phase 1)
 
 **Thiếu:**
 - ❌ Saga pattern (distributed transaction)
-- ❌ Circuit Breaker (failure isolation)
 - ❌ CQRS/Data sync (read model khác write model)
 - ❌ Authentication/Authorization (JWT propagation)
-- ❌ Health check endpoint chuẩn (liveness/readiness)
 - ❌ Rate limiting
-- ❌ Structured error response chuẩn (RFC 7807)
 - ❌ TLS termination (HTTPS)
 - ❌ Secrets management (JWT keys, DB passwords)
 - ❌ Network segmentation (Docker networks per tier)
 - ❌ Resource limits (CPU/memory per container)
 - ❌ Backup/Restore procedures
-- ❌ Graceful shutdown (Kafka consumers)
 - ❌ Log rotation & retention
 - ❌ CI pipeline (lint, test, build)
 - ❌ Horizontal scaling (multiple instances + load balancing)
