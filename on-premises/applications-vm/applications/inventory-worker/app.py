@@ -23,9 +23,10 @@ import json
 import signal
 import threading
 import atexit
-
 import psycopg2.extras
-from confluent_kafka import Consumer, KafkaError
+
+# 🛡️ FIX: Import thêm KafkaException để xử lý lỗi khi manual commit fail
+from confluent_kafka import Consumer, KafkaError, KafkaException
 from flask import Flask, jsonify
 
 # ----------------------------------------------------------
@@ -102,7 +103,6 @@ RESTOCK_AMOUNT = int(os.getenv("RESTOCK_AMOUNT", "100"))
 # ============================================================
 db = DatabasePool(DATABASE_URL, minconn=2, maxconn=5)
 
-
 def is_event_processed(event_id):
     """Check if event was already processed (idempotency)"""
     rows = db.execute(
@@ -111,7 +111,6 @@ def is_event_processed(event_id):
     )
     return len(rows) > 0
 
-
 def mark_event_processed(event_id, event_type):
     """Mark event as processed"""
     db.execute(
@@ -119,7 +118,6 @@ def mark_event_processed(event_id, event_type):
         (event_id, event_type, "inventory-worker"),
         fetch=False
     )
-
 
 # ============================================================
 # Auto-Restock Logic
@@ -130,7 +128,7 @@ def restock_product(product_id, current_stock):
         span.set_attribute("product.id", product_id)
         span.set_attribute("stock.current", current_stock)
         span.set_attribute("stock.restock_amount", RESTOCK_AMOUNT)
-
+        
         conn = db.get_conn()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -144,6 +142,7 @@ def restock_product(product_id, current_stock):
                     return
 
                 stock_before = row["stock"]
+
                 # Only restock if still below threshold (avoid race conditions)
                 if stock_before >= RESTOCK_THRESHOLD:
                     conn.rollback()
@@ -154,7 +153,6 @@ def restock_product(product_id, current_stock):
                     "UPDATE products SET stock = %s WHERE id = %s",
                     (stock_after, product_id)
                 )
-
                 # Audit log with action='restock'
                 cur.execute(
                     "INSERT INTO inventory_log "
@@ -167,20 +165,19 @@ def restock_product(product_id, current_stock):
 
                 stock_restock_counter.add(1, {"product_id": str(product_id)})
                 span.set_attribute("stock.after", stock_after)
+
                 logger.info("Auto-restock triggered",
                             extra={"product_id": product_id,
                                    "product_name": row["name"],
                                    "stock_before": stock_before,
                                    "stock_after": stock_after,
                                    "restock_amount": RESTOCK_AMOUNT})
-
         except Exception as e:
             conn.rollback()
             logger.error("Auto-restock failed",
                          extra={"product_id": product_id, "error": str(e)})
         finally:
             db.put_conn(conn)
-
 
 # ============================================================
 # Inventory Logic (uses raw connections for transaction control)
@@ -219,7 +216,6 @@ def reserve_stock(event):
                 "UPDATE products SET stock = %s WHERE id = %s",
                 (stock_after, product_id)
             )
-
             # Write audit log
             cur.execute(
                 "INSERT INTO inventory_log "
@@ -227,7 +223,6 @@ def reserve_stock(event):
                 "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (event_id, order_id, product_id, "reserve", quantity, stock_before, stock_after)
             )
-
             conn.commit()
 
             logger.info("Stock reserved",
@@ -240,7 +235,6 @@ def reserve_stock(event):
                 restock_product(product_id, stock_after)
 
             return True
-
     except Exception as e:
         conn.rollback()
         logger.error("Failed to reserve stock",
@@ -249,7 +243,6 @@ def reserve_stock(event):
         raise
     finally:
         db.put_conn(conn)
-
 
 def release_stock(event):
     """When order.payment_failed → restore stock for the product"""
@@ -284,22 +277,20 @@ def release_stock(event):
                 "UPDATE products SET stock = %s WHERE id = %s",
                 (stock_after, product_id)
             )
-
             cur.execute(
                 "INSERT INTO inventory_log "
                 "(event_id, order_id, product_id, action, quantity, stock_before, stock_after) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (event_id, order_id, product_id, "release", quantity, stock_before, stock_after)
             )
-
             conn.commit()
 
             logger.info("Stock released",
                         extra={"order_id": order_id, "product_id": product_id,
                                "quantity": quantity, "stock_before": stock_before,
                                "stock_after": stock_after})
-            return True
 
+            return True
     except Exception as e:
         conn.rollback()
         logger.error("Failed to release stock",
@@ -309,7 +300,6 @@ def release_stock(event):
     finally:
         db.put_conn(conn)
 
-
 # ============================================================
 # Kafka Consumer Loop
 # ============================================================
@@ -317,7 +307,6 @@ consumer_running = True
 consumer_stats = {"consumed": 0, "reserved": 0, "released": 0,
                   "skipped": 0, "ignored": 0, "errors": 0}
 _start_time = time.time()
-
 
 def consume_loop():
     """Main Kafka consumer loop"""
@@ -331,8 +320,16 @@ def consume_loop():
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": KAFKA_GROUP,
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": True,
-        "auto.commit.interval.ms": 5000,
+        
+        # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU (THE SILENT DROP TRAP)
+        "enable.auto.commit": False,  
+        
+        # ⚙️ Tối ưu cho Manual Commit & Rebalance
+        "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
+        "heartbeat.interval.ms": 10000, # Phải < 1/3 session.timeout.ms
+        "max.poll.interval.ms": 300000, # 5 phút
+        
+        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range") 
     })
     consumer.subscribe([KAFKA_TOPIC])
 
@@ -351,6 +348,7 @@ def consume_loop():
             start_time = time.time()
 
             try:
+                # 1. Parse Message
                 event = json.loads(msg.value().decode("utf-8"))
                 event_id = event.get("event_id", "unknown")
                 event_type = event.get("event_type", "unknown")
@@ -362,6 +360,11 @@ def consume_loop():
                 # Only handle stock-relevant events
                 if event_type not in ("order.created", "order.payment_failed", "stock.depleted"):
                     consumer_stats["ignored"] += 1
+                    # 🛡️ FIX: Vẫn commit offset để progress
+                    try:
+                        consumer.commit(asynchronous=False)
+                    except KafkaException:
+                        pass
                     continue
 
                 # Extract trace context
@@ -384,9 +387,14 @@ def consume_loop():
                         if is_event_processed(event_id):
                             span.set_attribute("event.duplicate", True)
                             logger.info("Duplicate event skipped",
-                                        extra={"event_id": event_id,
-                                               "event_type": event_type})
+                                        extra={"event_id": event_id, "event_type": event_type})
                             consumer_stats["skipped"] += 1
+                            
+                            # 🛡️ FIX: Vẫn phải commit offset nếu là duplicate
+                            try:
+                                consumer.commit(asynchronous=False)
+                            except KafkaException:
+                                pass
                             continue
 
                         # Process stock update
@@ -419,8 +427,10 @@ def consume_loop():
                                 data = event.get("data", {})
                                 product_id = data.get("product_id")
                                 current_stock = data.get("current_stock", 0)
+
                                 inv_span.set_attribute("inventory.action", "restock")
                                 inv_span.set_attribute("product.id", str(product_id))
+
                                 if product_id and current_stock < RESTOCK_THRESHOLD:
                                     restock_product(product_id, current_stock)
                                     inventory_updates_counter.add(1, {
@@ -430,6 +440,15 @@ def consume_loop():
 
                         # Mark as processed
                         mark_event_processed(event_id, event_type)
+
+                        # 🛡️ FIX #2: MANUAL COMMIT (SYNC) - THE CRITICAL STEP
+                        try:
+                            consumer.commit(asynchronous=False)
+                        except KafkaException as commit_err:
+                            logger.error(
+                                "Failed to commit offset. Message will be re-processed.",
+                                extra={"error": str(commit_err), "partition": msg.partition(), "offset": msg.offset()}
+                            )
 
                         duration = time.time() - start_time
                         inventory_processing_duration.record(
@@ -441,6 +460,17 @@ def consume_loop():
                     if token:
                         otel_context.detach(token)
 
+            except json.JSONDecodeError:
+                # 🛡️ FIX #3: POISON PILL HANDLING
+                logger.critical(
+                    "Poison Pill detected: Invalid JSON. Committing offset to skip.",
+                    extra={"partition": msg.partition(), "offset": msg.offset(), "raw_value": str(msg.value())[:100]}
+                )
+                try:
+                    consumer.commit(asynchronous=False)
+                except KafkaException:
+                    logger.error("Failed to commit poison pill offset.")
+
             except Exception as e:
                 consumer_stats["errors"] += 1
                 stock_update_errors.add(1, {"event_type": event_type})
@@ -451,9 +481,13 @@ def consume_loop():
     except KeyboardInterrupt:
         pass
     finally:
+        # 🛡️ FIX #4: GRACEFUL SHUTDOWN COMMIT
+        try:
+            consumer.commit(asynchronous=False)
+        except Exception:
+            pass
         consumer.close()
         logger.info("Kafka consumer stopped", extra={"stats": consumer_stats})
-
 
 # ============================================================
 # Flask App (Health + Status)
@@ -466,7 +500,6 @@ health_bp = create_health_blueprint("inventory-worker", checks={
     "db": lambda: db.check_health(),
 })
 app.register_blueprint(health_bp)
-
 
 @app.route("/status")
 def status():
@@ -483,7 +516,6 @@ def status():
         "running": consumer_running,
     })
 
-
 @app.route("/inventory")
 def list_inventory():
     """List current product stock levels"""
@@ -495,7 +527,6 @@ def list_inventory():
         return jsonify({"products": products, "count": len(products)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/inventory/log")
 def inventory_log():
@@ -522,7 +553,6 @@ def inventory_log():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 # ============================================================
 # Graceful Shutdown
 # ============================================================
@@ -534,12 +564,10 @@ def _shutdown_handler(signum, frame):
                 extra={"signal": sig_name})
     consumer_running = False
 
-
 signal.signal(signal.SIGTERM, _shutdown_handler)
 signal.signal(signal.SIGINT, _shutdown_handler)
 atexit.register(lambda: logger.info("Inventory Worker exiting",
                                      extra={"stats": consumer_stats}))
-
 
 # ============================================================
 # Start Kafka consumer thread
@@ -547,7 +575,6 @@ atexit.register(lambda: logger.info("Inventory Worker exiting",
 _consumer_thread = threading.Thread(target=consume_loop, daemon=True, name="kafka-consumer")
 _consumer_thread.start()
 logger.info("Kafka consumer thread started", extra={"consumer_thread": _consumer_thread.name})
-
 
 # ============================================================
 # Main (dev mode only)

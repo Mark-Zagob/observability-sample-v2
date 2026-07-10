@@ -14,6 +14,7 @@ Features:
   - OTel trace context propagation from Kafka headers
   - Custom metrics: notifications_sent_total, processing_duration
   - Health checks: /health/live, /health/ready
+  - 🛡️ Production-Grade: Manual Sync Commit (At-Least-Once)
 ============================================================
 """
 
@@ -24,7 +25,8 @@ import signal
 import threading
 import atexit
 
-from confluent_kafka import Consumer, KafkaError
+# 🛡️ FIX: Import thêm KafkaException để bắt lỗi khi commit thủ công
+from confluent_kafka import Consumer, KafkaError, KafkaException
 from flask import Flask, jsonify
 
 # ----------------------------------------------------------
@@ -155,7 +157,7 @@ def send_notification(event):
                 extra={"order_id": order_id, "type": template_info["type"],
                        "channel": template_info["channel"], "notification_message": message[:100]})
 
-    # Persist to notifications table
+    # Persist to notification table
     db.execute(
         "INSERT INTO notifications (event_id, order_id, notification_type, channel, status) "
         "VALUES (%s, %s, %s, %s, %s)",
@@ -175,10 +177,10 @@ _start_time = time.time()
 
 
 def consume_loop():
-    """Main Kafka consumer loop"""
+    """Main Kafka consumer loop - Production Grade (Manual Commit)"""
     global consumer_running
 
-    logger.info("Starting Kafka consumer",
+    logger.info("Starting Kafka consumer (Manual Commit Mode)",
                 extra={"bootstrap": KAFKA_BOOTSTRAP, "topic": KAFKA_TOPIC,
                        "group": KAFKA_GROUP})
 
@@ -186,10 +188,16 @@ def consume_loop():
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": KAFKA_GROUP,
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": os.getenv("KAFKA_AUTO_COMMIT", "True").lower() == "true",
-        "auto.commit.interval.ms": int(os.getenv("KAFKA_AUTO_COMMIT_INTERVAL", "5000")),
+        
+        # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU
+        "enable.auto.commit": False,  
+        
+        # ⚙️ Tối ưu cho Manual Commit & Stability
         "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
-        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range") # 'range' là Eager mặc định
+        "heartbeat.interval.ms": 15000, # Bắt buộc < 1/3 session.timeout.ms
+        "max.poll.interval.ms": 300000, # 5 phút: Max time để xử lý 1 msg trước khi bị kick khỏi group
+        
+        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
     })
     consumer.subscribe([KAFKA_TOPIC])
 
@@ -208,7 +216,31 @@ def consume_loop():
             start_time = time.time()
 
             try:
-                event = json.loads(msg.value().decode("utf-8"))
+                # 🛡️ FIX #2: HANDLE TOMBSTONES & POISON PILLS (Message độc hại)
+                if msg.value() is None:
+                    logger.debug("Tombstone message received, committing and skipping.", 
+                                 extra={"partition": msg.partition(), "offset": msg.offset()})
+                    try: consumer.commit(asynchronous=False)
+                    except Exception: pass
+                    continue
+
+                try:
+                    event = json.loads(msg.value().decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as decode_err:
+                    # Message bị hỏng format, không thể parse. Nếu không commit, nó sẽ block hàng đợi mãi mãi.
+                    logger.critical(
+                        "Poison Pill detected: Invalid message format. Committing offset to skip.",
+                        extra={
+                            "error": str(decode_err),
+                            "partition": msg.partition(), 
+                            "offset": msg.offset(), 
+                            "raw_value": str(msg.value())[:100]
+                        }
+                    )
+                    try: consumer.commit(asynchronous=False)
+                    except Exception: pass
+                    continue
+
                 event_id = event.get("event_id", "unknown")
                 event_type = event.get("event_type", "unknown")
                 order_id = event.get("order_id", "unknown")
@@ -238,6 +270,9 @@ def consume_loop():
                             logger.info("Duplicate event skipped",
                                         extra={"event_id": event_id, "event_type": event_type})
                             consumer_stats["skipped"] += 1
+                            # Vẫn phải commit để advance offset
+                            try: consumer.commit(asynchronous=False)
+                            except Exception: pass
                             continue
 
                         # Process notification
@@ -254,6 +289,20 @@ def consume_loop():
                         mark_event_processed(event_id, event_type)
                         consumer_stats["processed"] += 1
 
+                        # 🛡️ FIX #3: MANUAL COMMIT (SYNC) - THE CRITICAL STEP
+                        # Chỉ commit KHI VÀ CHỈ KHI DB transaction ở trên thành công
+                        try:
+                            consumer.commit(asynchronous=False)
+                        except KafkaException as commit_err:
+                            logger.error(
+                                "Failed to commit offset. Message will be re-processed.",
+                                extra={
+                                    "error": str(commit_err), 
+                                    "partition": msg.partition(), 
+                                    "offset": msg.offset()
+                                }
+                            )
+
                         duration = time.time() - start_time
                         processing_duration.record(duration, {"event_type": event_type})
                         span.set_attribute("processing.duration_ms", int(duration * 1000))
@@ -267,10 +316,16 @@ def consume_loop():
                 logger.error("Failed to process Kafka message",
                              extra={"error": str(e), "partition": msg.partition(),
                                     "offset": msg.offset()})
+                # 🛡️ FIX #4: KHÔNG COMMIT -> Message sẽ được redeliver (Idempotency sẽ chặn duplicate)
 
     except KeyboardInterrupt:
         pass
     finally:
+        # 🛡️ FIX #5: GRACEFUL SHUTDOWN COMMIT
+        try:
+            consumer.commit(asynchronous=False)
+        except Exception:
+            pass
         consumer.close()
         logger.info("Kafka consumer stopped", extra={"stats": consumer_stats})
 
