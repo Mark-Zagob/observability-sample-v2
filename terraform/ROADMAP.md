@@ -18,6 +18,35 @@ Tài liệu này là "Kim Chỉ Nam" kết hợp giữa Application Expansion (1
    - **Future Data Plane** (ArgoCD/GitOps): Khi migrate sang EKS — Deployments, Services, Ingress, HPA.
 
 📌 **Khuyến nghị:** Dùng `control-plane/` + `data-plane/` cho tất cả môi trường mới.
+## 🎯 Pod Deployment Philosophy (NEW STRATEGY)
+
+Thay vì onboard tuần tự từng service (anti-pattern cho distributed systems), chúng ta deploy theo **Functional Pods** — mỗi Pod là một hệ sinh thái hoàn chỉnh, có thể chạy Chaos Test ngay lập tức.
+
+### Tại sao KHÔNG onboard rời rạc?
+
+| Vấn đề | Sequential (cũ) | Pod Deployment (mới) |
+|---|---|---|
+| Chaos Drills | Chỉ test 1 service cô lập → không phát hiện cascading failure | Test full data flow → phát hiện "chết chùm" |
+| Observability | X-Ray trace cụt: `ALB → Order → DB` | X-Ray trace đầy đủ: `Web UI → API GW → Order → Payment → Kafka → Workers → DB` |
+| Learning value | Học được 1 service | Học được distributed systems patterns |
+| Time-to-value | 6 tuần mới có hệ thống test được | 2 tuần đã có full functional unit |
+
+### 3 Pods chính của dự án
+
+| Pod | Tuần | Thành phần | Mục tiêu học |
+|-----|------|------------|--------------|
+| **POD 1: The Illumination** | 1-2 | Order + Payment + AMP + AMG + X-Ray | "Nhìn thấy" được hệ thống qua telemetry |
+| **POD 2: The Critical Path** | 3-5 | RDS + ElastiCache + MSK + 6 services đồng loạt | Full distributed flow end-to-end |
+| **POD 3: The Chaos Dojo** | 6-10 | AWS FIS + Chaos Drills production-grade | Self-healing validation + incident response |
+
+### Nguyên tắc "Pod Completeness"
+
+Mỗi Pod PHẢI đạt được **3 tiêu chí** trước khi chuyển Pod tiếp theo:
+
+1. **Observable**: Có ít nhất 1 X-Ray trace xuyên suốt toàn bộ Pod
+2. **Testable**: Có Traffic Generator hoặc synthetic test chạy được
+3. **Breakable**: Có ít nhất 1 Chaos Drill chứng minh Pod tự phục hồi
+
 
 🔥 Xem [`docs/AWS_CHAOS_PLAYBOOK.md`](docs/AWS_CHAOS_PLAYBOOK.md) để kiểm chứng resilience của kiến trúc này (IAM Blackhole, Network Partition).
 
@@ -67,7 +96,7 @@ Tài liệu này là "Kim Chỉ Nam" kết hợp giữa Application Expansion (1
 
 ---
 
-## 🔭 PHASE 1.5: THE OBSERVABILITY BRIDGE (Greenfield Priority #1) 🆕
+## 🔭 PHASE 1.5: THE ILLUMINATION (POD 1 — Observability Bridge) 🆕
 
 **Mục tiêu:** Biến ECS Task từ "mù" thành "sáng" — thiết lập Telemetry Pipeline AWS-native trước khi đưa Stateful Services (RDS/Redis) vào.
 
@@ -111,6 +140,13 @@ Update Task Definition của Order Service & Payment Service:
 - [ ] Verify traces xuất hiện trên X-Ray Service Map.
 - [ ] Verify metrics trên AMP qua Amazon Managed Grafana (AMG) hoặc self-hosted Grafana với AMP datasource.
 
+### 🎯 POD 1 Definition of Done
+
+- [ ] **Observable**: X-Ray Service Map hiện rõ `Order → Payment → RDS` với latency breakdown
+- [ ] **Queryable**: AMP có ít nhất 5 metrics: `http_server_duration`, `http_server_request_count`, `db_pool_wait_duration_seconds`, `payment_gateway_duration_seconds`, `orders_created_total`
+- [ ] **Dashboardable**: AMG có 1 dashboard hiển thị P95 latency + error rate của Order Service
+- [ ] **Testable**: Python E2E script bắn 100 requests → verify 100 traces trên X-Ray
+
 💥 SRE / Chaos Drill (The "Who Watches the Watchmen?" Series)
 - [x] Drill 7 (Trace Storm): Spam 50k spans → Verify `memory_limiter` backpressure & Tail-based sampling.
 - [x] Drill 8 (Silent Blinder): Revoke AMP IAM → Verify Partial Failure & Meta-monitoring via Self-Metrics.
@@ -126,37 +162,50 @@ Update Task Definition của Order Service & Payment Service:
 
 ---
 
-## 🗄️ PHASE 2: THE STATEFUL BOOTSTRAP & ASYNC BACKBONE
+## 🗄️ PHASE 2: THE CRITICAL PATH (POD 2 — Full Distributed System)
 
-**Mục tiêu:** Deploy RDS Multi-AZ + ElastiCache + MSK, và dạy App cách "nhận diện" chúng một cách bảo mật.
+**Mục tiêu:** Deploy ĐỒNG LOẠT toàn bộ trục xương sống của E-commerce — không onboard rời rạc.
+**Thời gian:** 3 tuần
+**Rationale:** 6 services này tạo thành 1 functional unit không thể tách rời. Deploy cùng lúc để test được cascading failure, event-driven patterns, và full X-Ray trace.
 
-**Thời gian:** 2.5 Tuần
+### 🧩 Modules triển khai (Deploy cùng lúc)
 
-**Rationale:** Greenfield không có dữ liệu thật, nên không cần "Dual-write" hay "Read-only phase" như Migration. Thay vào đó, bài toán cốt lõi là Bootstrapping (khởi tạo schema an toàn), Secret Injection (bơm bí mật), và Connection Management (RDS Proxy).
+- [ ] `database` (Module 4): RDS Multi-AZ + Secrets Manager + KMS
+- [ ] `cache` (Module 5): ElastiCache Redis (Cluster Mode Disabled, Auth Token)
+- [ ] `streaming` (Module 6): MSK Kafka (KRaft, 2 brokers)
+- [ ] Update `vpc-endpoints`: Thêm RDS, ElastiCache, MSK, Secrets Manager, SSM Endpoints
 
-### 🧩 Modules triển khai
+### 📦 Workload Onboard ĐỒNG LOẠT (6 services cùng lúc)
 
-- [ ] `database` (Module 4): RDS Multi-AZ + Secrets Manager + KMS.
-- [ ] `cache` (Module 5): ElastiCache Redis (Cluster Mode Disabled, Auth Token).
-- [ ] `streaming` (Module 6): MSK Kafka (KRaft, 2 brokers).
-- [ ] Update `vpc-endpoints`: Thêm RDS, ElastiCache, MSK, Secrets Manager, SSM Endpoints.
+**Backend Services:**
 
-### 📦 Workload Onboard & Bootstrap
+- [ ] Order Service (`:5001`) — PostgreSQL + Redis + Kafka producer
+- [ ] Payment Service (`:5002`) — Redis idempotency + Circuit Breaker
+- [ ] API Gateway (`:5000`) — BFF pattern, RFC 7807 propagation
+- [ ] Web UI (`:8580`) — Frontend với traffic tagging
 
-**2A: The Bootstrap Problem (How to run `init.sql` without Public Accessible)**
+**Async Workers:**
 
-- Option 1 (Recommended): Deploy một "Bootstrap Task" chạy image `postgres:alpine` với ECS Exec enabled.
+- [ ] Notification Worker (`:5004`) — Kafka consumer, idempotent
+- [ ] Inventory Worker (`:5005`) — Kafka consumer, pessimistic locking
+
+**Traffic Source:**
+
+- [ ] Traffic Generator (`:5003`) — Synthetic load testing
+
+### 2A: The Bootstrap Problem (How to run `init.sql` without Public Accessible)
+
+**Option 1 (Recommended):** Deploy một "Bootstrap Task" chạy image `postgres:alpine` với ECS Exec enabled.
 
 ```bash
-  # Jump vào task, mount init.sql, chạy psql
-  aws ecs execute-command --cluster my-cluster --task <task-id> \
-    --container bootstrap --interactive \
-    --command "psql -h <rds-endpoint> -U admin -d orders -f /init.sql"
+aws ecs execute-command --cluster my-cluster --task <task-id> \
+  --container bootstrap --interactive \
+  --command "psql -h <rds-endpoint> -U admin -d orders -f /init.sql"
 ```
 
-- Option 2: Dùng Bastion Host + SSM Session Manager (đã có trong Phase 3 Roadmap gốc, nhưng có thể kéo lên dùng sớm).
+**Option 2:** Dùng Bastion Host + SSM Session Manager (kéo từ Phase 3 lên dùng sớm).
 
-Wire `DB_SECRET` ARN từ Secrets Manager vào ECS Task Definition `secrets` block:
+### 2B: Wire Secrets & Environment Variables
 
 ```hcl
 secrets = [
@@ -165,76 +214,116 @@ secrets = [
     valueFrom = aws_secretsmanager_secret.rds_credentials.arn
   }
 ]
+
+environment = {
+  DB_HOST                 = data.aws_ssm_parameter.db_host.value
+  DB_PORT                 = data.aws_ssm_parameter.db_port.value
+  DB_NAME                 = data.aws_ssm_parameter.db_name.value
+  REDIS_URL               = "redis://${module.elasticache.endpoint}:6379"
+  KAFKA_BOOTSTRAP_SERVERS = module.msk.bootstrap_brokers
+  ENABLE_REDIS            = "true"   # ← BẬT LẠI (was false in Phase 1)
+  ENABLE_KAFKA            = "true"   # ← BẬT LẠI (was false in Phase 1)
+}
 ```
 
-**2B: Fix SIGTERM Handler (Critical for Kafka Producers)**
+### 2C: Verify End-to-End Flow
 
-Update `order-service/app.py` để catch `SIGTERM` và flush Kafka producer:
-
-```python
-import signal
-
-def shutdown_handler(signum, frame):
-    logger.info("Received SIGTERM, flushing Kafka producer...")
-    if kafka_producer:
-        kafka_producer.flush(timeout=5)
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, shutdown_handler)
+```
+User → Web UI → API GW → Order → Payment (sync)
+                        ↓
+                      Kafka → Workers (async)
+                        ↓
+                      RDS + Redis (state)
 ```
 
-**2C: Deploy Workers**
+### 💥 SRE / Chaos Drills (POD 2 — Stateful Chaos)
 
-- [ ] Deploy Notification Worker & Inventory Worker (Kafka Consumers).
-- [ ] Wire Redis URL, test Cache-Aside pattern.
-- [ ] Wire Kafka bootstrap servers, test event publishing/consuming.
+| # | Drill | Blast Radius | Skill học được |
+|---|-------|--------------|-----------------|
+| 11 | The DB Earthquake (RDS Multi-AZ Failover) | RDS + Order + Payment | `aws rds reboot-db-instance --force-failover`, `psycopg2` retry logic |
+| 12 | The Cache Avalanche (Redis Flush) | ElastiCache + Order Service | Cache miss storm, DB connection pool saturation |
+| 13 | The Kafka Partition (MSK Broker Loss) | MSK + Workers | Partition leader election, consumer group rebalance |
+| 14 | The Zombie Consumer (Stop Worker) | Notification/Inventory Worker | Consumer lag detection, offset commit behavior |
+| 15 | The Graceful Guillotine (ECS Stop Task) | 1 ECS Task | SIGTERM handling, Kafka buffer flush, DB pool close |
 
-### 💥 SRE / Chaos Drill
+### ✅ POD 2 Definition of Done
 
-- **Drill 5 (RDS Failover):** `aws rds reboot-db-instance --force-failover`
-  - Quan sát: X-Ray Trace chỉ ra chính xác bao nhiêu request bị `psycopg2.OperationalError` trong 60s RDS chuyển DNS sang AZ mới.
-  - Kỳ vọng: App tự reconnect thành công nhờ `retry_connect()` trong `shared/db_utils.py`.
-- **Drill 6 (Cache Miss Storm):** Flush Redis → CloudWatch RDS CPU spike 80%+.
-  - Verify: App có circuit breaker cho DB không? Cache-Aside pattern có fallback graceful không?
-- **Drill 7 (Secret Rotation):** Rotate Secrets Manager password → App auto-reconnect với new password?
-  - Learning: Hiểu được "Secret Rotation Pipeline" của AWS Secrets Manager + Lambda rotation function.
-- **Drill 8 (MSK Nightmare):** Kill 1 MSK Broker → Quan sát Partition Leader Election và Consumer Lag.
-- **Drill 9 (Graceful Shutdown):** ECS Stop Task Worker → Verify Kafka offset được commit trước khi chết (SIGTERM).
+- [ ] **Observable:** 1 full X-Ray trace: Web UI → ALB → API GW → Order → Payment → RDS + Kafka event flow visible
+- [ ] **Resilient:** RDS Multi-AZ failover transparent với app (nhờ `retry_connect`)
+- [ ] **Efficient:** Verify RDS/Redis/MSK traffic KHÔNG đi qua NAT Gateway (dùng VPC Flow Logs + Athena)
+- [ ] **Graceful:** Kafka producer flush thành công khi ECS scale-in/stop task
+- [ ] **Testable:** Web UI có thể tạo order → thấy notification trong Notification Worker → thấy stock giảm trong Inventory Worker
 
-### ✅ Definition of Done
+## 🌪️ PHASE 2.7: THE AWS CHAOS DOJO (POD 3 — Production-Grade Chaos) 🆕
 
-- [ ] End-to-end flow: User mua hàng → Order → Kafka → Workers → DB.
-- [ ] RDS Multi-AZ failover transparent với app (nhờ `retry_connect`).
-- [ ] Verify RDS/Redis/MSK traffic KHÔNG đi qua NAT Gateway (dùng VPC Flow Logs + Athena).
-- [ ] Kafka producer flush thành công khi ECS scale-in/stop task.
+**Mục tiêu:** "Phá" toàn bộ POD 2 để validate production-grade patterns. Chuyển từ "Chaos thủ công" sang "AWS-native Chaos Engineering" với FIS.
+**Thời gian:** 4 tuần
+**Rationale:** Đây là phần missing lớn nhất trong ROADMAP hiện tại. Chaos Engineering trên AWS KHÔNG phải là `docker stop container` — mà là nghệ thuật tấn công vào Control Plane và Fault Domains.
 
----
+### 🎯 Pod-based Chaos Philosophy
 
-## 🌐 PHASE 2.5: THE API GATEWAY COMPLETION 🆕
+Trong production, sự cố KHÔNG BAO GIỜ xảy ra ở 1 layer duy nhất:
+- RDS failover → Connection pool exhaustion → Order service timeout → API GW 504 → User retry storm
+- MSK broker die → Consumer lag → Notification delay → Customer complain → Support overload
 
-**Mục tiêu:** Hoàn thiện entry point, test real user flow với BFF pattern.
+**3 Quy tắc mới cho mọi experiment từ POD 3:**
 
-**Thời gian:** 1 Tuần
+1. **Always inject at the infrastructure layer, observe at ALL layers**
+   - Inject: RDS failover (AWS API)
+   - Observe: ECS task → App logs → Kafka consumer lag → Web UI error rate → Telegram alerts
 
-### 📦 Workload Onboard
+2. **Measure the "User Pain Score"**
+   - Không chỉ "service có chết không?" mà là "user có nhận thấy không?"
+   - Metric: % successful orders trong thời gian chaos
 
-- [ ] Deploy API Gateway service (Phase 5 code đã sẵn sàng).
-- [ ] Wire ALB → API GW → Order/Payment.
-- [ ] Enable traffic tagging (synthetic vs organic) trong API GW.
-- [ ] Test RFC 7807 error propagation từ Payment → Order → API GW → Client.
+3. **Blast Radius = 1 Pod, không phải 1 Service**
+   - Khi test RDS failover, PHẢI có Traffic Generator đang chạy
+   - Khi test MSK broker loss, PHẢI có cả 2 Workers đang consume
 
-### 💥 SRE / Chaos Drill
+### 🧩 Modules triển khai
 
-- **Drill 10 (Gateway Timeout):** Inject 6s delay vào Payment → API GW trả 504.
-- **Drill 11 (BFF Aggregation Failure):** Kill Order Service → API GW trả 502 + RFC 7807.
-- **Drill 12 (Traffic Source Analysis):** Verify synthetic traffic bị exclude khỏi SLO calculation.
+- [ ] `fis` (Module 16): AWS Fault Injection Simulator — vũ khí tối thượng của SRE
+- [ ] `dr` (Module 17): Pilot Light DR (Cross-Region RDS Replica, Route53 Failover)
 
-### ✅ Definition of Done
+### 💥 Chaos Experiments (POD 3 — Full-Stack Chaos với AWS FIS)
 
-- [ ] Web UI có thể tạo order qua API Gateway.
-- [ ] RFC 7807 errors được propagate đúng cách.
-- [ ] Synthetic traffic không inflate SLO burn rate.
+| # | Experiment | Blast Radius | Skill học được |
+|---|---|---|---|
+| 16 | **The AZ Apocalypse** (AWS FIS) | Toàn bộ resources trong 1 AZ | Multi-AZ resilience, ALB cross-zone routing |
+| 17 | **The Cascade Symphony** (Full-stack) | Web UI → API GW → Order → Payment → DB | End-to-end SLO impact, RFC 7807 propagation |
+| 18 | **The Secret Betrayal** (Secrets Manager Rotation) | RDS + all services | Auto-reconnect with new password, zero-downtime rotation |
+| 19 | **The Kafka Earthquake** (MSK Broker Loss) | MSK + Workers | Partition leader election, consumer lag detection |
+| 20 | **The Cache Apocalypse** (ElastiCache Node Failure) | Redis + Order + Payment | Cache miss storm, DB connection pool exhaustion |
+| 21 | **The Graceful Guillotine 2.0** (ECS Rolling Update) | All services | SIGTERM handling, zero-downtime deployment |
 
+### 📊 Mỗi experiment PHẢI có:
+
+1. **Pre-flight checklist** (verify cả POD healthy, không chỉ 1 service)
+2. **3+ terminals parallel observation** (infra + app + user perspective)
+3. **User Pain Score measurement** (% successful orders during chaos)
+4. **X-Ray trace analysis** (show latency breakdown trước/sau chaos)
+5. **Post-mortem template** điền sẵn 5 Whys
+
+### ✅ POD 3 Definition of Done
+
+- [ ] **Automated**: Mỗi experiment có AWS FIS Experiment Template (Terraform)
+- [ ] **Observable**: Mỗi experiment có Grafana dashboard visualize impact
+- [ ] **Documented**: Mỗi experiment có post-mortem viết theo template
+- [ ] **Alerted**: Telegram alerts fire đúng với severity expected
+- [ ] **Fast**: TTD (Time-To-Detect) ≤ 3 phút cho mọi SEV-2 incidents
+- [ ] **Self-healing**: Hệ thống tự phục hồi mà không cần human intervention
+
+### 🎓 Skills đạt được sau POD 3
+
+Sau khi hoàn thành POD 3, bạn sẽ:
+
+| Skill | Level | Ứng dụng thực tế |
+|---|---|---|
+| AWS FIS | Advanced | Design chaos experiments an toàn cho production |
+| Multi-AZ Architecture | Expert | Build systems survive AZ failures |
+| Incident Response | Senior | Triage + resolve SEV-2 incidents trong < 30 phút |
+| Post-Mortem Writing | Senior | Write blameless post-mortems impress interviewer |
+| SLO/SLI Design | Expert | Define meaningful SLOs cho distributed systems |
 ---
 
 ## 🛡️ PHASE 3: THE PLATFORM SHIELD & PR-DRIVEN IaC
@@ -428,15 +517,15 @@ Tại Phase 4, hệ thống sẽ có 5+ services gọi nhau. Đây là thời đ
 
 ## 📊 Progress Tracker
 
-| Phase | Focus | Services / Modules | Status | Post-Mortem / Learnings |
-|-------|-------|-------------------|--------|------------------------|
-| Phase 1 | Sync Tracer Bullet | Order, Payment (ECS Fargate) | ✅ DONE | Chaos Drills 1-3.5 done. Identified gaps: Observability, API GW, SIGTERM handler |
-| Phase 1.5 🆕 | Observability Bridge | AMP, X-Ray, ADOT Sidecar | ⚪ Not Started | |
-| Phase 2 | Stateful Bootstrap | RDS, ElastiCache, MSK, Workers | ⚪ Not Started | |
-| Phase 2.5 🆕 | API Gateway Completion | API Gateway service | ⚪ Not Started | |
-| Phase 3 | Platform Shield | Bastion, CI/CD (OIDC+OPA), Budgets | ⚪ Not Started | |
-| Phase 4 | Security & Pooling | Auth (#7), RDS Proxy | ⚪ Not Started | |
-| Phase 5 | Saga Workflows | Shipping Svc, Worker (#8, #9) | ⚪ Not Started | |
-| Phase 6 | CQRS & Search | OpenSearch, Search Svc (#10) | ⚪ Not Started | |
-| Phase 7 | EKS & GitOps | EKS, ArgoCD, ESO, AWS LBC | ⚪ Not Started | |
-| Phase 8 | Day-2 Ops & FIS | FIS, DR, EKS/RDS Upgrades | ⚪ Not Started | |
+| Phase | Pod | Focus | Services / Modules | Status | Post-Mortem / Learnings |
+|-------|-----|-------|-------------------|--------|------------------------|
+| Phase 1 | — | Sync Tracer Bullet | Order, Payment (ECS Fargate) | ✅ DONE | Chaos Drills 1-3.5 done. Identified gaps: Observability, API GW, SIGTERM handler |
+| Phase 1.5 | **POD 1** | The Illumination | AMP, X-Ray, ADOT Sidecar | ⚪ Not Started | **Mục tiêu:** "Nhìn thấy" được hệ thống qua telemetry |
+| Phase 2 | **POD 2** | The Critical Path | RDS, ElastiCache, MSK, 6 services đồng loạt | ⚪ Not Started | **Mục tiêu:** Full distributed flow end-to-end |
+| Phase 2.7 🆕 | **POD 3** | The Chaos Dojo | AWS FIS, DR, Full-stack Chaos Drills | ⚪ Not Started | **Mục tiêu:** Self-healing validation + incident response |
+| Phase 3 | — | Platform Shield | Bastion, CI/CD (OIDC+OPA), Budgets | ⚪ Not Started | |
+| Phase 4 | — | Security & Pooling | Auth (#7), RDS Proxy | ⚪ Not Started | |
+| Phase 5 | — | Saga Workflows | Shipping Svc, Worker (#8, #9) | ⚪ Not Started | |
+| Phase 6 | — | CQRS & Search | OpenSearch, Search Svc (#10) | ⚪ Not Started | |
+| Phase 7 | — | EKS & GitOps | EKS, ArgoCD, ESO, AWS LBC | ⚪ Not Started | |
+| Phase 8 | — | Day-2 Ops & FIS | FIS, DR, EKS/RDS Upgrades | ⚪ Not Started | |
