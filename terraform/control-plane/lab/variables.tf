@@ -281,3 +281,17 @@ variable "alb_services" {
   }))
   default = {}
 }
+
+#--------------------------------------------------------------
+# AMG (Amazon Managed Grafana)
+#--------------------------------------------------------------
+
+variable "amg_admin_user_id" {
+  description = <<-EOT
+    IAM Identity Center (SSO) User ID để gán ADMIN role trong AMG.
+    Lấy bằng: aws identitystore list-users --identity-store-id <id> --query 'Users[0].UserId' --output text
+    Để trống = bỏ qua role assignment (add sau trong Console).
+  EOT
+  type        = string
+  default     = ""
+}

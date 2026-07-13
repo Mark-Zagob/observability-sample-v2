@@ -11,16 +11,16 @@ output "private_subnet_ids" { value = module.network.private_subnet_ids }
 output "app_security_group_id" { value = module.security.application_security_group_id }
 output "ecs_task_execution_role_arn" { value = module.security.ecs_task_execution_role_arn }
 output "ecs_task_role_arn" { value = module.security.ecs_task_role_arn }
-output "kms_rds_key_arn" { 
+output "kms_rds_key_arn" {
   description = "KMS Key ARN dùng để mã hóa RDS & Secrets. Data Plane cần quyền Decrypt."
-  value = module.database.kms_key_arn 
+  value       = module.database.kms_key_arn
 }
 
 # 3. Database Contract
 output "db_secret_arn" { value = module.database.db_secret_arn }
-output "ssm_db_prefix" { 
+output "ssm_db_prefix" {
   description = "Prefix để Data Plane tự lên SSM đọc DB_HOST, DB_PORT..."
-  value = module.database.ssm_parameter_prefix 
+  value       = module.database.ssm_parameter_prefix
 }
 
 # 4. Compute Contract
@@ -32,3 +32,14 @@ output "ecr_repository_urls" { value = module.ecr.repository_urls }
 
 # 6. ALB Contract
 output "alb_target_group_arns" { value = module.loadbalancer.target_group_arns }
+
+# 7. Observability Contract
+output "amg_workspace_endpoint" {
+  description = "AMG workspace URL — mở trong browser để access Grafana"
+  value       = aws_grafana_workspace.main.endpoint
+}
+
+output "amg_workspace_id" {
+  description = "AMG workspace ID — dùng cho API/CLI operations"
+  value       = aws_grafana_workspace.main.id
+}
