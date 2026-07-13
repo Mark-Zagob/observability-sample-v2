@@ -33,6 +33,29 @@ Mỗi experiment đi theo cấu trúc 6 phase cố định:
 
 ---
 
+## 🎯 Pod-based Chaos Philosophy (NEW STRATEGY)
+
+Trong production, sự cố KHÔNG BAO GIỜ xảy ra ở 1 layer duy nhất. Một RDS failover sẽ kéo theo Connection Pool Exhaustion → Order Service Timeout → API Gateway 504 → User Retry Storm. 
+
+Do đó, từ **POD 2** trở đi, chúng ta áp dụng 3 quy tắc mới cho mọi experiment:
+
+### 1. Always inject at the infrastructure layer, observe at ALL layers
+- **Inject:** RDS failover (AWS API)
+- **Observe:** ECS task → App logs → Kafka consumer lag → Web UI error rate → Telegram alerts
+- *Không chỉ nhìn 1 service, phải nhìn toàn bộ Data Flow.*
+
+### 2. Measure the "User Pain Score"
+- Không chỉ hỏi "Service có chết không?", mà phải hỏi "User có nhận thấy không?"
+- **Metric cốt lõi:** `% successful orders` trong thời gian chaos.
+- Nếu RDS failover 60s nhưng `User Pain Score = 0%` (nhờ retry logic + cache) → Drill THÀNH CÔNG.
+
+### 3. Blast Radius = 1 Pod, không phải 1 Service
+- Khi test RDS failover, **PHẢI** có Traffic Generator đang chạy (bắn real traffic).
+- Khi test MSK broker loss, **PHẢI** có cả 2 Workers (Notification + Inventory) đang consume.
+- *Chaos trên hệ thống đang "ngủ" là vô nghĩa.*
+
+---
+
 ## 📡 Alerting Infrastructure (Iteration A — Đã triển khai)
 
 Trước khi chạy bất kỳ experiment nào, **bạn cần hiểu rõ hệ thống alerting** đã được build sẵn — vì các experiment sẽ trigger nó.
@@ -127,7 +150,27 @@ aws events list-rules --name-prefix obs-lab-ecs- \
 ```
 
 Nếu bất kỳ check nào FAIL, **STOP** — sửa alerting trước, không drill.
+---
+### 🛡️ Pod Completeness Pre-flight (Bắt buộc từ POD 2)
+Trước khi inject failure vào POD 2 hoặc POD 3, phải đảm bảo Pod đang "sống" hoàn chỉnh:
 
+```bash
+# 1. Verify Traffic Generator đang chạy (User Pain Score baseline)
+curl -X POST http://<traffic-gen-ip>:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 600}'
+
+# 2. Verify X-Ray Trace xuyên suốt Pod (User → API GW → Order → Payment → DB)
+# (Check trên X-Ray Console: Service Map phải hiện đủ 6 nodes)
+
+# 3. Verify Kafka Consumers không có Lag
+aws cloudwatch get-metric-statistics \
+  --namespace "AWS/Kafka" --metric-name "MaxOffsetLag" \
+  --dimensions Name=Cluster Name,Value=<msk-cluster> \
+  --start-time $(date -u -d '5 min ago' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
+  --period 300 --statistics Maximum
+# Kỳ vọng: Maximum < 10
+❌ Nếu Traffic Gen chưa chạy hoặc X-Ray trace bị cụt → STOP. Fix Pod trước khi drill.
 ---
 
 # 🧪 Experiment 1: The IAM Blackhole (Task Execution Role)
@@ -3112,6 +3155,74 @@ aws ecs describe-tasks --cluster $CLUSTER --tasks $NEW_TASK_ARN \
 - 📝 **Backlog:** Khi migrate sang EKS (Phase 7), dùng DaemonSet cho ADOT Collector → tách biệt lifecycle khỏi app pod. Sidecar pattern trên EKS có thể dùng init container + restart policy.
 
 ---
+
+## 🗄️ POD 2: STATEFUL CHAOS (Outline — Sẽ viết chi tiết ở Tuần 3-5)
+
+Triết lý của POD 2: "State is the hardest part of distributed systems."
+Nếu Phase 1 test "App có chết không?", thì POD 2 test:
+- "Khi DB đổi DNS (failover), App có tự reconnect không?"
+- "Khi Cache bốc hơi, DB có bị Connection Pool Exhaustion không?"
+- "Khi Kafka Broker chết, Consumer có rebalance và commit offset an toàn không?"
+
+### 🧪 Experiment 11: The DB Earthquake (RDS Multi-AZ Failover)
+- **Blast Radius:** RDS + Order Service + Payment Service
+- **Inject:** `aws rds reboot-db-instance --force-failover`
+- **Observe:** X-Ray trace chỉ ra chính xác 60s gap khi DNS chuyển AZ. Đo `psycopg2.OperationalError` rate.
+- **Success Criteria:** App tự reconnect thành công nhờ `retry_connect()`, `User Pain Score` < 5%.
+
+### 🧪 Experiment 12: The Cache Avalanche (Redis Flush)
+- **Blast Radius:** ElastiCache + Order Service + RDS
+- **Inject:** `redis-cli FLUSHALL` (hoặc delete ElastiCache node)
+- **Observe:** CloudWatch RDS CPU spike 80%+. Đo `db_pool_wait_duration_seconds`.
+- **Success Criteria:** App không bị "Connection Pool Exhaustion" (nhờ DB_POOL_MAX sizing đúng).
+
+### 🧪 Experiment 13: The Kafka Partition (MSK Broker Loss)
+- **Blast Radius:** MSK + Inventory/Notification Workers
+- **Inject:** Reboot 1 MSK Broker (hoặc block SG port 9092 của 1 broker)
+- **Observe:** Partition Leader Election time, Consumer Group Rebalance logs.
+- **Success Criteria:** Workers tự động resume consume từ offset cũ, không mất message.
+
+### 🧪 Experiment 14: The Zombie Consumer (Stop Worker)
+- **Blast Radius:** 1 Inventory Worker Task
+- **Inject:** `aws ecs stop-task`
+- **Observe:** Kafka Consumer Lag tăng đột biến, sau đó giảm xuống khi task mới spin up.
+- **Success Criteria:** Graceful Shutdown handler commit offset TRƯỚC khi process exit (không duplicate).
+
+### 🧪 Experiment 15: The Graceful Guillotine (ECS Rolling Update)
+- **Blast Radius:** Toàn bộ Order Service (force new deployment)
+- **Inject:** Deploy image tag mới (cùng version) để trigger rolling update
+- **Observe:** Kafka buffer flush, DB pool close, SIGTERM handling.
+- **Success Criteria:** Zero dropped Kafka messages, Zero ghost DB connections.
+---
+## 🌪️ POD 3: THE AWS CHAOS DOJO (Outline — Sẽ viết chi tiết ở Tuần 6-10)
+
+Triết lý của POD 3: "Stop clicking, start automating."
+Chuyển từ Chaos thủ công (AWS CLI) sang **AWS FIS (Fault Injection Simulator)** — vũ khí tối thượng của SRE production.
+
+### 🧪 Experiment 16: The AZ Apocalypse (AWS FIS)
+- **Blast Radius:** Toàn bộ resources trong 1 AZ (EC2, RDS, ElastiCache)
+- **Tool:** AWS FIS Experiment Template (Terraform)
+- **Observe:** ALB cross-zone routing, Multi-AZ resilience.
+- **Success Criteria:** Hệ thống tự phục hồi sang AZ mới mà không cần human intervention.
+
+### 🧪 Experiment 17: The Cascade Symphony (Full-stack)
+- **Blast Radius:** Web UI → API GW → Order → Payment → DB
+- **Inject:** Kết hợp FIS (Network Disruption) + Traffic Generator (Flash Sale scenario)
+- **Observe:** End-to-end SLO impact, RFC 7807 propagation qua 4 layers.
+- **Success Criteria:** Đo chính xác "User Pain Score" trong toàn bộ chuỗi cascade.
+
+### 🧪 Experiment 18: The Secret Betrayal (Secrets Manager Rotation)
+- **Blast Radius:** RDS + All Services
+- **Inject:** Trigger manual secret rotation
+- **Observe:** App auto-reconnect với new password (không cần restart).
+- **Success Criteria:** Zero downtime trong quá trình rotation.
+
+### 🧪 Experiment 19-21: (Stateful Chaos tái hiện bằng FIS)
+- **Exp 19:** The Kafka Earthquake (MSK Broker Loss via FIS)
+- **Exp 20:** The Cache Apocalypse (ElastiCache Node Failure via FIS)
+- **Exp 21:** The Graceful Guillotine 2.0 (ECS Rolling Update via FIS)
+
+---
 # 📖 Glossary & Cheat Sheets (Iteration A++)
 
 ### ExitCode signatures — bảng định mệnh của mọi SRE
@@ -3230,21 +3341,32 @@ aws ecs describe-tasks --cluster $CLUSTER --tasks $NEW_TASK_ARN \
 
 # 🔮 Roadmap experiments kế tiếp
 
-| # | Tên | Status | Iteration | Skill mới học được |
+| # | Tên | Status | Pod | Skill mới học được |
 |---|---|---|---|---|
-| 1 | IAM Blackhole (Execution Role) | ✅ Done + alert wired | A | EventBridge, Circuit Breaker, IAM |
-| 2 | Network Partition (SG) | ✅ Done (Blind Spot discovered) | A | Zombie Task, Cloud Map-only blind spot |
-| 3 | Poison Config (Bad Image / OOM) | ✅ Done + alert wired | A | ExitCode signatures, leading vs lagging |
-| 3.5 | **Memory Pressure Drill** (recurring) | ✅ Done | A | ECS Exec, leading indicator verify, alarm tuning |
-| 4 | **Task Role Blackhole (Runtime IAM)** | 📝 Written | B | Runtime vs Birth IAM, Silent Killer, app-level monitoring gap |
-| 4B | **Order-Service Poison Config** | 📝 Written | B | Alarm `for_each` verification, blast radius isolation, TTD comparison |
-| 5 | **Cascading Failure (Payment Slow → Order Timeout)** | 📝 Written | C | Service-to-service timeout, overlap zone, intermittent failure |
-| 6 | **Cloud Map DNS Failure** | 📝 Written | C | DNS TTL, ConnectionError vs Timeout, synthetic health check |
-| 7 | The Trace Storm (Sidecar Resource Contention) | 📝 Written | Phase 1.5 | Backpressure, memory_limiter, failure isolation |
-| 8 | The Silent Blinder (Telemetry Pipeline Blackhole) | 📝 Written | Phase 1.5 | Meta-monitoring, partial failure, SigV4 auth |
-| 9 | The Cardinality Bomb (FinOps Guardrail) | 📝 Written | Phase 1.5 | Cardinality, AMP cost model, label hygiene |
-| 10 | The Zombie Sidecar (Non-Essential Container Death) | 📝 Written | Phase 1.5 | `essential=false` behavior, zombie sidecar, container lifecycle |
-| 11 | AWS FIS AZ failure | 🔜 | Phase 8 | Multi-AZ recovery, native AWS chaos |
+| **POD 1: The Illumination** | | | | |
+| 1 | IAM Blackhole (Execution Role) | ✅ Done | — | EventBridge, Circuit Breaker |
+| 2 | Network Partition (SG) | ✅ Done | — | Zombie Task, Cloud Map blind spot |
+| 3 | Poison Config (Bad Image / OOM) | ✅ Done | — | ExitCode signatures |
+| 3.5 | Memory Pressure Drill | ✅ Done | — | Leading indicator verify |
+| 4 | Task Role Blackhole (Runtime IAM) | 📝 Written | — | Silent Killer, app-level gap |
+| 4B | Order-Service Poison Config | 📝 Written | — | Alarm `for_each` verification |
+| 5 | Cascading Failure (Payment Slow) | 📝 Written | — | Overlap zone, intermittent failure |
+| 6 | Cloud Map DNS Failure | 📝 Written | — | DNS TTL, synthetic health check |
+| 7-10 | Observability Bridge Series | 📝 Written | POD 1 | Backpressure, Meta-monitoring, FinOps |
+| **POD 2: The Critical Path (Stateful)** | | | | |
+| 11 | The DB Earthquake (RDS Failover) | 🔜 | POD 2 | `retry_connect`, DNS propagation |
+| 12 | The Cache Avalanche (Redis Flush) | 🔜 | POD 2 | Cache miss storm, Pool exhaustion |
+| 13 | The Kafka Partition (MSK Broker) | 🔜 | POD 2 | Leader election, Rebalance |
+| 14 | The Zombie Consumer (Stop Task) | 🔜 | POD 2 | Consumer lag, Offset commit |
+| 15 | The Graceful Guillotine (Rolling) | 🔜 | POD 2 | SIGTERM, Kafka flush, DB close |
+| **POD 3: The Chaos Dojo (AWS FIS)** | | | | |
+| 16 | The AZ Apocalypse (FIS) | 🔜 | POD 3 | Multi-AZ resilience, FIS Templates |
+| 17 | The Cascade Symphony (Full-stack) | 🔜 | POD 3 | E2E SLO impact, User Pain Score |
+| 18 | The Secret Betrayal (Rotation) | 🔜 | POD 3 | Zero-downtime rotation |
+| 19-21 | Stateful Chaos via FIS | 🔜 | POD 3 | Automating chaos with FIS |
+| **Phase 8: Day-2 Ops** | | | | |
+| 22 | EKS/RDS Major Upgrade | 🔜 | Phase 8 | Blue/Green deployment |
+| 23 | DR Drill (Route53 Failover) | 🔜 | Phase 8 | RTO measurement |
 
 ---
 
