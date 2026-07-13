@@ -34,12 +34,17 @@ output "ecr_repository_urls" { value = module.ecr.repository_urls }
 output "alb_target_group_arns" { value = module.loadbalancer.target_group_arns }
 
 # 7. Observability Contract
+output "amp_prometheus_endpoint" {
+  description = "AMP remote write / query endpoint URL"
+  value       = module.amp.prometheus_endpoint
+}
+
 output "amg_workspace_endpoint" {
   description = "AMG workspace URL — mở trong browser để access Grafana"
-  value       = aws_grafana_workspace.main.endpoint
+  value       = module.amg.workspace_endpoint
 }
 
 output "amg_workspace_id" {
   description = "AMG workspace ID — dùng cho API/CLI operations"
-  value       = aws_grafana_workspace.main.id
+  value       = module.amg.workspace_id
 }

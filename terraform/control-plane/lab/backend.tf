@@ -23,8 +23,8 @@ terraform {
     #----------------------------------------------------------
     # State Storage
     #----------------------------------------------------------
-    bucket = "obs-terraform-state-730335245469" # ← Replace with bootstrap output
-    key    = "control-plane/lab/terraform.tfstate"         # ← Unique per environment
+    bucket = "obs-terraform-state-730335245469"    # ← Replace with bootstrap output
+    key    = "control-plane/lab/terraform.tfstate" # ← Unique per environment
     region = "ap-southeast-2"
 
     #----------------------------------------------------------

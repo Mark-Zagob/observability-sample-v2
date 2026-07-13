@@ -11,7 +11,7 @@ module "network" {
   aws_region         = var.aws_region
   vpc_cidr           = var.vpc_cidr
   single_nat_gateway = var.single_nat_gateway
-  
+
   enable_flow_logs                  = var.enable_flow_logs
   flow_logs_retention_days          = 30
   flow_logs_cloudwatch_traffic_type = "REJECT"
@@ -26,13 +26,13 @@ module "vpc_endpoints" {
   project_name = var.project_name
   vpc_id       = module.network.vpc_id
   vpc_cidr     = module.network.vpc_cidr_block
-  
+
   route_table_ids = concat(
     [module.network.public_route_table_id],
     values(module.network.private_route_table_ids),
     [module.network.data_route_table_id]
   )
-  
+
   enable_interface_endpoints = var.enable_interface_endpoints
   private_subnet_ids         = module.network.private_subnet_ids
   common_tags                = { Module = "vpc-endpoints" }
@@ -45,17 +45,17 @@ module "security" {
   vpc_id         = module.network.vpc_id
   vpc_cidr_block = module.network.vpc_cidr_block
   app_ports      = var.app_ports
-  
+
   enable_bastion    = var.enable_bastion
   allowed_ssh_cidrs = var.allowed_ssh_cidrs
   generate_ssh_key  = var.generate_ssh_key
-  
+
   common_tags = { Module = "security" }
 }
 
 # 4. Database (RDS + KMS + Secrets Manager + SSM)
 module "database" {
-  source = "../../modules/database"
+  source       = "../../modules/database"
   project_name = var.project_name
   environment  = var.environment
 
@@ -74,7 +74,7 @@ module "database" {
   skip_final_snapshot        = var.db_skip_final_snapshot
   auto_minor_version_upgrade = var.db_auto_minor_version_upgrade
   apply_immediately          = var.db_apply_immediately
-  
+
   enhanced_monitoring_interval = var.db_enhanced_monitoring_interval
   enable_cloudwatch_alarms     = var.db_enable_cloudwatch_alarms
 
@@ -83,22 +83,22 @@ module "database" {
 
 # 5. ECR
 module "ecr" {
-  source             = "../../modules/ecr"
-  project_name       = var.project_name
-  repository_names   = var.ecr_repository_names
+  source               = "../../modules/ecr"
+  project_name         = var.project_name
+  repository_names     = var.ecr_repository_names
   image_tag_mutability = "MUTABLE"
-  scan_on_push       = true
-  common_tags        = { Module = "ecr" }
+  scan_on_push         = true
+  common_tags          = { Module = "ecr" }
 }
 
 # 6. ECS Cluster (The Engine)
 module "ecs_cluster" {
-  source       = "../../modules/compute/ecs-cluster"
-  project_name = var.project_name
-  vpc_id       = module.network.vpc_id
-  namespace_name = "ecommerce.local"
+  source                    = "../../modules/compute/ecs-cluster"
+  project_name              = var.project_name
+  vpc_id                    = module.network.vpc_id
+  namespace_name            = "ecommerce.local"
   enable_container_insights = true
-  common_tags  = { Module = "ecs-cluster" }
+  common_tags               = { Module = "ecs-cluster" }
 }
 
 # 7. ACM & ALB (Optional - Giữ lại để sau này API Gateway / Web UI dùng)
@@ -115,15 +115,15 @@ module "acm" {
 }
 
 module "loadbalancer" {
-  source                = "../../modules/loadbalancer"
-  project_name          = var.project_name
-  vpc_id                = module.network.vpc_id
-  public_subnet_ids     = module.network.public_subnet_ids
-  alb_security_group_id = module.security.alb_security_group_id
-  acm_certificate_arn   = module.acm.certificate_arn
-  services              = var.alb_services # Map rỗng nếu chưa có service nào
+  source                     = "../../modules/loadbalancer"
+  project_name               = var.project_name
+  vpc_id                     = module.network.vpc_id
+  public_subnet_ids          = module.network.public_subnet_ids
+  alb_security_group_id      = module.security.alb_security_group_id
+  acm_certificate_arn        = module.acm.certificate_arn
+  services                   = var.alb_services # Map rỗng nếu chưa có service nào
   enable_deletion_protection = false
-  common_tags           = { Module = "loadbalancer" }
+  common_tags                = { Module = "loadbalancer" }
 }
 
 resource "aws_route53_record" "app" {
