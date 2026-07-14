@@ -14,6 +14,10 @@ module "amg" {
   amp_workspace_arn = module.amp.workspace_arn
   admin_user_id     = var.amg_admin_user_id
 
+  # Sandbox là member account trong Org — SSO instance thuộc management
+  # account, ListInstances trả empty từ đây. SSO vẫn hoạt động cho AMG.
+  skip_sso_check = true
+
   common_tags = {
     Module = "observability"
     Plane  = "Control"

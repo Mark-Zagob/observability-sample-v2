@@ -53,6 +53,17 @@ variable "admin_user_id" {
   default     = ""
 }
 
+variable "skip_sso_check" {
+  description = <<-EOT
+    Skip SSO precondition check (data.aws_ssoadmin_instances).
+    Set true khi account là member account trong AWS Organization đã có
+    IAM Identity Center — ListInstances trả empty list từ member account
+    dù SSO hoạt động bình thường cho AMG.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "common_tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)

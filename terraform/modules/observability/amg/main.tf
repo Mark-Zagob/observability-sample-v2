@@ -5,11 +5,18 @@
 data "aws_caller_identity" "current" {}
 
 # Prerequisite check: AMG dùng authentication_providers = ["AWS_SSO"],
-# yêu cầu IAM Identity Center (SSO) đã được enable trong Organization/
-# Account này. Nếu chưa enable, AWS API trả lỗi khó hiểu ở bước apply —
-# lifecycle precondition bên dưới (resource "aws_grafana_workspace")
-# fail sớm với thông báo rõ ràng hơn.
-data "aws_ssoadmin_instances" "current" {}
+# yêu cầu IAM Identity Center (SSO) đã được enable trong Organization.
+#
+# ⚠️ CAVEAT: data "aws_ssoadmin_instances" gọi sso-admin:ListInstances.
+# Trong AWS Organization, SSO instance thuộc sở hữu management account
+# (hoặc delegated admin). Member accounts (VD: sandbox) SỬ DỤNG SSO
+# bình thường, nhưng ListInstances trả về empty list — gây false negative.
+#
+# Nếu account là member account trong Org đã có SSO, set:
+#   skip_sso_check = true
+data "aws_ssoadmin_instances" "current" {
+  count = var.skip_sso_check ? 0 : 1
+}
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
@@ -43,9 +50,11 @@ resource "aws_grafana_workspace" "this" {
   tags = local.tags
 
   lifecycle {
+    # Chỉ check khi skip_sso_check = false (mặc định).
+    # Khi skip = true, data source không tồn tại → condition luôn true.
     precondition {
-      condition     = length(data.aws_ssoadmin_instances.current.arns) > 0
-      error_message = "IAM Identity Center (AWS SSO) chưa được enable trong Account/Organization này. AMG với authentication_providers = [\"AWS_SSO\"] yêu cầu ít nhất 1 SSO instance. Enable tại: AWS Console → IAM Identity Center → Enable, hoặc đổi authentication_providers = [\"SAML\"] nếu dùng external IdP."
+      condition     = var.skip_sso_check || length(data.aws_ssoadmin_instances.current[0].arns) > 0
+      error_message = "IAM Identity Center (AWS SSO) chưa được enable trong Account/Organization này. AMG với authentication_providers = [\"AWS_SSO\"] yêu cầu ít nhất 1 SSO instance. Nếu account là member trong Org đã có SSO, set skip_sso_check = true."
     }
   }
 }
