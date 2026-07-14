@@ -71,8 +71,9 @@ locals {
       },
       {
         name  = "AMP_ENDPOINT"
-        # Data Plane sẽ truyền biến này vào khi gọi module
-        value = var.amp_endpoint 
+        # prometheus_endpoint (từ SSM) = base URL: https://aps-workspaces.../workspaces/ws-xxx/
+        # ADOT prometheusremotewrite cần full path kèm api/v1/remote_write
+        value = "${var.amp_endpoint}api/v1/remote_write" 
       }
     ]
 
