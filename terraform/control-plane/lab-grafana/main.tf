@@ -73,3 +73,15 @@ resource "grafana_data_source" "cloudwatch" {
     authType      = "workspace-iam-role"
   })
 }
+
+#--------------------------------------------------------------
+# 4. Dashboards
+#--------------------------------------------------------------
+# Tương đương on-prem: grafana/dashboards/Application/*.json
+# AWS:                  grafana_dashboard resources (Dashboard as Code)
+#--------------------------------------------------------------
+
+resource "grafana_dashboard" "pod1_illumination" {
+  config_json = file("${path.module}/dashboards/pod1-illumination.json")
+  overwrite   = true
+}
