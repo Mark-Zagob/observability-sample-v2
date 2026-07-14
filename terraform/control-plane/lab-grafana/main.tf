@@ -29,7 +29,8 @@ resource "grafana_data_source" "prometheus" {
   json_data_encoded = jsonencode({
     httpMethod    = "POST"
     sigV4Auth     = true
-    sigV4AuthType = "workspace-iam-role"
+    # "default" = dùng IAM execution role của AMG workspace (không phải "workspace-iam-role" — đó là UI label)
+    sigV4AuthType = "default"
     sigV4Region   = var.aws_region
     timeInterval  = "15s"
 
@@ -55,7 +56,7 @@ resource "grafana_data_source" "xray" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    authType      = "workspace-iam-role"
+    authType      = "default"
   })
 }
 
@@ -70,7 +71,7 @@ resource "grafana_data_source" "cloudwatch" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    authType      = "workspace-iam-role"
+    authType      = "default"
   })
 }
 
