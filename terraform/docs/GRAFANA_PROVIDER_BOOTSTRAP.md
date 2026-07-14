@@ -2,6 +2,8 @@
 
 *Tài liệu kỹ thuật giải thích vấn đề circular dependency giữa `provider "grafana"` và `module.amg`, kèm 2 hướng giải quyết: 2-phase apply (ngắn hạn) và tách state (khuyến nghị production).*
 
+> **✅ Status:** Giải pháp 2 (tách state) đã được triển khai tại [`control-plane/lab-grafana/`](../control-plane/lab-grafana/). Giải pháp 1 (2-phase apply) được giữ lại làm tài liệu tham khảo.
+
 ---
 
 ## 📍 Vấn đề
@@ -101,44 +103,61 @@ Root cause thật sự là **`module.amg` (hạ tầng AWS) và `grafana_data_so
 ### Kiến trúc đề xuất
 
 ```
-control-plane/lab/                     ← State hiện tại: VPC, IAM, RDS, ECS Cluster, AMP, AMG (workspace only)
-    amg.tf                             ← CHỈ còn module "amg" (bỏ toàn bộ provider "grafana" + grafana_data_source.*)
+control-plane/lab/                 ← State hiện tại: VPC, IAM, RDS, ECS Cluster, AMP, AMG (workspace only)
+    amg.tf                         ← CHỈ còn module "amg" (bỏ toàn bộ provider "grafana" + grafana_data_source.*)
 
-control-plane/lab-grafana-datasources/ ← State MỚI: chỉ chứa Grafana data source config
-    main.tf                            ← đọc AMG endpoint qua terraform_remote_state
-    providers.tf                       ← provider "grafana" (an toàn vì remote_state đã apply xong)
+control-plane/lab-grafana/         ← State MỚI: Grafana config (data sources, dashboards, alert rules)
+    main.tf                        ← đọc AMP endpoint qua SSM
+    providers.tf                   ← provider "grafana" (đọc AMG endpoint + token qua SSM)
+    variables.tf                   ← aws_region, project_name, environment
+    outputs.tf                     ← datasource_uids map
+    backend.tf                     ← S3 backend (cùng bucket, khác key)
 ```
 
-### `control-plane/lab-grafana-datasources/providers.tf`
+### Cross-state communication: SSM (không dùng `terraform_remote_state`)
+
+Thay vì đọc toàn bộ state file qua `terraform_remote_state` (cần `s3:GetObject` → expose toàn bộ state), `lab-grafana` đọc SSM Parameters — giống pattern Data Plane đang dùng:
+
+```
+/{project}/{env}/observability/amg_endpoint                  ← String  (AMG module export)
+/{project}/{env}/observability/amg_service_account_token      ← SecureString + KMS (AMG module export)
+/{project}/{env}/observability/amp_endpoint                   ← String  (AMP module export)
+```
+
+### `control-plane/lab-grafana/providers.tf`
 
 ```hcl
-data "terraform_remote_state" "control_plane" {
-  backend = "s3"
-  config = {
-    bucket = "obs-terraform-state-730335245469"
-    key    = "control-plane/lab/terraform.tfstate"
-    region = "ap-southeast-2"
-  }
+data "aws_ssm_parameter" "amg_endpoint" {
+  name = "/${var.project_name}/${var.environment}/observability/amg_endpoint"
+}
+
+data "aws_ssm_parameter" "amg_service_account_token" {
+  name            = "/${var.project_name}/${var.environment}/observability/amg_service_account_token"
+  with_decryption = true
 }
 
 provider "grafana" {
-  url  = "https://${data.terraform_remote_state.control_plane.outputs.amg_workspace_endpoint}"
-  auth = data.terraform_remote_state.control_plane.outputs.amg_service_account_token
+  url  = "https://${data.aws_ssm_parameter.amg_endpoint.value}"
+  auth = data.aws_ssm_parameter.amg_service_account_token.value
 }
 ```
 
-> ⚠️ Lưu ý: `service_account_token` phải được `sensitive = true` ở output ([đã áp dụng](../modules/observability/amg/outputs.tf)), nhưng **remote_state output vẫn đọc được giá trị plaintext** nếu principal có quyền `s3:GetObject` trên state bucket. Xem thêm mục "Rủi ro còn lại" bên dưới.
+> ✅ Token được lưu dạng `SecureString` trong SSM (KMS-encrypted). Principal chỉ cần `ssm:GetParameter` + `kms:Decrypt` trên key cụ thể, không cần `s3:GetObject` trên toàn bộ state file.
 
-### `control-plane/lab-grafana-datasources/main.tf`
+### `control-plane/lab-grafana/main.tf`
 
 ```hcl
+data "aws_ssm_parameter" "amp_endpoint" {
+  name = "/${var.project_name}/${var.environment}/observability/amp_endpoint"
+}
+
 resource "grafana_data_source" "prometheus" {
   type       = "prometheus"
   name       = "Amazon Managed Prometheus"
   uid        = "amp-datasource"
   is_default = true
 
-  url                = data.terraform_remote_state.control_plane.outputs.amp_prometheus_endpoint
+  url                = data.aws_ssm_parameter.amp_endpoint.value
   basic_auth_enabled = false
 
   json_data_encoded = jsonencode({
@@ -160,8 +179,9 @@ resource "grafana_data_source" "prometheus" {
 cd terraform/control-plane/lab
 terraform apply
 
-# 2. Apply grafana-datasources (đọc remote state đã "chín" — không còn unknown)
-cd ../lab-grafana-datasources
+# 2. Apply grafana config (đọc remote state đã "chín" — không còn unknown)
+cd ../lab-grafana
+terraform init    # chỉ cần lần đầu
 terraform apply
 ```
 
@@ -175,19 +195,23 @@ terraform apply
 | Ưu điểm | Nhược điểm |
 |---|---|
 | Không còn circular dependency — mỗi state tự đủ điều kiện apply | Thêm 1 state file, 1 backend key, 1 thư mục cần maintain |
-| Blast radius nhỏ: sửa dashboard data source không đụng tới VPC/IAM/RDS state | Cross-state dependency qua `terraform_remote_state` — cần đồng bộ output contract cẩn thận (giống nguyên tắc SSM Service Catalog đã dùng cho Data Plane) |
-| Dễ áp dụng CI/CD riêng cho từng state (khác tốc độ approve) | Cần thêm quyền IAM `s3:GetObject` lên state bucket cho pipeline chạy `lab-grafana-datasources` |
+| Blast radius nhỏ: sửa dashboard data source không đụng tới VPC/IAM/RDS state | Cross-state dependency qua SSM — cần đồng bộ SSM path convention |
+| Dễ áp dụng CI/CD riêng cho từng state (khác tốc độ approve) | Cần IAM `ssm:GetParameter` + `kms:Decrypt` cho pipeline chạy `lab-grafana` |
+| Token truyền qua SSM SecureString (KMS) — không expose toàn bộ state | Thêm 3 SSM parameters (chi phí không đáng kể) |
 
 ---
 
-## 🔐 Rủi ro còn lại (cả 2 giải pháp)
+## 🔐 Rủi ro còn lại
 
-`aws_grafana_workspace_service_account_token` là **admin token dạng plaintext trong Terraform state** (dù output có `sensitive = true`, giá trị vẫn nằm trong state file, chỉ bị che khi hiển thị ở CLI/UI).
+`aws_grafana_workspace_service_account_token` là **admin token** vẫn tồn tại dạng plaintext trong Terraform state file của `control-plane/lab/` (dù output có `sensitive = true`, giá trị vẫn nằm trong state file, chỉ bị che khi hiển thị ở CLI/UI).
 
-- **Đã có sẵn:** [backend.tf](../control-plane/lab/backend.tf) dùng S3 + KMS CMK encryption at-rest — giảm rủi ro lộ token nếu bucket bị truy cập trái phép.
-- **Chưa có:** giới hạn quyền đọc state ở cấp IAM policy (ai có quyền `s3:GetObject` vào state bucket = có full admin Grafana). Production nên:
-  1. Tạo IAM policy riêng chỉ cho phép CI/CD role đọc `control-plane/lab/terraform.tfstate` (không cho user cá nhân đọc trực tiếp).
-  2. Cân nhắc không dùng Service Account Token cho Grafana Provider — thay vào đó cấu hình data source qua AWS Console/API 1 lần (out-of-band), Terraform chỉ quản lý `aws_grafana_workspace` (infra), không quản lý `grafana_data_source` (config bên trong).
+**Đã giảm thiểu:**
+- [backend.tf](../control-plane/lab/backend.tf) dùng S3 + KMS CMK encryption at-rest.
+- `lab-grafana` **không đọc state file trực tiếp** — dùng SSM SecureString thay vì `terraform_remote_state`, giảm blast radius từ "toàn bộ state" xuống "1 SSM key cụ thể".
+
+**Production nên bổ sung:**
+1. IAM policy giới hạn `ssm:GetParameter` trên path `/.../amg_service_account_token` chỉ cho CI/CD role.
+2. SSM Parameter Store resource policy nếu cần cross-account access.
 
 ---
 
@@ -195,5 +219,5 @@ terraform apply
 
 | Môi trường | Giải pháp |
 |---|---|
-| **Lab (hiện tại)** | Giải pháp 1 (2-phase apply với `-target=module.amg`) — đơn giản, tốc độ ưu tiên |
+| **Lab (đã triển khai)** | Giải pháp 2 (tách state) — [`control-plane/lab-grafana/`](../control-plane/lab-grafana/) |
 | **Production (Phase 3 — PR-Driven IaC)** | Giải pháp 2 (tách state) — bắt buộc trước khi đưa vào CI/CD pipeline, tránh `-target` trong pipeline tự động (anti-pattern, che khuất plan thật) |

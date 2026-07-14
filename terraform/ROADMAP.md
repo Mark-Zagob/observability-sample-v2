@@ -106,11 +106,11 @@ Mỗi Pod PHẢI đạt được **3 tiêu chí** trước khi chuyển Pod ti�
 
 ### 🧩 Modules triển khai
 
-- [ ] `observability/amp` (Module mới): Tạo Amazon Managed Prometheus workspace.
+- [x] `observability/amp` (Module mới): Tạo Amazon Managed Prometheus workspace. KMS CMK encryption, SSM exports, cardinality alarm.
 - [ ] `observability/xray`: Enable X-Ray tracing cho ECS Tasks.
-- [ ] `observability/amg` (Module mới): Tạo Amazon Managed Grafana workspace.
-  - Authentication: AWS IAM Identity Center (SSO) hoặc SAML
-  - Data sources: AMP workspace + X-Ray
+- [x] `observability/amg` (Module mới): Tạo Amazon Managed Grafana workspace.
+  - Authentication: AWS IAM Identity Center (SSO)
+  - Data sources: AMP + X-Ray + CloudWatch — provisioned via Grafana Terraform Provider tại `control-plane/lab-grafana/` (tách state, đọc SSM). Xem [`docs/GRAFANA_PROVIDER_BOOTSTRAP.md`](docs/GRAFANA_PROVIDER_BOOTSTRAP.md).
   - Dashboard as Code: JSON provisioned từ Git (Phase 3 sẽ áp dụng)
 - [ ] Update `compute/ecs-service` module:
   - Thêm **ADOT Collector làm Sidecar Container** trong Task Definition.
@@ -142,11 +142,11 @@ Update Task Definition của Order Service & Payment Service:
 ```
 
 - [ ] Verify traces xuất hiện trên X-Ray Service Map.
-- [ ] **Setup Amazon Managed Grafana (AMG):**
-  - Tạo AMG workspace qua Terraform (`aws_grafana_workspace`)
+- [x] **Setup Amazon Managed Grafana (AMG):**
+  - Tạo AMG workspace qua Terraform (`aws_grafana_workspace`) — `modules/observability/amg/`
   - Configure AWS IAM Identity Center làm identity provider (SSO)
-  - Add AMP workspace làm Prometheus data source (SigV4 auth)
-  - Add X-Ray làm data source
+  - Add AMP workspace làm Prometheus data source (SigV4 auth) — `control-plane/lab-grafana/`
+  - Add X-Ray + CloudWatch làm data source — `control-plane/lab-grafana/`
   - Import JSON dashboard từ `on-premises/observability-vm/grafana/dashboards/Application/`
 - [ ] Verify traces xuất hiện trên X-Ray Service Map.
 - [ ] Verify metrics trên AMP hiển thị đúng trên AMG dashboard.
@@ -538,7 +538,7 @@ Tại Phase 4, hệ thống sẽ có 5+ services gọi nhau. Đây là thời đ
 | Phase | Pod | Focus | Services / Modules | Status | Post-Mortem / Learnings |
 |-------|-----|-------|-------------------|--------|------------------------|
 | Phase 1 | — | Sync Tracer Bullet | Order, Payment (ECS Fargate) | ✅ DONE | Chaos Drills 1-3.5 done. Identified gaps: Observability, API GW, SIGTERM handler |
-| Phase 1.5 | **POD 1** | The Illumination | AMP, X-Ray, ADOT Sidecar | ⚪ Not Started | **Mục tiêu:** "Nhìn thấy" được hệ thống qua telemetry |
+| Phase 1.5 | **POD 1** | The Illumination | AMP, X-Ray, ADOT Sidecar, AMG | 🟡 In Progress | AMP + AMG modules done. Grafana data sources tách state (`lab-grafana/`, SSM). Còn: ADOT sidecar wiring, dashboard import, verify e2e |
 | Phase 2 | **POD 2** | The Critical Path | RDS, ElastiCache, MSK, 6 services đồng loạt | ⚪ Not Started | **Mục tiêu:** Full distributed flow end-to-end |
 | Phase 2.7 🆕 | **POD 3** | The Chaos Dojo | AWS FIS, DR, Full-stack Chaos Drills | ⚪ Not Started | **Mục tiêu:** Self-healing validation + incident response |
 | Phase 3 | — | Platform Shield | Bastion, CI/CD (OIDC+OPA), Budgets | ⚪ Not Started | |

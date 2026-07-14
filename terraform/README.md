@@ -137,8 +137,9 @@ graph TB
 - Terraform ≥ 1.7.0
 - AWS CLI configured (`aws configure`)
 - S3 backend bootstrapped (xem `bootstrap/`)
-> ⚠️ **State Management Note (Control Plane / Data Plane):**
-> *   **Control Plane** (`control-plane/lab/`): Platform infra (VPC, IAM, RDS, ECR, ECS Cluster). S3 backend, state key `control-plane/lab/`.
+> ⚠️ **State Management Note (Control Plane / Data Plane / Grafana Config):**
+> *   **Control Plane** (`control-plane/lab/`): Platform infra (VPC, IAM, RDS, ECR, ECS Cluster, AMP, AMG workspace). S3 backend, state key `control-plane/lab/`.
+> *   **Grafana Config** (`control-plane/lab-grafana/`): Grafana data sources, dashboards. S3 backend, state key `control-plane/lab-grafana/`. Đọc AMG endpoint/token qua SSM. Xem [`docs/GRAFANA_PROVIDER_BOOTSTRAP.md`](docs/GRAFANA_PROVIDER_BOOTSTRAP.md).
 > *   **Data Plane** (`data-plane/`): Per-service ECS deployments. S3 backend, state key `data-plane/{service}/`. Đọc metadata từ Control Plane qua SSM Parameter Store.
 > *   **All-in-One** (`environments/shared/`): Giữ lại làm **reference** — toàn bộ infra chung 1 state file, phù hợp khi học cách hoạt động trước khi tách.
 > *   **TFC Sandbox** (`environments/tfc-sandbox/`): Terraform Cloud backend để so sánh UX.
@@ -157,6 +158,14 @@ conftest test plan.json -p ../../policy/  # Validate OPA policies
 terraform apply plan.tfplan
 ```
 
+**Deploy Grafana Config (data sources):**
+
+```bash
+cd control-plane/lab-grafana
+terraform init    # chỉ cần lần đầu
+terraform apply
+```
+
 **Deploy Data Plane (per-service):**
 
 ```bash
@@ -169,8 +178,9 @@ terraform apply
 **Destroy (reverse order):**
 
 ```bash
-cd data-plane && terraform destroy       # Data Plane first
-cd ../control-plane/lab && terraform destroy  # Then Control Plane
+cd data-plane && terraform destroy                  # Data Plane first
+cd ../control-plane/lab-grafana && terraform destroy # Then Grafana Config
+cd ../lab && terraform destroy                      # Then Control Plane
 ```
 
 > 💡 **FinOps Tip:** `terraform destroy` → $0/day. Apply sáng, destroy tối ≈ $10/ngày.
@@ -186,8 +196,9 @@ terraform/
 ├── AWS_TERRAFORM_PLAYBOOK.md          ← Module-by-module playbook
 ├── ROADMAP.md                         ← Master roadmap (Workload & Platform)
 │
-├── control-plane/                     ← 🆕 Platform infra (VPC, IAM, RDS, ECS Cluster)
-│   └── lab/                           ←   Lab environment (S3 backend)
+├── control-plane/                     ← 🆕 Platform infra (VPC, IAM, RDS, ECS Cluster, AMP, AMG)
+│   ├── lab/                           ←   Lab environment (S3 backend)
+│   └── lab-grafana/                   ←   🆕 Grafana config (data sources) — tách state, đọc SSM
 ├── data-plane/                        ← 🆕 Per-service ECS deployments
 │   ├── main.tf                        ←   Reads SSM → deploys ecs-service module
 │   └── terraform.tfvars               ←   App Team config (image_tag, cpu, memory)
@@ -198,7 +209,8 @@ terraform/
 ├── docs/                              ← Deep-dive documentation
 │   ├── TRADE_OFFS.md                  ←   Architecture decision records
 │   ├── FINOPS.md                      ←   AWS cost management & optimization
-│   └── AWS_CHAOS_PLAYBOOK.md          ←   🔥 Chaos Engineering (IAM Blackhole, Network Partition)
+│   ├── AWS_CHAOS_PLAYBOOK.md          ←   🔥 Chaos Engineering (IAM Blackhole, Network Partition)
+│   └── GRAFANA_PROVIDER_BOOTSTRAP.md  ←   🆕 Giải quyết chicken-and-egg Grafana Provider
 └── interviews/                        ← DevOps interview questions
 ```
 

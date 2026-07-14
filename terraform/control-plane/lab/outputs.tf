@@ -47,4 +47,4 @@ output "amg_workspace_endpoint" {
 output "amg_workspace_id" {
   description = "AMG workspace ID — dùng cho API/CLI operations"
   value       = module.amg.workspace_id
-}
+}

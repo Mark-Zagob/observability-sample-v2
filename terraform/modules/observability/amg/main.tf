@@ -236,3 +236,18 @@ resource "aws_ssm_parameter" "endpoint" {
   value = aws_grafana_workspace.this.endpoint
   tags  = local.tags
 }
+
+resource "aws_ssm_parameter" "service_account_token" {
+  name  = "/${var.project_name}/${var.environment}/observability/amg_service_account_token"
+  type  = "SecureString"
+  value = aws_grafana_workspace_service_account_token.terraform.key
+  tags  = local.tags
+
+  lifecycle {
+    # Token rotate qua time_rotating → token resource bị replace →
+    # SSM value tự update theo. Nhưng nếu Terraform plan fail giữa
+    # chừng (token đã rotate, SSM chưa update), ignore_changes tránh
+    # drift error khi re-plan.
+    replace_triggered_by = [aws_grafana_workspace_service_account_token.terraform]
+  }
+}

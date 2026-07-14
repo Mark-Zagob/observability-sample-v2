@@ -345,20 +345,27 @@ Lab này cung cấp **2 cách tổ chức Terraform** để so sánh trade-offs:
 
 | Layer | Directory | State Key | Scope | Tốc độ thay đổi |
 | --- | --- | --- | --- | --- |
-| **Control Plane** | `control-plane/lab/` | `control-plane/lab/terraform.tfstate` | VPC, IAM, SGs, RDS, ECR, ECS Cluster, ALB, ACM | Weekly — cần review cẩn thận |
+| **Control Plane** | `control-plane/lab/` | `control-plane/lab/terraform.tfstate` | VPC, IAM, SGs, RDS, ECR, ECS Cluster, ALB, ACM, AMP, AMG | Weekly — cần review cẩn thận |
+| **Grafana Config** | `control-plane/lab-grafana/` | `control-plane/lab-grafana/terraform.tfstate` | Grafana data sources, dashboards, alert rules | On-demand — thêm/sửa data source, dashboard |
 | **Data Plane** | `data-plane/{service}/` | `data-plane/{service}/terraform.tfstate` | ECS Service, Task Definition per microservice | Daily/Hourly — App Team tự quản lý |
 
 **C. SSM Service Catalog (Integration Pattern)**
-Control Plane export metadata vào SSM Parameter Store theo convention `/{project}/{env}/{domain}/{resource}`. Data Plane đọc SSM parameters thay vì dùng `terraform_remote_state` — giúp **loose coupling** giữa 2 state files:
+Control Plane export metadata vào SSM Parameter Store theo convention `/{project}/{env}/{domain}/{resource}`. Các state khác (Data Plane, Grafana Config) đọc SSM parameters thay vì dùng `terraform_remote_state` — giúp **loose coupling** giữa các state files:
 
 ```
-Control Plane (writes)          SSM Parameter Store           Data Plane (reads)
+Control Plane (writes)          SSM Parameter Store           Consumers (reads)
 ┌──────────────────┐    /{project}/{env}/network/    ┌──────────────────┐
-│ module.network   │───▶  vpc_id, private_subnets    │ data.aws_ssm_*   │
-│ module.security  │───▶  app_sg_id, iam_role_arns   │                  │
-│ module.database  │───▶  endpoint, secret-arn       │ module.ecs_svc   │
-│ module.ecr       │───▶  ecr/{service-name}         │ (per microservice│
-│ module.ecs_cluster│──▶  cluster_id, namespace_id   │  e.g. payment)   │
+│ module.network   │───▶  vpc_id, private_subnets    │ Data Plane       │
+│ module.security  │───▶  app_sg_id, iam_role_arns   │ (data.aws_ssm_*) │
+│ module.database  │───▶  endpoint, secret-arn       │                  │
+│ module.ecr       │───▶  ecr/{service-name}         │                  │
+│ module.ecs_cluster│──▶  cluster_id, namespace_id   │                  │
+│                  │                                  │                  │
+│                  │    /{project}/{env}/observability/│                  │
+│ module.amp       │───▶  amp_endpoint, workspace_id │ Grafana Config   │
+│ module.amg       │───▶  amg_endpoint               │ (lab-grafana/)   │
+│                  │───▶  amg_service_account_token   │ provider.grafana │
+│                  │      (SecureString + KMS)        │                  │
 └──────────────────┘                                  └──────────────────┘
 ```
 
