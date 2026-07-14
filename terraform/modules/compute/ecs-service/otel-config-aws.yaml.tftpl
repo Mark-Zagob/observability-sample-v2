@@ -99,8 +99,8 @@ exporters:
 
   # Metrics -> Amazon Managed Prometheus (AMP)
   prometheusremotewrite:
-    # $${...} = escape cho Terraform templatefile → output literal ${env:AMP_ENDPOINT}
-    # (cú pháp OTel Collector đọc biến môi trường từ ECS Task Definition)
+    # Escape "$$" cho Terraform templatefile → output ra literal dollar-brace
+    # cho OTel Collector đọc biến môi trường AMP_ENDPOINT từ ECS Task Definition
     endpoint: "$${env:AMP_ENDPOINT}"
     auth:
       authenticator: sigv4auth
