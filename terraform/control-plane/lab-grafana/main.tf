@@ -33,9 +33,13 @@ resource "grafana_data_source" "prometheus" {
     sigV4Region   = var.aws_region
     timeInterval  = "15s"
 
+    # Reference trực tiếp resource attribute (không dùng string literal
+    # "xray-datasource") để Terraform build đúng dependency graph —
+    # đảm bảo grafana_data_source.xray được tạo trước khi exemplar
+    # link tới nó, tránh broken link ở lần apply đầu tiên.
     exemplarTraceIdDestinations = [{
       name          = "trace_id"
-      datasourceUid = "xray-datasource"
+      datasourceUid = grafana_data_source.xray.uid
     }]
   })
 }

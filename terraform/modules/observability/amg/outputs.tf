@@ -27,3 +27,8 @@ output "iam_role_arn" {
   description = "IAM Role ARN used by the Grafana workspace"
   value       = aws_iam_role.this.arn
 }
+
+output "kms_key_arn" {
+  description = "KMS CMK ARN dùng để mã hóa SSM SecureString chứa service account token. Cần cho IAM policy của principal đọc token (VD: pipeline control-plane/lab-grafana) để cấp kms:Decrypt."
+  value       = aws_kms_key.amg.arn
+}
