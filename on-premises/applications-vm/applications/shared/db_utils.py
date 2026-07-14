@@ -54,7 +54,8 @@ def parse_db_url(url):
     """Parse postgresql://user:pass@host:port/dbname into dict."""
     url = url.replace("postgresql://", "")
     userpass, hostdb = url.split("@")
-    user, password = userpass.split(":")
+    # maxsplit=1: password từ AWS Secrets Manager thường chứa ":" (VD: "p@ss:w0rd!")
+    user, password = userpass.split(":", 1)
     hostport, dbname = hostdb.split("/")
     host, port = hostport.split(":")
     return {
