@@ -238,16 +238,19 @@ resource "aws_ssm_parameter" "endpoint" {
 }
 
 resource "aws_ssm_parameter" "service_account_token" {
-  name  = "/${var.project_name}/${var.environment}/observability/amg_service_account_token"
-  type  = "SecureString"
-  value = aws_grafana_workspace_service_account_token.terraform.key
-  tags  = local.tags
+  name   = "/${var.project_name}/${var.environment}/observability/amg_service_account_token"
+  type   = "SecureString"
+  value  = aws_grafana_workspace_service_account_token.terraform.key
+  key_id = aws_kms_key.amg.arn # CMK riêng (kms.tf) — không dùng alias/aws/ssm mặc định
+  tags   = local.tags
 
   lifecycle {
-    # Token rotate qua time_rotating → token resource bị replace →
-    # SSM value tự update theo. Nhưng nếu Terraform plan fail giữa
-    # chừng (token đã rotate, SSM chưa update), ignore_changes tránh
-    # drift error khi re-plan.
+    # Token rotate mỗi 25 ngày qua time_rotating (xem resource
+    # aws_grafana_workspace_service_account_token ở trên) → resource
+    # đó bị replace → replace_triggered_by ở đây đảm bảo SSM
+    # parameter cũng bị destroy + recreate TRONG CÙNG 1 apply, tránh
+    # trường hợp lab-grafana pipeline đọc phải token cũ (stale) do
+    # SSM value không tự đồng bộ với token mới.
     replace_triggered_by = [aws_grafana_workspace_service_account_token.terraform]
   }
 }
