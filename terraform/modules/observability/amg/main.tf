@@ -220,7 +220,9 @@ resource "time_rotating" "grafana_token" {
 
 resource "aws_grafana_workspace_service_account_token" "terraform" {
   name               = "terraform-token"
-  service_account_id = aws_grafana_workspace_service_account.terraform.id
+  # ⚠️ .id trả về composite "workspace-id/sa-id" → fail pattern ^[a-zA-Z0-9]+$
+  # Phải dùng .service_account_id (chỉ phần numeric ID).
+  service_account_id = aws_grafana_workspace_service_account.terraform.service_account_id
   seconds_to_live    = 2592000 # 30 days — AWS maximum allowed value
   workspace_id       = aws_grafana_workspace.this.id
 
