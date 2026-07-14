@@ -17,8 +17,9 @@ locals {
 # 1. AMP Workspace
 #--------------------------------------------------------------
 resource "aws_prometheus_workspace" "this" {
-  alias = "${local.name_prefix}-amp"
-  tags  = local.tags
+  alias       = "${local.name_prefix}-amp"
+  kms_key_arn = aws_kms_key.amp.arn
+  tags        = local.tags
 }
 
 #--------------------------------------------------------------
@@ -42,31 +43,36 @@ resource "aws_ssm_parameter" "endpoint" {
 }
 
 #--------------------------------------------------------------
-# 3. IAM — ADOT RemoteWrite (least privilege)
+# 3. IAM — ADOT RemoteWrite (standalone policy, least privilege)
 #--------------------------------------------------------------
-# Gắn vào ECS Task Role → ADOT sidecar push metrics về AMP.
-# Scoped chặt vào ARN của workspace này (không wildcard).
+# NOTE: Module KHÔNG tự attach policy vào ECS Task Role — role đó
+# thuộc sở hữu module `security`, không phải module này. Attach
+# được thực hiện ở caller (control-plane) qua
+# aws_iam_role_policy_attachment, tránh cross-module mutation của
+# 1 resource không thuộc sở hữu (anti-pattern: 2 modules cùng ghi
+# vào 1 role → race condition / orphan policy khi destroy lệch thứ tự).
+#
+# Chỉ cấp aps:RemoteWrite — ADOT sidecar chỉ PUSH metrics, không query.
+# Quyền query (GetSeries/GetLabels/GetMetricMetadata) thuộc về AMG's
+# IAM role (modules/observability/amg), không phải ECS Task Role.
 
-resource "aws_iam_role_policy" "ecs_task_remote_write" {
-  name = "${local.name_prefix}-amp-remote-write"
-  role = var.ecs_task_role_name
+resource "aws_iam_policy" "ecs_task_remote_write" {
+  name        = "${local.name_prefix}-amp-remote-write"
+  description = "Least-privilege policy for ADOT sidecar RemoteWrite into AMP workspace ${local.name_prefix}"
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowAMPRemoteWrite"
-        Effect = "Allow"
-        Action = [
-          "aps:RemoteWrite",
-          "aps:GetSeries",
-          "aps:GetLabels",
-          "aps:GetMetricMetadata"
-        ]
+        Sid      = "AllowAMPRemoteWrite"
+        Effect   = "Allow"
+        Action   = ["aps:RemoteWrite"]
         Resource = [aws_prometheus_workspace.this.arn]
       }
     ]
   })
+
+  tags = local.tags
 }
 
 #--------------------------------------------------------------
@@ -76,17 +82,21 @@ resource "aws_iam_role_policy" "ecs_task_remote_write" {
 # Nguyên nhân thường gặp: UUID label injection (Chaos Drill 9).
 
 resource "aws_cloudwatch_metric_alarm" "cardinality_bomb" {
-  alarm_name          = "${local.name_prefix}-amp-cardinality-bomb"
-  alarm_description   = "AMP ActiveSeries exceeded ${var.active_series_threshold}. Check for high-cardinality labels."
-  namespace           = "AWS/Prometheus"
-  metric_name         = "ActiveSeries"
-  statistic           = "Average"
-  period              = 3600 # 1 hour
+  alarm_name        = "${local.name_prefix}-amp-cardinality-bomb"
+  alarm_description = "AMP ActiveSeries exceeded ${var.active_series_threshold}. Check for high-cardinality labels."
+  namespace         = "AWS/Prometheus"
+  metric_name       = "ActiveSeries"
+  # Maximum thay vì Average — cardinality bomb là spike đột ngột (VD: UUID
+  # label injection). Average trên period dài sẽ "làm mượt" và che mất spike.
+  statistic           = "Maximum"
+  period              = 300 # 5 phút — phát hiện nhanh hơn nhiều so với 1h cũ
   evaluation_periods  = 1
+  datapoints_to_alarm = 1
   threshold           = var.active_series_threshold
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [var.sns_critical_arn]
+  ok_actions          = [var.sns_critical_arn] # notify khi resolved (đã fix cardinality)
 
   dimensions = {
     WorkspaceId = aws_prometheus_workspace.this.id

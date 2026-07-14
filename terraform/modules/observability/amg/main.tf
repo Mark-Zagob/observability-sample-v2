@@ -4,6 +4,13 @@
 
 data "aws_caller_identity" "current" {}
 
+# Prerequisite check: AMG dùng authentication_providers = ["AWS_SSO"],
+# yêu cầu IAM Identity Center (SSO) đã được enable trong Organization/
+# Account này. Nếu chưa enable, AWS API trả lỗi khó hiểu ở bước apply —
+# lifecycle precondition bên dưới (resource "aws_grafana_workspace")
+# fail sớm với thông báo rõ ràng hơn.
+data "aws_ssoadmin_instances" "current" {}
+
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   account_id  = data.aws_caller_identity.current.account_id
@@ -19,18 +26,28 @@ locals {
 #--------------------------------------------------------------
 # 1. AMG Workspace
 #--------------------------------------------------------------
+# permission_type = CUSTOMER_MANAGED: chúng ta tự quản lý IAM policies
+# (amp_read, xray_read, cloudwatch_read bên dưới) thay vì để AWS
+# tự sinh policy qua `data_sources`. Tránh duplicate/overlap IAM giữa
+# 2 cơ chế (SERVICE_MANAGED sinh policy riêng + policy thủ công),
+# giúp audit least-privilege dễ hơn.
 resource "aws_grafana_workspace" "this" {
   name                     = "${local.name_prefix}-amg"
   description              = "Observability dashboard for ${var.project_name} ${var.environment}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"]
-  permission_type          = "SERVICE_MANAGED"
+  permission_type          = "CUSTOMER_MANAGED"
   role_arn                 = aws_iam_role.this.arn
   grafana_version          = var.grafana_version
 
-  data_sources = ["PROMETHEUS", "XRAY", "CLOUDWATCH"]
-
   tags = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = length(data.aws_ssoadmin_instances.current.arns) > 0
+      error_message = "IAM Identity Center (AWS SSO) chưa được enable trong Account/Organization này. AMG với authentication_providers = [\"AWS_SSO\"] yêu cầu ít nhất 1 SSO instance. Enable tại: AWS Console → IAM Identity Center → Enable, hoặc đổi authentication_providers = [\"SAML\"] nếu dùng external IdP."
+    }
+  }
 }
 
 #--------------------------------------------------------------
@@ -175,7 +192,12 @@ resource "aws_grafana_role_association" "admin" {
 # 4. Service Account + Token — Grafana Provider authentication
 #--------------------------------------------------------------
 # Used by Grafana Terraform Provider to auto-configure data sources.
-# Token does not expire (seconds_to_live = 0).
+#
+# BUG FIX: seconds_to_live = 0 is INVALID — AWS API rejects it.
+# Valid range is 1 - 2592000 seconds (max 30 days). Token is
+# rotated automatically every 25 days (before expiry) via
+# time_rotating + replace_triggered_by, so the Terraform Provider
+# never authenticates with a stale/expired token.
 
 resource "aws_grafana_workspace_service_account" "terraform" {
   name         = "terraform-automation"
@@ -183,11 +205,19 @@ resource "aws_grafana_workspace_service_account" "terraform" {
   workspace_id = aws_grafana_workspace.this.id
 }
 
+resource "time_rotating" "grafana_token" {
+  rotation_days = 25
+}
+
 resource "aws_grafana_workspace_service_account_token" "terraform" {
   name               = "terraform-token"
   service_account_id = aws_grafana_workspace_service_account.terraform.id
-  seconds_to_live    = 0
+  seconds_to_live    = 2592000 # 30 days — AWS maximum allowed value
   workspace_id       = aws_grafana_workspace.this.id
+
+  lifecycle {
+    replace_triggered_by = [time_rotating.grafana_token]
+  }
 }
 
 #--------------------------------------------------------------

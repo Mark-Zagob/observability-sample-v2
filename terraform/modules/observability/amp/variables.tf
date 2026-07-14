@@ -22,11 +22,6 @@ variable "environment" {
   }
 }
 
-variable "ecs_task_role_name" {
-  description = "Name of the ECS Task IAM Role to attach AMP RemoteWrite policy"
-  type        = string
-}
-
 variable "sns_critical_arn" {
   description = "ARN of SNS topic for critical alarms (cardinality bomb)"
   type        = string

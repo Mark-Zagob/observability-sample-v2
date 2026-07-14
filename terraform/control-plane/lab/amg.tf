@@ -27,6 +27,13 @@ module "amg" {
 # AWS:                  Grafana Terraform Provider resources
 #
 # Data sources sử dụng fixed UIDs để dashboard JSON reference.
+#
+# ⚠️ CHICKEN-AND-EGG: provider "grafana" phụ thuộc module.amg.* output
+# (chỉ có giá trị thật SAU KHI module.amg đã apply). Lần đầu apply
+# workspace mới (state trống) PHẢI chạy 2-phase:
+#   1) terraform apply -target=module.amg
+#   2) terraform apply
+# Chi tiết + giải pháp production (tách state): docs/GRAFANA_PROVIDER_BOOTSTRAP.md
 #--------------------------------------------------------------
 
 provider "grafana" {
