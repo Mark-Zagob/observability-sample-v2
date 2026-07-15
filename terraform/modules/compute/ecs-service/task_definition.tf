@@ -80,8 +80,7 @@ locals {
     portMappings = [
       { containerPort = 4317, protocol = "tcp" }, # OTLP gRPC
       { containerPort = 4318, protocol = "tcp" }, # OTLP HTTP
-      { containerPort = 13133, protocol = "tcp" }, # 🌟 Health check endpoint
-      { containerPort = 8888, protocol = "tcp" }   # 🌟 OTel self-metrics
+      { containerPort = 13133, protocol = "tcp" }  # 🌟 Health check endpoint
     ]
 
     logConfiguration = {

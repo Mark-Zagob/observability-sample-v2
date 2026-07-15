@@ -121,12 +121,11 @@ service:
       level: "info"
     metrics:
       level: "basic"
-      readers:
-        - pull:
-            exporter:
-              prometheus:
-                host: "0.0.0.0"
-                port: 8888
+      # 🛑 ĐÃ XÓA: address: "0.0.0.0:8888" (deprecated) và readers block
+      # Reason: ADOT v0.49.0 có thể crash trên deprecated 'address' key hoặc
+      # chưa support đầy đủ 'readers' schema mới (OTel >= v0.102.0).
+      # Self-metrics không cần thiết trên ECS Fargate (không có Prometheus scraper).
+      # ADOT logs vẫn ship về CloudWatch Logs để meta-monitoring.
 
   pipelines:
     traces:
