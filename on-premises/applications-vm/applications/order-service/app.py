@@ -167,8 +167,19 @@ cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
 # ============================================================
 # Tương đương docker-entrypoint-initdb.d/init.sql trên on-prem.
 # Idempotent: CREATE TABLE IF NOT EXISTS + ON CONFLICT DO NOTHING.
+#
+# ⚠️ CLOUD FIX: SERIAL PRIMARY KEY ngầm tạo Postgres Sequence.
+# Khi nhiều Gunicorn workers boot đồng thời (ECS Fargate), chúng
+# cùng bắn DDL → Race Condition trên pg_class → UniqueViolation.
+# On-prem ẩn bug này vì init.sql chạy trước App.
+# Fix: pg_advisory_lock serialize DDL — 1 worker chạy, còn lại chờ.
+
 def _ensure_schema():
     """Ensure DB tables and seed data exist. Idempotent — safe to run on every startup."""
+    # 🛡️ SRE PATTERN: Advisory Lock prevents concurrent DDL race conditions.
+    # Lock ID 8675309 is arbitrary but must be consistent across all workers.
+    # Worker 1 acquires lock, Worker 2+ WAIT until Worker 1 finishes.
+    db.execute("SELECT pg_advisory_lock(8675309);", fetch=False)
     try:
         db.execute("""
             CREATE TABLE IF NOT EXISTS orders (
@@ -203,6 +214,9 @@ def _ensure_schema():
     except Exception as e:
         logger.error("Schema migration failed", extra={"error": str(e)})
         raise
+    finally:
+        # 🔓 ALWAYS release the lock, even if migration fails
+        db.execute("SELECT pg_advisory_unlock(8675309);", fetch=False)
 
 _ensure_schema()
 
