@@ -43,3 +43,8 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "ecs_task_role_arn" {
+  description = "ARN of the ECS Task Role to explicitly allow KMS usage for SigV4 remote write"
+  type        = string
+}

@@ -12,6 +12,7 @@ module "amg" {
   environment       = var.environment
   aws_region        = var.aws_region
   amp_workspace_arn = module.amp.workspace_arn
+  amp_kms_key_arn   = module.amp.kms_key_arn
   admin_user_id     = var.amg_admin_user_id
 
   # Sandbox là member account trong Org — SSO instance thuộc management

@@ -14,6 +14,9 @@ module "amp" {
   # Lab: 10,000 active series. Production: tăng lên 100,000+.
   active_series_threshold = var.environment == "prod" ? 100000 : 10000
 
+  # KMS key policy cần explicit principal cho ECS Task Role
+  ecs_task_role_arn = module.security.ecs_task_role_arn
+
   common_tags = {
     Module = "observability"
     Plane  = "Control"

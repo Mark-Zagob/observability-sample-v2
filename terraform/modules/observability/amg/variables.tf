@@ -69,3 +69,8 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "amp_kms_key_arn" {
+  description = "ARN of the AMP KMS CMK — required for AMG to decrypt queried metrics"
+  type        = string
+}

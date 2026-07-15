@@ -49,6 +49,21 @@ resource "aws_kms_key" "amp" {
             "kms:ViaService" = "aps.${data.aws_region.current.name}.amazonaws.com"
           }
         }
+      },
+      # 🛡️ FIX: Explicitly allow ECS Task Role to use KMS key.
+      # Identity-based policy (IAM delegation via root) wasn't sufficient
+      # due to STS assumed-role evaluation quirks. Adding principal directly
+      # on the key policy bypasses the delegation chain entirely.
+      {
+        Sid       = "AllowECSTaskRoleUsage"
+        Effect    = "Allow"
+        Principal = { AWS = var.ecs_task_role_arn }
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
       }
     ]
   })

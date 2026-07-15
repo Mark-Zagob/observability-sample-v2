@@ -112,6 +112,31 @@ resource "aws_iam_role_policy" "amp_read" {
 }
 
 #--------------------------------------------------------------
+# 2d. IAM Policy — AMP KMS Decrypt (Fix bẫy CMK)
+#--------------------------------------------------------------
+# AMP metrics được mã hóa bằng CMK. AMG cần kms:Decrypt để đọc.
+# Thiếu quyền này → AMG query AMP thành công nhưng trả empty data.
+resource "aws_iam_role_policy" "amp_kms_read" {
+  name = "${local.name_prefix}-amg-amp-kms-read"
+  role = aws_iam_role.this.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAMPKMSDecrypt"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ]
+        Resource = var.amp_kms_key_arn
+      }
+    ]
+  })
+}
+
+#--------------------------------------------------------------
 # 2b. IAM Policy — X-Ray read
 #--------------------------------------------------------------
 resource "aws_iam_role_policy" "xray_read" {
