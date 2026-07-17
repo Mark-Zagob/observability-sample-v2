@@ -26,7 +26,7 @@
       "description": "Orders created per second, grouped by status",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {
@@ -79,7 +79,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(orders_created_total{status=~\"payment_error|db_error|kafka_error|unknown_error\", traffic_source=\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1))) and (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Infra Error Rate" }
+        { "expr": "(sum(rate(orders_created_total{status=~\"payment_error|db_error|kafka_error|unknown_error\", traffic_source=~\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])) or vector(1))) and (sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Infra Error Rate" }
       ]
     },
     {
@@ -105,7 +105,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1))", "legendFormat": "Success Rate" }
+        { "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=~\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])) or vector(1))", "legendFormat": "Success Rate" }
       ]
     },
     {
@@ -168,7 +168,7 @@
       "description": "Payment transactions per second by status",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
+        { "expr": "sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {
@@ -212,7 +212,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(payments_total{status=\"failed\", traffic_source=\"$traffic_source\"}[5m])) or vector(0)) / (sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1)) and (sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Gateway Failure Rate" }
+        { "expr": "(sum(rate(payments_total{status=\"failed\", traffic_source=~\"$traffic_source\"}[5m])) or vector(0)) / (sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m])) or vector(1)) and (sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Gateway Failure Rate" }
       ]
     },
     {
@@ -248,7 +248,7 @@
       "description": "Business view: payment outcomes per provider",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) by (status, provider)", "legendFormat": "{{ provider }} — {{ status }}" }
+        { "expr": "sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m])) by (status, provider)", "legendFormat": "{{ provider }} — {{ status }}" }
       ]
     },
 
@@ -294,8 +294,8 @@
       "description": "Operations per second across both services",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Orders" },
-        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Payments" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m]))", "legendFormat": "Orders" },
+        { "expr": "sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m]))", "legendFormat": "Payments" }
       ]
     },
     {
@@ -319,8 +319,8 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
       "targets": [
-        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Order Service RPS" },
-        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Payment Service RPS" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m]))", "legendFormat": "Order Service RPS" },
+        { "expr": "sum(rate(payments_total{traffic_source=~\"$traffic_source\"}[5m]))", "legendFormat": "Payment Service RPS" }
       ]
     },
     {
@@ -467,7 +467,7 @@
       "title": "📉 Order Success Rate (Filtered by $traffic_source)",
       "type": "timeseries",
       "targets": [{
-        "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))",
+        "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=~\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m]))",
         "legendFormat": "Success Rate"
       }]
     },
@@ -555,7 +555,7 @@
       },
       "targets": [
         {
-          "expr": "((1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])))) / (1 - 0.99)) or vector(0)",
+          "expr": "((1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=~\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])))) / (1 - 0.99)) or vector(0)",
           "legendFormat": "Burn Rate (Target 99%)"
         },
         { "expr": "14.4", "legendFormat": "🚨 Critical (14.4x)" },
@@ -749,7 +749,7 @@
       },
       "targets": [
         {
-          "queryType": "getTrace",
+          "queryType": "getTraceSummaries",
           "query": "service(id(name: \"order-service\")) OR service(id(name: \"payment-service\")) { http.status_code >= 500 OR rootcause { status_code >= 500 } }",
           "region": "default",
           "size": 10,

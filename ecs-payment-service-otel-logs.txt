@@ -1,0 +1,242 @@
+2026/07/17 09:05:39 ADOT Collector version: v0.49.0
+2026/07/17 09:05:46 found no extra config, skip it, err: open /opt/aws/aws-otel-collector/etc/extracfg.txt: no such file or directory
+2026/07/17 09:05:46 attn: users of the `datadog`, `logzio`, `sapm`, `signalfx` exporter components. please refer to https://github.com/aws-observability/aws-otel-collector/issues/2734 in regards to an upcoming ADOT Collector breaking change
+2026-07-17T09:05:48.422Z	info	otelconftelemetry/tracer.go:47	Internal trace telemetry disabled	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    }
+}
+2026-07-17T09:05:48.535Z	warn	builders/builders.go:40	"prometheusremotewrite" alias is deprecated; use "prometheus_remote_write" instead	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "prometheusremotewrite",
+    "otelcol.component.kind": "exporter",
+    "otelcol.signal": "metrics"
+}
+2026-07-17T09:05:48.536Z	info	prometheusremotewriteexporter@v0.156.0/exporter.go:227	starting prometheus remote write exporter	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "prometheusremotewrite",
+    "otelcol.component.kind": "exporter",
+    "otelcol.signal": "metrics",
+    "ProtoMsg": "prometheus.WriteRequest"
+}
+2026-07-17T09:05:48.634Z	info	memorylimiter@v0.156.0/memorylimiter.go:109	Memory limiter configured	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.kind": "processor",
+    "limit_mib": 128,
+    "spike_limit_mib": 32,
+    "check_interval": 1
+}
+2026-07-17T09:05:48.732Z	warn	awsemfexporter@v0.156.0/emf_exporter.go:87	the default value for DimensionRollupOption will be changing to NoDimensionRollupin a future release. See https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/23997 for moreinformation	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "awsemf/self_metrics",
+    "otelcol.component.kind": "exporter",
+    "otelcol.signal": "metrics"
+}
+2026-07-17T09:05:47.137Z	warn	envprovider@v1.62.0/provider.go:68	Configuration references unset environment variable	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "name": "aws_region"
+}
+2026-07-17T09:05:48.824Z	info	service@v0.156.0/service.go:256	Starting aws-otel-collector...	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "Version": "v0.49.0",
+    "NumCPU": 2
+}
+2026-07-17T09:05:48.824Z	info	extensions/extensions.go:41	Starting extensions...	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    }
+}
+2026-07-17T09:05:48.826Z	info	extensions/extensions.go:45	Extension is starting...	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "sigv4auth",
+    "otelcol.component.kind": "extension"
+}
+2026-07-17T09:05:48.826Z	info	extensions/extensions.go:62	Extension started.	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "sigv4auth",
+    "otelcol.component.kind": "extension"
+}
+2026-07-17T09:05:48.826Z	info	extensions/extensions.go:45	Extension is starting...	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "health_check",
+    "otelcol.component.kind": "extension"
+}
+2026-07-17T09:05:48.826Z	info	healthcheckextension@v0.156.0/healthcheckextension.go:32	Starting health_check extension	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "health_check",
+    "otelcol.component.kind": "extension",
+    "config": {
+        "NetAddr": {
+            "Endpoint": "0.0.0.0:13133",
+            "Transport": "tcp",
+            "DialerConfig": {
+                "Timeout": 0
+            }
+        },
+        "TLS": {},
+        "CORS": {},
+        "Auth": {},
+        "MaxRequestBodySize": 0,
+        "IncludeMetadata": false,
+        "ResponseHeaders": null,
+        "CompressionAlgorithms": null,
+        "ReadTimeout": 0,
+        "ReadHeaderTimeout": 0,
+        "WriteTimeout": 0,
+        "IdleTimeout": 0,
+        "Middlewares": null,
+        "KeepAlivesEnabled": false,
+        "Path": "/",
+        "ResponseBody": null,
+        "CheckCollectorPipeline": {
+            "Enabled": false,
+            "Interval": "5m",
+            "ExporterFailureThreshold": 5
+        },
+        "UseV2": false,
+        "GRPCConfig": null,
+        "HTTPConfig": null,
+        "ComponentHealthConfig": null
+    }
+}
+2026-07-17T09:05:48.830Z	info	extensions/extensions.go:62	Extension started.	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "health_check",
+    "otelcol.component.kind": "extension"
+}
+2026-07-17T09:05:48.831Z	info	otlpreceiver@v0.156.0/otlp.go:120	Starting GRPC server	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "otlp",
+    "otelcol.component.kind": "receiver",
+    "endpoint": "[::]:4317"
+}
+2026-07-17T09:05:48.832Z	info	otlpreceiver@v0.156.0/otlp.go:175	Starting HTTP server	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "otlp",
+    "otelcol.component.kind": "receiver",
+    "endpoint": "[::]:4318"
+}
+2026-07-17T09:05:48.837Z	info	prometheusreceiver@v0.156.0/metrics_receiver.go:159	Starting discovery manager	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "prometheus/self_metrics",
+    "otelcol.component.kind": "receiver",
+    "otelcol.signal": "metrics"
+}
+2026-07-17T09:05:48.837Z	info	targetallocator/manager.go:228	Scrape job added	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "prometheus/self_metrics",
+    "otelcol.component.kind": "receiver",
+    "otelcol.signal": "metrics",
+    "jobName": "otel-collector"
+}
+2026-07-17T09:05:48.924Z	info	healthcheck/handler.go:131	Health Check state change	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "health_check",
+    "otelcol.component.kind": "extension",
+    "status": "ready"
+}
+2026-07-17T09:05:48.925Z	info	service@v0.156.0/service.go:279	Everything is ready. Begin running and processing data.	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    }
+}
+2026-07-17T09:05:48.925Z	info	prometheusreceiver@v0.156.0/metrics_receiver.go:206	Starting scrape manager	
+{
+    "resource": {
+        "service.instance.id": "95d17259-08d5-46c1-819c-4ac959e8ead3",
+        "service.name": "aws-otel-collector",
+        "service.version": "v0.49.0"
+    },
+    "otelcol.component.id": "prometheus/self_metrics",
+    "otelcol.component.kind": "receiver",
+    "otelcol.signal": "metrics"
+}

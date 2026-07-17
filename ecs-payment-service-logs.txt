@@ -1,0 +1,92 @@
+[2026-07-17 09:05:50 +0000] [1] [INFO] Starting gunicorn 23.0.0
+[2026-07-17 09:05:50 +0000] [1] [INFO] Listening at: http://0.0.0.0:5002 (1)
+[2026-07-17 09:05:50 +0000] [1] [INFO] Using worker: gthread
+[2026-07-17 09:05:50 +0000] [39] [INFO] Booting worker with pid: 39
+[2026-07-17 09:05:50 +0000] [40] [INFO] Booting worker with pid: 40
+[2026-07-17 09:05:50 +0000] [41] [INFO] Booting worker with pid: 41
+[2026-07-17 09:05:50 +0000] [42] [INFO] Booting worker with pid: 42
+127.0.0.1 - - [17/Jul/2026:09:06:34 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+[2026-07-17 09:06:34 +0000] [1] [ERROR] Worker (pid:20) exited with code 1
+[2026-07-17 09:06:34 +0000] [1] [ERROR] Worker (pid:20) exited with code 1.
+127.0.0.1 - - [17/Jul/2026:09:06:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:07:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:07:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:08:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:08:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:09:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+{
+    "timestamp": "2026-07-17 09:09:48,481",
+    "level": "INFO",
+    "name": "payment-service",
+    "message": "Processing payment",
+    "otelSpanID": "b28cffb3795793d8",
+    "otelTraceID": "48ebd5d6eea7c5fb1ac773b837f2d0f9",
+    "otelTraceSampled": true,
+    "otelServiceName": "payment-service",
+    "order_id": "8496899e",
+    "amount": 29.99,
+    "provider": "paypal"
+}
+127.0.0.1 - - [17/Jul/2026:09:09:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+10.0.28.158 - - [17/Jul/2026:09:09:53 +0000] "POST /charge HTTP/1.1" 200 107 "-" "python-requests/2.32.5"
+{
+    "timestamp": "2026-07-17 09:09:53,260",
+    "level": "INFO",
+    "name": "payment-service",
+    "message": "Processing payment",
+    "otelSpanID": "2c1c1d2190a1b86a",
+    "otelTraceID": "03a3ad84a1af77e34a1a6e79a1ca061b",
+    "otelTraceSampled": true,
+    "otelServiceName": "payment-service",
+    "order_id": "4b17145d",
+    "amount": 99.98,
+    "provider": "square"
+}
+{
+    "timestamp": "2026-07-17 09:09:54,661",
+    "level": "ERROR",
+    "name": "payment-service",
+    "message": "Payment failed",
+    "otelSpanID": "0cf8a705fa5a4261",
+    "otelTraceID": "03a3ad84a1af77e34a1a6e79a1ca061b",
+    "otelTraceSampled": true,
+    "otelServiceName": "payment-service",
+    "order_id": "4b17145d",
+    "error": "Gateway rejected card"
+}
+10.0.28.158 - - [17/Jul/2026:09:09:54 +0000] "POST /charge HTTP/1.1" 500 160 "-" "python-requests/2.32.5"
+{
+    "timestamp": "2026-07-17 09:10:00,549",
+    "level": "INFO",
+    "name": "payment-service",
+    "message": "Processing payment",
+    "otelSpanID": "9ba5620179ab024a",
+    "otelTraceID": "9d88aeb9c7c941d422c0385c8ef9a9ed",
+    "otelTraceSampled": true,
+    "otelServiceName": "payment-service",
+    "order_id": "fd9eb9c0",
+    "amount": 29.99,
+    "provider": "stripe"
+}
+{
+    "timestamp": "2026-07-17 09:10:04,317",
+    "level": "ERROR",
+    "name": "payment-service",
+    "message": "Payment failed",
+    "otelSpanID": "b8810cdb7997e5fe",
+    "otelTraceID": "9d88aeb9c7c941d422c0385c8ef9a9ed",
+    "otelTraceSampled": true,
+    "otelServiceName": "payment-service",
+    "order_id": "fd9eb9c0",
+    "error": "Gateway rejected card"
+}
+10.0.28.158 - - [17/Jul/2026:09:10:04 +0000] "POST /charge HTTP/1.1" 500 160 "-" "python-requests/2.32.5"
+127.0.0.1 - - [17/Jul/2026:09:10:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:10:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:11:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:11:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:12:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:12:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:13:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:13:51 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"
+127.0.0.1 - - [17/Jul/2026:09:14:21 +0000] "GET /health/live HTTP/1.1" 200 44 "-" "Python-urllib/3.12"

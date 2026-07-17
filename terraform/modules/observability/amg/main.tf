@@ -38,6 +38,13 @@ locals {
 # tự sinh policy qua `data_sources`. Tránh duplicate/overlap IAM giữa
 # 2 cơ chế (SERVICE_MANAGED sinh policy riêng + policy thủ công),
 # giúp audit least-privilege dễ hơn.
+#
+# NOTE về `data_sources`: với CUSTOMER_MANAGED, argument này KHÔNG
+# tự sinh IAM policy (đó là việc của role_arn), nhưng VẪN cần để
+# AMG install/enable các plugin data source tương ứng trong workspace.
+# Thiếu declaration này → khi tạo `grafana_data_source` qua Terraform
+# Grafana Provider, workspace có thể trả "data source not found" khi
+# dashboard truy vấn (đặc biệt X-Ray plugin, không phải luôn pre-installed).
 resource "aws_grafana_workspace" "this" {
   name                     = "${local.name_prefix}-amg"
   description              = "Observability dashboard for ${var.project_name} ${var.environment}"
@@ -46,6 +53,10 @@ resource "aws_grafana_workspace" "this" {
   permission_type          = "CUSTOMER_MANAGED"
   role_arn                 = aws_iam_role.this.arn
   grafana_version          = var.grafana_version
+
+  # Plugin install list — khớp với 3 grafana_data_source resources
+  # ở control-plane/lab-grafana/main.tf (prometheus / xray / cloudwatch).
+  data_sources = ["PROMETHEUS", "XRAY", "CLOUDWATCH"]
 
   tags = local.tags
 
