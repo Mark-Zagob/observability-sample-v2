@@ -56,27 +56,37 @@ resource "aws_cloudwatch_log_metric_filter" "app_errors" {
 # Biến Log text thành CloudWatch Metrics để Grafana query được
 
 resource "aws_cloudwatch_log_metric_filter" "adot_export_fail" {
-  name           = "ADOTExportFailures"
+  count = var.enable_adot_sidecar ? 1 : 0
+
+  name           = "${var.project_name}-${var.service_name}-adot-export-failures"
   pattern        = "\"AccessDeniedException\" OR \"Failed to export\""
-  log_group_name = "/ecs/otel-sidecar" # Đảm bảo đúng tên log group sidecar của bạn
+  log_group_name = aws_cloudwatch_log_group.otel[0].name
   
   metric_transformation {
     name      = "ExportFailures"
     namespace = "ObsLab/TelemetryPipeline"
     value     = "1"
     unit      = "Count"
+    dimensions = {
+      ServiceName = var.service_name
+    }
   }
 }
 
 resource "aws_cloudwatch_log_metric_filter" "adot_span_drop" {
-  name           = "ADOTSpanDrops"
+  count = var.enable_adot_sidecar ? 1 : 0
+
+  name           = "${var.project_name}-${var.service_name}-adot-span-drops"
   pattern        = "\"Dropping data\" OR \"memorylimiter\""
-  log_group_name = "/ecs/otel-sidecar"
+  log_group_name = aws_cloudwatch_log_group.otel[0].name
   
   metric_transformation {
     name      = "SpanDrops"
     namespace = "ObsLab/TelemetryPipeline"
     value     = "1"
     unit      = "Count"
+    dimensions = {
+      ServiceName = var.service_name
+    }
   }
 }
