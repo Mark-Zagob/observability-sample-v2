@@ -26,7 +26,7 @@
       "description": "Orders created per second, grouped by status",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(orders_created_total[5m])) by (status)", "legendFormat": "{{ status }}" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {
@@ -72,7 +72,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(orders_created_total{status=~\"payment_error|db_error|kafka_error|unknown_error\"}[5m])) / (sum(rate(orders_created_total[5m])) or vector(1))) and (sum(rate(orders_created_total[5m])) > 0.1)", "legendFormat": "Infra Error Rate" }
+        { "expr": "(sum(rate(orders_created_total{status=~\"payment_error|db_error|kafka_error|unknown_error\", traffic_source=\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1))) and (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Infra Error Rate" }
       ]
     },
     {
@@ -98,7 +98,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "sum(rate(orders_created_total{status=\"completed\"}[5m])) / (sum(rate(orders_created_total[5m])) or vector(1))", "legendFormat": "Success Rate" }
+        { "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / (sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1))", "legendFormat": "Success Rate" }
       ]
     },
     {
@@ -161,7 +161,7 @@
       "description": "Payment transactions per second by status",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(payments_total[5m])) by (status)", "legendFormat": "{{ status }}" }
+        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) by (status)", "legendFormat": "{{ status }}" }
       ]
     },
     {
@@ -205,7 +205,7 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
       "targets": [
-        { "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / (sum(rate(payments_total[5m])) or vector(1)) and (sum(rate(payments_total[5m])) > 0.1)", "legendFormat": "Gateway Failure Rate" }
+        { "expr": "(sum(rate(payments_total{status=\"failed\", traffic_source=\"$traffic_source\"}[5m])) or vector(0)) / (sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) or vector(1)) and (sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) > 0.1)", "legendFormat": "Gateway Failure Rate" }
       ]
     },
     {
@@ -241,7 +241,7 @@
       "description": "Business view: payment outcomes per provider",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(payments_total[5m])) by (status, provider)", "legendFormat": "{{ provider }} — {{ status }}" }
+        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m])) by (status, provider)", "legendFormat": "{{ provider }} — {{ status }}" }
       ]
     },
 
@@ -287,8 +287,8 @@
       "description": "Operations per second across both services",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(orders_created_total[5m]))", "legendFormat": "Orders" },
-        { "expr": "sum(rate(payments_total[5m]))", "legendFormat": "Payments" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Orders" },
+        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Payments" }
       ]
     },
     {
@@ -312,14 +312,125 @@
       "type": "stat",
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
       "targets": [
-        { "expr": "sum(rate(orders_created_total[5m]))", "legendFormat": "Order Service RPS" },
-        { "expr": "sum(rate(payments_total[5m]))", "legendFormat": "Payment Service RPS" }
+        { "expr": "sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Order Service RPS" },
+        { "expr": "sum(rate(payments_total{traffic_source=\"$traffic_source\"}[5m]))", "legendFormat": "Payment Service RPS" }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+      "id": 200,
+      "title": "🩺 Pipeline Health & Meta-Monitoring (Chaos Drills 7-10)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "amp-datasource" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 49 },
+      "id": 201,
+      "title": "💓 Telemetry Heartbeat (App Metrics Flow)",
+      "description": "Đếm số lượng service đang gửi metric lên AMP. Nếu = 0 -> ADOT đã chết (Exp 10) hoặc mất IAM (Exp 8).",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "0": { "text": "PIPELINE DEAD", "color": "red" } } }]
+        }
+      },
+      "targets": [{ "expr": "count(count by (service_name) (rate(orders_created_total[5m]) > 0))", "legendFormat": "Active Services" }]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 49 },
+      "id": 202,
+      "title": "⚡ ADOT Span Drop Rate (Exp 7 - Trace Storm)",
+      "description": "Số spans bị memory_limiter vứt bỏ. > 0 là bình thường khi storm, nhưng phải có dữ liệu để post-mortem.",
+      "type": "timeseries",
+      "targets": [{
+        "queryMode": "Metrics",
+        "namespace": "ObsLab/TelemetryPipeline",
+        "metricName": "SpanDrops",
+        "statistics": ["Sum"],
+        "period": "60",
+        "legendFormat": "Dropped Spans"
+      }]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 49 },
+      "id": 203,
+      "title": "🚨 AMP Export Failures (Exp 8 - Silent Blinder)",
+      "description": "Số lần ADOT bị AccessDenied khi push lên AMP. > 0 = Pipeline đang bị mù metrics.",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
+      "targets": [{
+        "queryMode": "Metrics",
+        "namespace": "ObsLab/TelemetryPipeline",
+        "metricName": "ExportFailures",
+        "statistics": ["Sum"],
+        "period": "60",
+        "legendFormat": "Export Errors"
+      }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "id": 204,
+      "title": "🎯 Business Impact (User Pain Score)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "amp-datasource" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 56 },
+      "id": 205,
+      "title": "😭 User Pain Score (Browser Traffic Only)",
+      "description": "Tỷ lệ user THẬT bị lỗi. Không bị nhiễu bởi Synthetic Loadtest khi chạy Chaos Drill.",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 }] }
+        }
+      },
+      "targets": [{
+        "expr": "1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=\"browser\"}[15m])) / sum(rate(orders_created_total{traffic_source=\"browser\"}[15m])))",
+        "legendFormat": "Pain %"
+      }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "amp-datasource" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 56 },
+      "id": 206,
+      "title": "📉 Order Success Rate (Filtered by $traffic_source)",
+      "type": "timeseries",
+      "targets": [{
+        "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))",
+        "legendFormat": "Success Rate"
+      }]
     }
   ],
   "schemaVersion": 39,
   "tags": ["application", "microservices", "red-method", "aws", "pod-1"],
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "traffic_source",
+        "type": "custom",
+        "label": "Traffic Source",
+        "current": { "text": "All Traffic", "value": "$__all" },
+        "options": [
+          { "text": "📊 All Traffic", "value": "$__all", "selected": true },
+          { "text": "🌐 Browser (Real Users)", "value": "browser" },
+          { "text": "🤖 Synthetic Loadtest", "value": "synthetic_loadtest" },
+          { "text": "🩺 Synthetic Probe", "value": "synthetic_probe" }
+        ],
+        "query": "All Traffic : $__all, 🌐 Browser : browser, 🤖 Synthetic Loadtest : synthetic_loadtest, 🩺 Synthetic Probe : synthetic_probe",
+        "includeAll": true,
+        "allValue": ".*"
+      }
+    ]
+  },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",

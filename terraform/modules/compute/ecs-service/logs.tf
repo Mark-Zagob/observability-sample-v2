@@ -49,3 +49,34 @@ resource "aws_cloudwatch_log_metric_filter" "app_errors" {
     }
   }
 }
+
+# --------------------------------------------------------------
+# META-MONITORING: CloudWatch Metric Filters for ADOT Sidecar
+# --------------------------------------------------------------
+# Biến Log text thành CloudWatch Metrics để Grafana query được
+
+resource "aws_cloudwatch_log_metric_filter" "adot_export_fail" {
+  name           = "ADOTExportFailures"
+  pattern        = "\"AccessDeniedException\" OR \"Failed to export\""
+  log_group_name = "/ecs/otel-sidecar" # Đảm bảo đúng tên log group sidecar của bạn
+  
+  metric_transformation {
+    name      = "ExportFailures"
+    namespace = "ObsLab/TelemetryPipeline"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "adot_span_drop" {
+  name           = "ADOTSpanDrops"
+  pattern        = "\"Dropping data\" OR \"memorylimiter\""
+  log_group_name = "/ecs/otel-sidecar"
+  
+  metric_transformation {
+    name      = "SpanDrops"
+    namespace = "ObsLab/TelemetryPipeline"
+    value     = "1"
+    unit      = "Count"
+  }
+}
