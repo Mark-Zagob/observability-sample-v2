@@ -131,9 +131,13 @@ exporters:
 
   # 🆕 NEW: Push self-metrics về CloudWatch qua EMF format
   awsemf/self_metrics:
-    region: "$${aws_region}"
+    region: "${aws_region}"
     namespace: 'ObsLab/TelemetryPipeline'
-    log_group_name: '/ecs/$${env:PROJECT_NAME}/$${env:SERVICE_NAME}/otel-selfmetrics'
+    # Dùng LẠI log group đã được Terraform tạo sẵn (/ecs/<project>/<service>/otel)
+    # thay vì log group riêng — tránh phải thêm quyền logs:CreateLogGroup cho
+    # task role và tránh silent-fail nếu log group chưa tồn tại.
+    log_group_name: '/ecs/$${env:PROJECT_NAME}/$${env:SERVICE_NAME}/otel'
+    log_stream_name: 'self-metrics-{ServiceName}'
     dimension_rollup_option: NoDimensionRollup
     metric_declarations:
       # Metric 1: Export failures (cho Drill 8)
@@ -169,12 +173,18 @@ service:
     logs:
       level: "info"
     metrics:
-      level: "detailed"  # 🆕 Đổi từ "basic" → "detailed" để có đầy đủ metrics
-      # 🛑 ĐÃ XÓA: address: "0.0.0.0:8888" (deprecated) và readers block
-      # Reason: ADOT v0.49.0 có thể crash trên deprecated 'address' key hoặc
-      # chưa support đầy đủ 'readers' schema mới (OTel >= v0.102.0).
-      # Self-metrics không cần thiết trên ECS Fargate (không có Prometheus scraper).
-      # ADOT logs vẫn ship về CloudWatch Logs để meta-monitoring.
+      level: "detailed" # 🆕 Đổi từ "basic" → "detailed" để có đầy đủ metrics
+      # 🆕 Expose self-metrics qua Prometheus format trên :8888 để
+      # receiver `prometheus/self_metrics` ở trên scrape được.
+      # Thiếu block này → port 8888 không listen → scrape fail →
+      # pipeline metrics/self không có data → dashboard "ADOT Span Drop"
+      # / "AMP Export Failures" / "Data Loss %" đều no-data.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: "0.0.0.0"
+                port: 8888
 
   pipelines:
     traces:
@@ -198,6 +208,19 @@ service:
         - filter/drop_health
         - batch
       exporters: [prometheusremotewrite]
+
+    # 🆕 SELF-METRICS PIPELINE (Drill 7/8/9 dashboard panels)
+    # Flow: OTel telemetry.readers export ra :8888 (Prometheus format)
+    #   → prometheus/self_metrics receiver scrape :8888
+    #   → batch/self_metrics gom lại
+    #   → awsemf/self_metrics push lên CloudWatch dưới namespace
+    #     'ObsLab/TelemetryPipeline' (match với dashboard queries).
+    # Thiếu pipeline này → receiver + exporter tồn tại nhưng không
+    # được wire → không có data flow.
+    metrics/self:
+      receivers: [prometheus/self_metrics]
+      processors: [batch/self_metrics]
+      exporters: [awsemf/self_metrics]
     
     # 🆕 NEW PIPELINE: Self-metrics → CloudWatch
     metrics/self:
