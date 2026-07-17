@@ -191,7 +191,7 @@ resource "aws_iam_role_policy" "ecs_task_base" {
         Resource = "*"
         Condition = {
           StringEquals = {
-            "cloudwatch:namespace" = var.project_name
+            "cloudwatch:namespace" = [var.project_name, "ObsLab/TelemetryPipeline"]
           }
         }
       },
@@ -219,6 +219,23 @@ resource "aws_iam_role_policy" "ecs_task_base" {
           "ssmmessages:OpenDataChannel"
         ]
         Resource = "*"
+      },
+      {
+        # ADOT awsemf/self_metrics exporter pushes self-metrics as
+        # EMF logs to CloudWatch. EMF requires logs:* on the target
+        # log group. Scoped to /ecs/{project}/* to cover all services.
+        Sid    = "AllowCloudWatchLogsForEMF"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = [
+          "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*",
+          "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*:log-stream:*"
+        ]
       }
     ]
   })
