@@ -35,7 +35,14 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "unit": "s", "min": 0,
-          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "links": [
+            {
+              "title": "🔍 Mở AWS X-Ray (Đồng bộ thời gian spike)",
+              "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces?filter=service(id(name:%20%22order-service%22))&timeRange=${__from:date:seconds}-${__to:date:seconds}",
+              "targetBlank": true
+            }
+          ]
         }
       },
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
@@ -408,6 +415,97 @@
         "expr": "sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m]))",
         "legendFormat": "Success Rate"
       }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 },
+      "id": 300,
+      "title": "🖥️ ECS Fargate Resource (USE Method) — Blind Spot Killer",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "id": 301,
+      "title": "🔥 Order Service: CPU Utilization vs Throttling",
+      "description": "Nếu Utilization chạm 100% -> Fargate throttling CPU -> App chậm dù không có lỗi code. (Exp 3.5)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "CPUUtilization",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average", "Maximum"],
+          "period": "60",
+          "legendFormat": "CPU {{stat}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
+      "id": 302,
+      "title": "💾 Order Service: Memory Utilization (OOM Predictor)",
+      "description": "Leading indicator cho Exp 3B (OOM Kill). Alarm fire khi > 85%.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "MemoryUtilization",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average", "Maximum"],
+          "period": "60",
+          "legendFormat": "Mem {{stat}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 },
+      "id": 400,
+      "title": "🎯 SLO & Error Budget (Reliability PM View)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "amp-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
+      "id": 401,
+      "title": "🔥 Order Service: Fast Burn Rate (5m window)",
+      "description": "Tốc độ đốt Error Budget. > 14.4x = SEV-1 (Page SRE). > 3x = SEV-3 (Ticket).",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 3 },
+              { "color": "red", "value": 14.4 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "((1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=\"$traffic_source\"}[5m])))) / (1 - 0.99)) or vector(0)",
+          "legendFormat": "Burn Rate (Target 99%)"
+        },
+        { "expr": "14.4", "legendFormat": "🚨 Critical (14.4x)" },
+        { "expr": "3", "legendFormat": "⚠️ Warning (3x)" }
+      ]
     }
   ],
   "schemaVersion": 39,
