@@ -2117,23 +2117,24 @@ print(f'DNS restored: payment-service.ecommerce.local → {ip}')
 3. 📝 **Backlog:** DNS cache warm-up strategy: pre-resolve DNS on startup, periodic re-resolve.
 4. 📝 **Backlog:** Evaluate chuyển sang ALB-backed services (có built-in health check) cho critical services.
 
----
-# ============================================================
-# PHASE 1.5: OBSERVABILITY BRIDGE — CHAOS DRILLS
-# ============================================================
-#
-# Triết lý của Phase 1.5:
-#   "Telemetry Pipeline là một distributed system khác."
-#
-# Nếu Phase 1 test "App có chết không?", thì Phase 1.5 test:
-#   - "Khi App spam telemetry, pipeline có tự bảo vệ không?"
-#   - "Khi pipeline chết, App có bị vạ lây không?"
-#   - "Khi pipeline câm lặng, ta có BIẾT nó đang chết không?"
-#
-# Common theme: Mọi experiment trong Phase 1.5 đều KHÔNG trigger
-# Telegram alert — đây chính là bài học lớn nhất:
-#   🚨 "Who watches the watchmen?" — Chưa ai cả. Đó là gap cần fix.
-# ============================================================
+<!--
+============================================================
+PHASE 1.5: OBSERVABILITY BRIDGE — CHAOS DRILLS
+============================================================
+
+Triết lý của Phase 1.5:
+  "Telemetry Pipeline là một distributed system khác."
+
+Nếu Phase 1 test "App có chết không?", thì Phase 1.5 test:
+  - "Khi App spam telemetry, pipeline có tự bảo vệ không?"
+  - "Khi pipeline chết, App có bị vạ lây không?"
+  - "Khi pipeline câm lặng, ta có BIẾT nó đang chết không?"
+
+Common theme: Mọi experiment trong Phase 1.5 đều KHÔNG trigger
+Telegram alert — đây chính là bài học lớn nhất:
+  🚨 "Who watches the watchmen?" — Chưa ai cả. Đó là gap cần fix.
+============================================================
+-->
 
 ## 🔭 Phase 1.5 Pre-flight Checklist (Observability Pipeline)
 
