@@ -67,9 +67,6 @@ resource "aws_cloudwatch_log_metric_filter" "adot_export_fail" {
     namespace = "ObsLab/TelemetryPipeline"
     value     = "1"
     unit      = "Count"
-    dimensions = {
-      ServiceName = var.service_name
-    }
   }
 }
 
@@ -85,8 +82,5 @@ resource "aws_cloudwatch_log_metric_filter" "adot_span_drop" {
     namespace = "ObsLab/TelemetryPipeline"
     value     = "1"
     unit      = "Count"
-    dimensions = {
-      ServiceName = var.service_name
-    }
   }
 }
