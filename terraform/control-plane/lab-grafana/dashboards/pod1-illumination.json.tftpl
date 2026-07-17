@@ -39,7 +39,7 @@
           "links": [
             {
               "title": "🔍 Mở AWS X-Ray (Đồng bộ thời gian spike)",
-              "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces?filter=service(id(name:%20%22order-service%22))&timeRange=$${__from:date:seconds}-$${__to:date:seconds}",
+              "url": "https://${aws_region}.console.aws.amazon.com/xray/home?region=${aws_region}#/traces?filter=service(id(name:%20%22order-service%22))&timeRange=$${__from:date:seconds}-$${__to:date:seconds}",
               "targetBlank": true
             }
           ]
@@ -430,7 +430,7 @@
         "queryMode": "Metrics",
         "namespace": "ObsLab/TelemetryPipeline",
         "expression": "SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_processor_dropped_spans\"', 'Sum', 60) / (SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_receiver_accepted_spans\"', 'Sum', 60) + 0.001)",
-        "region": "ap-southeast-2",
+        "region": "${aws_region}",
         "label": "Loss %"
       }]
     },
@@ -681,7 +681,7 @@
                 "value": [
                   {
                     "title": "🔍 View Trace in X-Ray",
-                    "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces/$${__value.raw}",
+                    "url": "https://${aws_region}.console.aws.amazon.com/xray/home?region=${aws_region}#/traces/$${__value.raw}",
                     "targetBlank": true
                   }
                 ]
@@ -738,7 +738,7 @@
                 "value": [
                   {
                     "title": "Open in X-Ray Console",
-                    "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces/$${__value.raw}",
+                    "url": "https://${aws_region}.console.aws.amazon.com/xray/home?region=${aws_region}#/traces/$${__value.raw}",
                     "targetBlank": true
                   }
                 ]

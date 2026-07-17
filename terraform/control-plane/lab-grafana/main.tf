@@ -92,6 +92,7 @@ data "aws_ssm_parameter" "amp_workspace_id" {
 resource "grafana_dashboard" "pod1_illumination" {
   config_json = templatefile("${path.module}/dashboards/pod1-illumination.json.tftpl", {
     amp_workspace_id = data.aws_ssm_parameter.amp_workspace_id.value
+    aws_region       = var.aws_region
   })
   overwrite = true
 }
