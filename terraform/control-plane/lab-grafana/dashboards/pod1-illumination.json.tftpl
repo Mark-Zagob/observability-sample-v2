@@ -437,7 +437,7 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
-      "id": 204,
+      "id": 207,
       "title": "🎯 Business Impact (User Pain Score)",
       "type": "row"
     },
@@ -653,6 +653,107 @@
           "label": "Monthly Cost",
           "refId": "A",
           "expression": "SEARCH('{\"Namespace\":\"AWS/Usage\",\"MetricName\":\"ResourceCount\",\"Dimensions\":[{\"Name\":\"Resource\",\"Value\":\"${amp_workspace_id}\"},{\"Name\":\"Type\",\"Value\":\"ActiveSeries\"}]}', 'Average', 60) * 360 * 24 * 30 / 10000 * 0.03"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 90 },
+      "id": 600,
+      "title": "🪵 Logs & Traces — Deep Dive (Correlation)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 91 },
+      "id": 601,
+      "title": "📋 Live App Logs (CloudWatch Logs Insights)",
+      "description": "Structured JSON logs from Order + Payment services.\n\n• Auto-filter: chỉ hiện ERROR/CRITICAL/Exception\n• Click vào trace_id để jump sang X-Ray trace (cần setup data link)\n• Sort theo timestamp giảm dần (mới nhất ở trên)\n\nDùng để debug khi metrics cho thấy spike error nhưng không biết root cause.",
+      "type": "logs",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "trace_id" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "🔍 View Trace in X-Ray",
+                    "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces/$${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending",
+        "prettifyJSON": true
+      },
+      "targets": [
+        {
+          "queryMode": "Logs",
+          "logGroups": [
+            "/ecs/obs/order-service",
+            "/ecs/obs/payment-service"
+          ],
+          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level = \"ERROR\" OR level = \"CRITICAL\" OR @message like /Exception|Traceback|AccessDenied/\n| sort @timestamp desc\n| limit 100",
+          "region": "default",
+          "statsGroups": [],
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "grafana-x-ray-datasource", "uid": "xray-datasource" },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 91 },
+      "id": 602,
+      "title": "🔍 Recent Error Traces (X-Ray)",
+      "description": "Top 10 traces có lỗi HTTP 5xx trong 1h vừa qua.\n\n• Click vào bất kỳ trace nào để xem full waterfall diagram\n• Filter: chỉ lấy traces từ order-service hoặc payment-service\n• Sort theo latency giảm dần (slowest first)\n\nDùng để debug distributed issues: ví dụ order-service timeout nhưng không biết payment-service hay DB là culprit.",
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in X-Ray Console",
+                    "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces/$${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "queryType": "getTrace",
+          "query": "service(id(name: \"order-service\")) OR service(id(name: \"payment-service\")) { http.status_code >= 500 OR rootcause { status_code >= 500 } }",
+          "region": "default",
+          "size": 10,
+          "refId": "A"
         }
       ]
     }
