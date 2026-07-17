@@ -25,6 +25,20 @@ receivers:
       http:
         endpoint: "0.0.0.0:4318"
 
+  # 🆕 NEW: Scrape self-metrics từ chính OTel Collector
+  prometheus/self_metrics:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 30s
+          static_configs:
+            - targets: ['0.0.0.0:8888']
+          metric_relabel_configs:
+            # Chỉ giữ lại các metric quan trọng, tránh cardinality bomb
+            - source_labels: [__name__]
+              regex: 'otelcol_(exporter_sent_failed|processor_dropped|process_memory|receiver_accepted).*'
+              action: keep
+
 processors:
   # 🛡️ APP RESILIENCE — Bảo vệ Sidecar khỏi OOM khi App spike
   memory_limiter:
@@ -75,6 +89,10 @@ processors:
     # trên mọi services (Order -> Payment -> Worker đều quyết định giống nhau)
     hash_seed: 22
 
+  # 🆕 NEW: Processor riêng cho self-metrics (không cần sampling/filter)
+  batch/self_metrics:
+    timeout: 10s
+    send_batch_size: 100
   # 🎯 ADVANCED: Tail-based Sampling (Optional — uncomment khi scale lớn)
   # Giữ lại 100% traces có lỗi HOẶC latency > 2s, drop phần còn lại.
   # Lưu ý: tail_sampling tốn RAM hơn vì phải buffer traces để quyết định.
@@ -111,6 +129,37 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
 
+  # 🆕 NEW: Push self-metrics về CloudWatch qua EMF format
+  awsemf/self_metrics:
+    region: "$${aws_region}"
+    namespace: 'ObsLab/TelemetryPipeline'
+    log_group_name: '/ecs/$${env:PROJECT_NAME}/$${env:SERVICE_NAME}/otel-selfmetrics'
+    dimension_rollup_option: NoDimensionRollup
+    metric_declarations:
+      # Metric 1: Export failures (cho Drill 8)
+      - dimensions: [[service_name]]
+        metric_name_selectors:
+          - otelcol_exporter_send_failed_spans
+          - otelcol_exporter_send_failed_metric_points
+      
+      # Metric 2: Dropped data (cho Drill 7)
+      - dimensions: [[service_name]]
+        metric_name_selectors:
+          - otelcol_processor_dropped_spans
+          - otelcol_processor_dropped_metric_points
+      
+      # Metric 3: Accepted data (để tính Data Loss %)
+      - dimensions: [[service_name]]
+        metric_name_selectors:
+          - otelcol_receiver_accepted_spans
+          - otelcol_receiver_accepted_metric_points
+      
+      # Metric 4: Resource usage (cho monitoring)
+      - dimensions: [[service_name]]
+        metric_name_selectors:
+          - otelcol_process_memory_rss
+          - otelcol_process_cpu_seconds
+
 service:
   # 🏥 BẮT BUỘC: Khai báo health_check trong extensions list
   extensions: [health_check, sigv4auth]
@@ -120,7 +169,7 @@ service:
     logs:
       level: "info"
     metrics:
-      level: "basic"
+      level: "detailed"  # 🆕 Đổi từ "basic" → "detailed" để có đầy đủ metrics
       # 🛑 ĐÃ XÓA: address: "0.0.0.0:8888" (deprecated) và readers block
       # Reason: ADOT v0.49.0 có thể crash trên deprecated 'address' key hoặc
       # chưa support đầy đủ 'readers' schema mới (OTel >= v0.102.0).
@@ -149,3 +198,9 @@ service:
         - filter/drop_health
         - batch
       exporters: [prometheusremotewrite]
+    
+    # 🆕 NEW PIPELINE: Self-metrics → CloudWatch
+    metrics/self:
+      receivers: [prometheus/self_metrics]
+      processors: [batch/self_metrics]
+      exporters: [awsemf/self_metrics]

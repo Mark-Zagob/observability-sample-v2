@@ -74,6 +74,15 @@ locals {
         # prometheus_endpoint (từ SSM) = base URL: https://aps-workspaces.../workspaces/ws-xxx/
         # ADOT prometheusremotewrite cần full path kèm api/v1/remote_write
         value = "${var.amp_endpoint}api/v1/remote_write" 
+      },
+      # 🆕 NEW: Cho self-metrics pipeline dùng
+      {
+        name  = "PROJECT_NAME"
+        value = var.project_name
+      },
+      {
+        name  = "SERVICE_NAME"
+        value = var.service_name
       }
     ]
 

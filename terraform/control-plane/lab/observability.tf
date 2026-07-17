@@ -328,3 +328,44 @@ resource "aws_cloudwatch_metric_alarm" "app_error_rate" {
     Project     = var.project_name
   }
 }
+
+# ============================================================
+# 5. FINOPS GUARDRAIL — Cardinality Bomb Detector
+# ============================================================
+# AMP charges per active time series ingested. A "cardinality bomb"
+# (e.g., dev attaching UUID labels to metrics) can silently 100x
+# the bill. This alarm catches it early.
+#
+# Baseline (Phase 1.5): ~200-500 series
+# Warning threshold:    5,000 (investigate labels)
+# Production:           set 50,000+
+
+resource "aws_cloudwatch_metric_alarm" "amp_cardinality_bomb" {
+  alarm_name        = "${var.project_name}-${var.environment}-amp-cardinality-bomb"
+  alarm_description = "AMP Active Series vượt ngưỡng — có thể Dev gắn UUID labels vào metric. Investigate ngay để tránh nổ hóa đơn!"
+
+  namespace           = "AWS/Usage"
+  metric_name         = "ResourceCount"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 5000
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    Resource = module.amp.workspace_id
+    Type     = "ActiveSeries"
+  }
+
+  alarm_actions = [module.alerting.sns_warning_arn]
+  ok_actions    = [module.alerting.sns_warning_arn]
+
+  tags = {
+    Module      = "observability"
+    Severity    = "warning"
+    Type        = "finops"
+    Environment = var.environment
+    Project     = var.project_name
+  }
+}

@@ -39,7 +39,7 @@
           "links": [
             {
               "title": "🔍 Mở AWS X-Ray (Đồng bộ thời gian spike)",
-              "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces?filter=service(id(name:%20%22order-service%22))&timeRange=${__from:date:seconds}-${__to:date:seconds}",
+              "url": "https://ap-southeast-2.console.aws.amazon.com/xray/home?region=ap-southeast-2#/traces?filter=service(id(name:%20%22order-service%22))&timeRange=$${__from:date:seconds}-$${__to:date:seconds}",
               "targetBlank": true
             }
           ]
@@ -350,33 +350,88 @@
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
       "gridPos": { "h": 6, "w": 8, "x": 8, "y": 49 },
       "id": 202,
-      "title": "⚡ ADOT Span Drop Rate (Exp 7 - Trace Storm)",
-      "description": "Số spans bị memory_limiter vứt bỏ. > 0 là bình thường khi storm, nhưng phải có dữ liệu để post-mortem.",
+      "title": "⚡ ADOT Span Drop Rate (Drill 7 - Trace Storm)",
+      "description": "Số spans bị memory_limiter drop CHÍNH XÁC (không phải đếm log events). Dùng để tính Data Loss % khi post-mortem.",
       "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 }
+        }
+      },
       "targets": [{
         "queryMode": "Metrics",
         "namespace": "ObsLab/TelemetryPipeline",
-        "metricName": "SpanDrops",
+        "metricName": "otelcol_processor_dropped_spans",
+        "dimensions": { "service_name": "order-service" },
         "statistics": ["Sum"],
         "period": "60",
-        "legendFormat": "Dropped Spans"
+        "label": "Dropped Spans (real count)"
       }]
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
       "gridPos": { "h": 6, "w": 8, "x": 16, "y": 49 },
       "id": 203,
-      "title": "🚨 AMP Export Failures (Exp 8 - Silent Blinder)",
-      "description": "Số lần ADOT bị AccessDenied khi push lên AMP. > 0 = Pipeline đang bị mù metrics.",
+      "title": "🚨 AMP Export Failures (Drill 8 - Silent Blinder)",
+      "description": "Số spans/metrics ADOT không thể push lên AMP do IAM issues. > 0 = Pipeline đang mù metrics.",
       "type": "timeseries",
-      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 }
+        }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "ObsLab/TelemetryPipeline",
+          "metricName": "otelcol_exporter_send_failed_spans",
+          "dimensions": { "service_name": "order-service" },
+          "statistics": ["Sum"],
+          "period": "60",
+          "label": "Failed Spans"
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ObsLab/TelemetryPipeline",
+          "metricName": "otelcol_exporter_send_failed_metric_points",
+          "dimensions": { "service_name": "order-service" },
+          "statistics": ["Sum"],
+          "period": "60",
+          "label": "Failed Metrics"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 55 },
+      "id": 204,
+      "title": "📉 Data Loss % (Dropped / Accepted)",
+      "description": "Tỷ lệ telemetry bị mất. < 1% = OK, > 10% = cần tăng ADOT RAM.",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        }
+      },
       "targets": [{
         "queryMode": "Metrics",
         "namespace": "ObsLab/TelemetryPipeline",
-        "metricName": "ExportFailures",
-        "statistics": ["Sum"],
-        "period": "60",
-        "legendFormat": "Export Errors"
+        "expression": "SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_processor_dropped_spans\"', 'Sum', 60) / (SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_receiver_accepted_spans\"', 'Sum', 60) + 0.001)",
+        "region": "ap-southeast-2",
+        "label": "Loss %"
       }]
     },
     {
@@ -505,6 +560,100 @@
         },
         { "expr": "14.4", "legendFormat": "🚨 Critical (14.4x)" },
         { "expr": "3", "legendFormat": "⚠️ Warning (3x)" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 80 },
+      "id": 500,
+      "title": "💰 FinOps Guardrails (Drill 9 - Cardinality Bomb)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 81 },
+      "id": 501,
+      "title": "📈 AMP Active Series (Cardinality Bomb Detector)",
+      "description": "Số time series đang active trong AMP workspace.\n\n• Baseline (Phase 1.5): ~200-500 series\n• Warning: > 5,000 (có thể Dev gắn UUID labels)\n• Critical: > 10,000 (Cardinality Bomb confirmed — hóa đơn đang nổ!)\n\nXem Drill 9 trong AWS_CHAOS_PLAYBOOK.md để test.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "orange", "value": 5000 },
+              { "color": "red", "value": 10000 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/Usage",
+          "metricName": "ResourceCount",
+          "dimensions": {
+            "Resource": "${amp_workspace_id}",
+            "Type": "ActiveSeries"
+          },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Active Time Series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 81 },
+      "id": 502,
+      "title": "💸 Estimated Monthly Cost (AMP Ingestion)",
+      "description": "Chi phí ước tính mỗi tháng dựa trên Active Series.\n\nCông thức:\n• Samples/hour = ActiveSeries × 360 (mỗi series export mỗi 10s)\n• Monthly samples = Samples/hour × 24 × 30\n• Cost = Monthly samples / 10,000 × $0.03\n\n⚠️ Giá AMP: $0.03 per 10,000 samples ingested",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 2000 }
+            ]
+          },
+          "decimals": 2
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/Usage",
+          "metricName": "ResourceCount",
+          "dimensions": {
+            "Resource": "${amp_workspace_id}",
+            "Type": "ActiveSeries"
+          },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Monthly Cost",
+          "refId": "A",
+          "expression": "SEARCH('{\"Namespace\":\"AWS/Usage\",\"MetricName\":\"ResourceCount\",\"Dimensions\":[{\"Name\":\"Resource\",\"Value\":\"${amp_workspace_id}\"},{\"Name\":\"Type\",\"Value\":\"ActiveSeries\"}]}', 'Average', 60) * 360 * 24 * 30 / 10000 * 0.03"
+        }
       ]
     }
   ],

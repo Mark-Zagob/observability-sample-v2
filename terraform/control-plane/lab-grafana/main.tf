@@ -80,9 +80,18 @@ resource "grafana_data_source" "cloudwatch" {
 #--------------------------------------------------------------
 # Tương đương on-prem: grafana/dashboards/Application/*.json
 # AWS:                  grafana_dashboard resources (Dashboard as Code)
+#
+# Dashboard JSON dùng templatefile() để inject giá trị động
+# (AMP workspace ID) — survive across terraform destroy/apply cycles.
 #--------------------------------------------------------------
 
+data "aws_ssm_parameter" "amp_workspace_id" {
+  name = "/${var.project_name}/${var.environment}/observability/amp_workspace_id"
+}
+
 resource "grafana_dashboard" "pod1_illumination" {
-  config_json = file("${path.module}/dashboards/pod1-illumination.json")
-  overwrite   = true
+  config_json = templatefile("${path.module}/dashboards/pod1-illumination.json.tftpl", {
+    amp_workspace_id = data.aws_ssm_parameter.amp_workspace_id.value
+  })
+  overwrite = true
 }
