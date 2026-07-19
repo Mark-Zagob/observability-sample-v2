@@ -1,7 +1,7 @@
 # terraform/modules/compute/ecs-service/otel-config-aws.yaml.tftpl
 #--------------------------------------------------------------
 # ADOT Collector Configuration — Production-Grade
-# Template Variables: ${aws_region}, ${sampling_rate}
+# Template Variables: ${aws_region}, ${sampling_rate}, ${service_name}
 #--------------------------------------------------------------
 
 extensions:
@@ -36,8 +36,13 @@ receivers:
           metric_relabel_configs:
             # Chỉ giữ lại các metric quan trọng, tránh cardinality bomb
             - source_labels: [__name__]
-              regex: 'otelcol_(exporter_sent_failed|processor_dropped|process_memory|receiver_accepted).*'
+              regex: 'otelcol_(exporter_send_failed|processor_dropped|process_memory|receiver_accepted).*'
               action: keep
+            # Inject service_name label để match EMF metric_declarations
+            # dimensions: [[service_name]]. OTel self-metrics không có label
+            # này natively → phải inject tại scrape time.
+            - target_label: service_name
+              replacement: '${service_name}'
 
 processors:
   # 🛡️ APP RESILIENCE — Bảo vệ Sidecar khỏi OOM khi App spike

@@ -195,6 +195,7 @@ resource "aws_iam_role_policy" "cloudwatch_read" {
         Effect = "Allow"
         Action = [
           "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
           "logs:GetLogGroupFields",
           "logs:StartQuery",
           "logs:StopQuery",

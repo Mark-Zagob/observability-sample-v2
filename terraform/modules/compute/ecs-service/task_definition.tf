@@ -67,6 +67,7 @@ locals {
         value = templatefile("${path.module}/otel-config-aws.yaml.tftpl", {
           aws_region    = var.aws_region
           sampling_rate = var.traces_sampling_rate
+          service_name  = var.service_name
         })
       },
       {

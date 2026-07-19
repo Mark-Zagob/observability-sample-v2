@@ -56,7 +56,9 @@ resource "grafana_data_source" "xray" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    authType      = "default"
+    # ec2_iam_role = dùng workspace IAM role (CUSTOMER_MANAGED mode).
+    # "default" cũng hoạt động trên AMG nhưng ec2_iam_role explicit hơn.
+    authType      = "ec2_iam_role"
   })
 }
 
@@ -71,7 +73,8 @@ resource "grafana_data_source" "cloudwatch" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    authType      = "default"
+    # ec2_iam_role = dùng workspace IAM role (CUSTOMER_MANAGED mode).
+    authType      = "ec2_iam_role"
   })
 }
 
