@@ -236,6 +236,18 @@ resource "aws_iam_role_policy" "ecs_task_base" {
           "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*",
           "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*:log-stream:*"
         ]
+      },
+      {
+        Sid    = "AllowAMPROMetheusRemoteWrite"
+        Effect = "Allow"
+        Action = [
+          "aps:RemoteWrite",
+          "aps:GetSeries",
+          "aps:GetLabels",
+          "aps:GetMetricMetadata"
+        ]
+        # Scope chặt vào AMP workspace để tuân thủ Least Privilege
+        Resource = "arn:${local.partition}:aps:${local.region}:${local.account_id}:workspace/*"
       }
     ]
   })

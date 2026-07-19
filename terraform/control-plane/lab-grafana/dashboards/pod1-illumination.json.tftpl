@@ -488,18 +488,34 @@
       "fieldConfig": {
         "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
       },
-      "targets": [
-        {
-          "queryMode": "Metrics",
-          "namespace": "AWS/ECS",
-          "metricName": "CPUUtilization",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
-          "statistics": ["Average", "Maximum"],
-          "period": "60",
-          "legendFormat": "CPU {{stat}}",
-          "refId": "A"
-        }
-      ]
+    "targets": [
+      {
+        "queryMode": "Metrics",
+        "namespace": "ECS/ContainerInsights",
+        "metricName": "cpu_utilized",
+        "dimensions": {
+          "ClusterName": "obs-cluster",
+          "ServiceName": "order-service"
+        },
+        "statistics": ["Average"],
+        "period": "60",
+        "label": "CPU Utilized (CPU Units)",
+        "refId": "A"
+      },
+      {
+        "queryMode": "Metrics",
+        "namespace": "ECS/ContainerInsights",
+        "metricName": "cpu_reserved",
+        "dimensions": {
+          "ClusterName": "obs-cluster",
+          "ServiceName": "order-service"
+        },
+        "statistics": ["Average"],
+        "period": "60",
+        "label": "CPU Reserved (CPU Units)",
+        "refId": "B"
+      }
+    ]
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
@@ -596,7 +612,7 @@
       "targets": [
         {
           "queryMode": "Metrics",
-          "namespace": "AWS/Usage",
+          "namespace": "AWS/Prometheus",
           "metricName": "ResourceCount",
           "dimensions": {
             "Resource": "${amp_workspace_id}",
@@ -708,7 +724,7 @@
             "/ecs/obs/order-service",
             "/ecs/obs/payment-service"
           ],
-          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level = \"ERROR\" OR level = \"CRITICAL\" OR @message like /Exception|Traceback|AccessDenied/\n| sort @timestamp desc\n| limit 100",
+          "query": "fields @timestamp, @message, service_name, level, trace_id, payment_status\n| filter level = \"ERROR\" OR level = \"CRITICAL\" OR level = \"WARNING\" OR payment_status = 500 @message like /Exception|Traceback|AccessDenied/\n| sort @timestamp desc\n| limit 100",
           "region": "default",
           "statsGroups": [],
           "refId": "A"
