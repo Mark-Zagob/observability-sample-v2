@@ -221,9 +221,3 @@ service:
       receivers: [prometheus/self_metrics]
       processors: [batch/self_metrics]
       exporters: [awsemf/self_metrics]
-    
-    # 🆕 NEW PIPELINE: Self-metrics → CloudWatch
-    metrics/self:
-      receivers: [prometheus/self_metrics]
-      processors: [batch/self_metrics]
-      exporters: [awsemf/self_metrics]
