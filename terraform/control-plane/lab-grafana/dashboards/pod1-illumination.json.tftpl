@@ -356,6 +356,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "noValue": "0",
           "color": { "mode": "fixed", "fixedColor": "orange" },
           "custom": { "fillOpacity": 20, "lineWidth": 2 }
         }
@@ -380,6 +381,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "noValue": "0",
           "color": { "mode": "fixed", "fixedColor": "red" },
           "custom": { "fillOpacity": 20, "lineWidth": 2 }
         }
@@ -416,6 +418,12 @@
         "defaults": {
           "unit": "percentunit",
           "min": 0, "max": 1,
+          "noValue": "0",
+          "mappings": [
+            { "type": "range", "options": { "from": 0, "to": 0, "result": { "text": "✅ No Loss", "color": "green" } } },
+            { "type": "range", "options": { "from": 0.001, "to": 0.01, "result": { "text": "⚠️ Minor Loss", "color": "yellow" } } },
+            { "type": "range", "options": { "from": 0.01, "to": 1, "result": { "text": "🔴 Data Loss!", "color": "red" } } }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -426,13 +434,37 @@
           }
         }
       },
-      "targets": [{
-        "queryMode": "Metrics",
-        "namespace": "ObsLab/TelemetryPipeline",
-        "expression": "SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_processor_dropped_spans\"', 'Sum', 60) / (SEARCH('Namespace=\"ObsLab/TelemetryPipeline\" MetricName=\"otelcol_receiver_accepted_spans\"', 'Sum', 60) + 0.001)",
-        "region": "${aws_region}",
-        "label": "Loss %"
-      }]
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "ObsLab/TelemetryPipeline",
+          "metricName": "otelcol_processor_dropped_spans",
+          "dimensions": {},
+          "statistics": ["Sum"],
+          "period": "60",
+          "refId": "dropped",
+          "id": "dropped",
+          "hide": true
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ObsLab/TelemetryPipeline",
+          "metricName": "otelcol_receiver_accepted_spans",
+          "dimensions": {},
+          "statistics": ["Sum"],
+          "period": "60",
+          "refId": "accepted",
+          "id": "accepted",
+          "hide": true
+        },
+        {
+          "expression": "dropped / (accepted + 0.001)",
+          "refId": "loss_percent",
+          "id": "loss_percent",
+          "label": "Loss %",
+          "region": "${aws_region}"
+        }
+      ]
     },
     {
       "collapsed": false,
@@ -492,7 +524,7 @@
       {
         "queryMode": "Metrics",
         "namespace": "ECS/ContainerInsights",
-        "metricName": "cpu_utilized",
+        "metricName": "CpuUtilized",
         "dimensions": {
           "ClusterName": "obs-cluster",
           "ServiceName": "order-service"
@@ -505,7 +537,7 @@
       {
         "queryMode": "Metrics",
         "namespace": "ECS/ContainerInsights",
-        "metricName": "cpu_reserved",
+        "metricName": "CpuReserved",
         "dimensions": {
           "ClusterName": "obs-cluster",
           "ServiceName": "order-service"
@@ -612,11 +644,13 @@
       "targets": [
         {
           "queryMode": "Metrics",
-          "namespace": "AWS/Prometheus",
+          "namespace": "AWS/Usage",
           "metricName": "ResourceCount",
           "dimensions": {
             "Resource": "${amp_workspace_id}",
-            "Type": "ActiveSeries"
+            "Type": "ActiveSeries",
+            "Class": "None",
+            "Service": "Prometheus"
           },
           "statistics": ["Average"],
           "period": "60",
@@ -724,7 +758,7 @@
             "/ecs/obs/order-service",
             "/ecs/obs/payment-service"
           ],
-          "query": "fields @timestamp, @message, service_name, level, trace_id, payment_status\n| filter level = \"ERROR\" OR level = \"CRITICAL\" OR level = \"WARNING\" OR payment_status = 500 @message like /Exception|Traceback|AccessDenied/\n| sort @timestamp desc\n| limit 100",
+          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level in [\"ERROR\", \"CRITICAL\", \"WARNING\", \"INFO\"]\n| sort @timestamp desc\n| limit 50",
           "region": "default",
           "statsGroups": [],
           "refId": "A"

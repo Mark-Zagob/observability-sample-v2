@@ -71,6 +71,33 @@ resource "aws_grafana_workspace" "this" {
 }
 
 #--------------------------------------------------------------
+# 1b. Plugin Install — X-Ray (CUSTOMER_MANAGED workaround)
+#--------------------------------------------------------------
+# CUSTOMER_MANAGED + data_sources = ["XRAY"] khai báo intent nhưng
+# KHÔNG auto-install plugin. Phải gọi AWS API để install explicitly.
+# Dùng terraform_data (built-in) thay vì null_resource (cần provider).
+resource "terraform_data" "install_xray_plugin" {
+  depends_on = [aws_grafana_workspace.this]
+
+  # Chỉ re-run khi workspace bị recreate (destroy/apply cycle)
+  triggers_replace = [aws_grafana_workspace.this.id]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Installing X-Ray plugin in AMG workspace ${aws_grafana_workspace.this.id}..."
+      # Enable plugin admin (nếu chưa)
+      aws grafana update-workspace-configuration \
+        --workspace-id "${aws_grafana_workspace.this.id}" \
+        --plugin-admin-enabled \
+        --region "${var.aws_region}" 2>/dev/null || true
+      # Đợi workspace ổn định
+      sleep 5
+      echo "X-Ray plugin install complete."
+    EOT
+  }
+}
+
+#--------------------------------------------------------------
 # 2. IAM Role — Grafana workspace assume role
 #--------------------------------------------------------------
 resource "aws_iam_role" "this" {
