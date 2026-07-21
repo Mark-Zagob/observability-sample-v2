@@ -324,15 +324,69 @@
       ]
     },
     {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 47 },
+      "id": 15,
+      "title": "📊 ECS Task Health (Order + Payment)",
+      "description": "RunningTaskCount vs DesiredCount. Nếu Running < Desired → service đang crash/scale-in. Dùng để detect Chaos Drill impact ngay.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "RunningTaskCount",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Order - Running"
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "DesiredTaskCount",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Order - Desired"
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "RunningTaskCount",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Payment - Running"
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "DesiredTaskCount",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "Payment - Desired"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
       "id": 200,
       "title": "🩺 Pipeline Health & Meta-Monitoring (Chaos Drills 7-10)",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 49 },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 57 },
       "id": 201,
       "title": "💓 Telemetry Heartbeat (App Metrics Flow)",
       "description": "Đếm số lượng service đang gửi metric lên AMP. Nếu = 0 -> ADOT đã chết (Exp 10) hoặc mất IAM (Exp 8).",
@@ -348,7 +402,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 49 },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 57 },
       "id": 202,
       "title": "⚡ ADOT Span Drop Rate (Drill 7 - Trace Storm)",
       "description": "Số spans bị memory_limiter drop CHÍNH XÁC (không phải đếm log events). Dùng để tính Data Loss % khi post-mortem.",
@@ -373,7 +427,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 49 },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 57 },
       "id": 203,
       "title": "🚨 AMP Export Failures (Drill 8 - Silent Blinder)",
       "description": "Số spans/metrics ADOT không thể push lên AMP do IAM issues. > 0 = Pipeline đang mù metrics.",
@@ -409,7 +463,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 55 },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 63 },
       "id": 204,
       "title": "📉 Data Loss % (Dropped / Accepted)",
       "description": "Tỷ lệ telemetry bị mất. < 1% = OK, > 10% = cần tăng ADOT RAM.",
@@ -468,14 +522,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 63 },
       "id": 207,
       "title": "🎯 Business Impact (User Pain Score)",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 56 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 64 },
       "id": 205,
       "title": "😭 User Pain Score (Browser Traffic Only)",
       "description": "Tỷ lệ user THẬT bị lỗi. Không bị nhiễu bởi Synthetic Loadtest khi chạy Chaos Drill.",
@@ -494,7 +548,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 56 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 64 },
       "id": 206,
       "title": "📉 Order Success Rate (Filtered by $traffic_source)",
       "type": "timeseries",
@@ -505,14 +559,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 70 },
       "id": 300,
       "title": "🖥️ ECS Fargate Resource (USE Method) — Blind Spot Killer",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
       "id": 301,
       "title": "🔥 Order Service: CPU Utilization vs Throttling",
       "description": "Nếu Utilization chạm 100% -> Fargate throttling CPU -> App chậm dù không có lỗi code. (Exp 3.5)",
@@ -551,7 +605,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 71 },
       "id": 302,
       "title": "💾 Order Service: Memory Utilization (OOM Predictor)",
       "description": "Leading indicator cho Exp 3B (OOM Kill). Alarm fire khi > 85%.",
@@ -573,15 +627,81 @@
       ]
     },
     {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 79 },
+      "id": 304,
+      "title": "🔥 Payment Service: CPU Utilization vs Throttling",
+      "description": "Nếu Utilization chạm 100% → Fargate throttling CPU → Payment timeout → Order cascade failure.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "CpuUtilized",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "CPU Utilized (CPU Units)",
+          "refId": "A"
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "CpuReserved",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "label": "CPU Reserved (CPU Units)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 79 },
+      "id": 305,
+      "title": "💾 Payment Service: Memory Utilization (OOM Predictor)",
+      "description": "Leading indicator cho OOM Kill. Alarm fire khi > 85%.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 85 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "AWS/ECS",
+          "metricName": "MemoryUtilization",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average", "Maximum"],
+          "period": "60",
+          "legendFormat": "Mem {{stat}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 88 },
       "id": 400,
       "title": "🎯 SLO & Error Budget (Reliability PM View)",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 89 },
       "id": 401,
       "title": "🔥 Order Service: Fast Burn Rate (5m window)",
       "description": "Tốc độ đốt Error Budget. > 14.4x = SEV-1 (Page SRE). > 3x = SEV-3 (Ticket).",
@@ -617,14 +737,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 80 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 97 },
       "id": 500,
       "title": "💰 FinOps Guardrails (Drill 9 - Cardinality Bomb)",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 81 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 98 },
       "id": 501,
       "title": "📈 AMP Active Series (Cardinality Bomb Detector)",
       "description": "Số time series đang active trong AMP workspace.\n\n• Baseline (Phase 1.5): ~200-500 series\n• Warning: > 5,000 (có thể Dev gắn UUID labels)\n• Critical: > 10,000 (Cardinality Bomb confirmed — hóa đơn đang nổ!)\n\nXem Drill 9 trong AWS_CHAOS_PLAYBOOK.md để test.",
@@ -666,7 +786,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 81 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 98 },
       "id": 502,
       "title": "💸 Estimated Monthly Cost (AMP Ingestion)",
       "description": "Chi phí ước tính mỗi tháng dựa trên Active Series.\n\nCông thức:\n• Samples/hour = ActiveSeries × 360 (mỗi series export mỗi 10s)\n• Monthly samples = Samples/hour × 24 × 30\n• Cost = Monthly samples / 10,000 × $0.03\n\n⚠️ Giá AMP: $0.03 per 10,000 samples ingested",
@@ -713,14 +833,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 90 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 107 },
       "id": 600,
       "title": "🪵 Logs & Traces — Deep Dive (Correlation)",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 91 },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 108 },
       "id": 601,
       "title": "📋 Live App Logs (CloudWatch Logs Insights)",
       "description": "Structured JSON logs from Order + Payment services.\n\n• Auto-filter: chỉ hiện ERROR/CRITICAL/Exception\n• Click vào trace_id để jump sang X-Ray trace (cần setup data link)\n• Sort theo timestamp giảm dần (mới nhất ở trên)\n\nDùng để debug khi metrics cho thấy spike error nhưng không biết root cause.",
@@ -772,7 +892,7 @@
     },
     {
       "datasource": { "type": "grafana-x-ray-datasource", "uid": "xray-datasource" },
-      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 91 },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 108 },
       "id": 602,
       "title": "🔍 Recent Error Traces (X-Ray)",
       "description": "Top 10 traces có lỗi HTTP 5xx trong 1h vừa qua.\n\n• Click vào bất kỳ trace nào để xem full waterfall diagram\n• Filter: chỉ lấy traces từ order-service hoặc payment-service\n• Sort theo latency giảm dần (slowest first)\n\nDùng để debug distributed issues: ví dụ order-service timeout nhưng không biết payment-service hay DB là culprit.",
