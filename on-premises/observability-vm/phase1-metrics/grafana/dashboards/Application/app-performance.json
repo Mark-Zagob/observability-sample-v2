@@ -189,11 +189,40 @@
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 }, "id": 104, "title": "📨 Notification Worker — RED", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 }, "id": 107, "title": "🛡️ Circuit Breaker — Payment Gateway", "type": "row" },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "✅ CLOSED", "color": "green" }, "1": { "text": "🚨 OPEN", "color": "red" }, "2": { "text": "⚠️ HALF-OPEN", "color": "yellow" } } } ]
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 40 },
+      "id": 30,
+      "title": "🛡️ Circuit Breaker Status",
+      "description": "Current state of payment gateway circuit breaker. OPEN = all requests fail-fast (503).",
+      "type": "stat",
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [ { "expr": "payment_circuit_breaker_state{breaker=\"payment_gateway\"}", "legendFormat": "State" } ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 40 },
+      "id": 31,
+      "title": "🚫 Circuit Breaker Rejections",
+      "description": "Requests rejected by open circuit breaker (fail-fast 503). Spike here = gateway is down.",
+      "type": "timeseries",
+      "targets": [ { "expr": "sum(rate(payment_circuit_breaker_rejections_total[5m]))", "legendFormat": "Rejections/s" } ]
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 }, "id": 104, "title": "📨 Notification Worker — RED", "type": "row" },
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 40 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 49 },
       "id": 12,
       "title": "Rate — Events Consumed",
       "description": "Kafka events consumed per second by event type",
@@ -203,7 +232,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 40 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 49 },
       "id": 13,
       "title": "Duration — Processing Latency (P50 / P95)",
       "description": "Time to process and send notifications",
@@ -221,7 +250,7 @@
           "custom": { "fillOpacity": 15, "lineWidth": 2 }, "noValue": "0 (no errors)"
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 40 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 49 },
       "id": 18,
       "title": "Errors — Processing Errors",
       "description": "Difference between consumed events and sent notifications. 'No data' = zero errors (healthy).",
@@ -232,11 +261,11 @@
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 }, "id": 105, "title": "📦 Inventory Worker — RED", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "id": 105, "title": "📦 Inventory Worker — RED", "type": "row" },
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 49 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 58 },
       "id": 15,
       "title": "Rate — Operations (by Action)",
       "description": "Stock update operations per second: reserve, release, restock",
@@ -246,7 +275,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 49 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 58 },
       "id": 16,
       "title": "Duration — Processing Latency (P50 / P95)",
       "description": "Time to process stock reserve/release",
@@ -259,7 +288,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 49 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 58 },
       "id": 17,
       "title": "Errors — Error Rate (by Event Type)",
       "description": "Inventory update errors per second",
@@ -269,11 +298,11 @@
       ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "id": 106, "title": "📊 Business KPIs", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 66 }, "id": 106, "title": "📊 Business KPIs", "type": "row" },
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 58 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 67 },
       "id": 20,
       "title": "Orders Created (by Status)",
       "description": "Business view: orders per second grouped by final status",
@@ -283,7 +312,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 58 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 67 },
       "id": 21,
       "title": "Payments (by Status & Provider)",
       "description": "Business view: payment outcomes per provider",
@@ -293,7 +322,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 58 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 67 },
       "id": 22,
       "title": "Inventory Checks (by Result)",
       "description": "Stock availability outcomes: in_stock vs out_of_stock",
@@ -303,7 +332,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } } } },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 66 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 75 },
       "id": 23,
       "title": "Notifications Sent (by Type)",
       "description": "Business view: notification delivery by type",
@@ -313,7 +342,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "fixedColor": "blue", "mode": "fixed" }, "unit": "ops", "min": 0, "custom": { "fillOpacity": 20, "lineWidth": 2 }, "noValue": "No restocks triggered" } },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 66 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 75 },
       "id": 24,
       "title": "Auto-Restock Events",
       "description": "Automatic stock replenishment when stock drops below threshold",
@@ -323,7 +352,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "currencyUSD", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 66 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 75 },
       "id": 25,
       "title": "Payment Amount (Average by Provider)",
       "description": "Average payment amount in USD by provider",
@@ -331,11 +360,11 @@
       "targets": [ { "expr": "sum(rate(payment_amount_dollars_sum[5m])) by (provider) / sum(rate(payment_amount_dollars_count[5m])) by (provider)", "legendFormat": "{{ provider }} avg" } ]
     },
 
-    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 74 }, "id": 103, "title": "📈 End-to-End Overview", "type": "row" },
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 83 }, "id": 103, "title": "📈 End-to-End Overview", "type": "row" },
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 75 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
       "id": 10,
       "title": "Service Latency Comparison (P95)",
       "description": "P95 latency of each service to identify bottlenecks",
@@ -351,7 +380,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps", "min": 0, "custom": { "fillOpacity": 15, "lineWidth": 2 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 75 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
       "id": 11,
       "title": "Throughput Comparison",
       "description": "Operations per second across all services for relative comparison",
