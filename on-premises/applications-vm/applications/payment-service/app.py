@@ -47,6 +47,26 @@ payments_counter = meter.create_counter(name="payments_total", description="Tota
 payment_amount = meter.create_histogram(name="payment_amount_dollars", description="Payment amount", unit="$")
 gateway_duration = meter.create_histogram(name="payment_gateway_duration_seconds", description="Gateway latency", unit="s")
 
+ENABLE_CIRCUIT_BREAKER_METRICS = os.getenv("ENABLE_CIRCUIT_BREAKER_METRICS", "true").lower() == "true"
+
+if ENABLE_CIRCUIT_BREAKER_METRICS:
+    # Circuit Breaker State: 0=Closed, 1=Open, 2=Half-Open
+    circuit_breaker_state = meter.create_gauge(
+        name="payment_circuit_breaker_state",
+        description="Circuit breaker state (0=Closed, 1=Open, 2=Half-Open)",
+        unit="1"
+    )
+    circuit_breaker_transitions = meter.create_counter(
+        name="payment_circuit_breaker_transitions_total",
+        description="Number of circuit breaker state transitions",
+        unit="1"
+    )
+    circuit_breaker_rejections = meter.create_counter(
+        name="payment_circuit_breaker_rejections_total",
+        description="Number of requests rejected by open circuit breaker",
+        unit="1"
+    )
+
 # ============================================================
 # Redis Idempotency Store (Fix Bom #1)
 # ============================================================
@@ -82,6 +102,58 @@ PROVIDERS = ["stripe", "paypal", "square"]
 FAILURE_RATE = float(os.getenv("PAYMENT_FAILURE_RATE", "0.10"))
 SLOW_RATE = float(os.getenv("PAYMENT_SLOW_RATE", "0.20"))
 
+# State mapping: pybreaker state → numeric value
+STATE_MAP = {
+    "closed": 0,      # Normal operation
+    "open": 1,        # Rejecting all requests
+    "half-open": 2    # Testing with 1 request
+}
+
+def get_breaker_state():
+    """Convert pybreaker state to numeric value."""
+    state_name = str(payment_breaker.state).lower()
+    return STATE_MAP.get(state_name, 0)
+
+def call_external_gateway_with_tracking(provider, delay):
+    """
+    Wrap circuit breaker call với state tracking và metrics emission.
+    Consolidates failure simulation (fixes double-FAILURE_RATE bug).
+    """
+    if not ENABLE_CIRCUIT_BREAKER_METRICS:
+        # Fallback: gọi qua CB nhưng không track metrics
+        with payment_breaker:
+            time.sleep(delay)
+            if random.random() < FAILURE_RATE:
+                raise Exception("Gateway rejected card")
+        return True
+    
+    # Record state TRƯỚC khi call
+    state_before = get_breaker_state()
+    circuit_breaker_state.set(state_before, {"breaker": "payment_gateway"})
+    
+    try:
+        with payment_breaker:
+            time.sleep(delay)
+            if random.random() < FAILURE_RATE:
+                raise Exception("Gateway rejected card")
+        
+        # Record state SAU khi call
+        state_after = get_breaker_state()
+        circuit_breaker_state.set(state_after, {"breaker": "payment_gateway"})
+        if state_before != state_after:
+            circuit_breaker_transitions.add(1, {
+                "breaker": "payment_gateway",
+                "from_state": str(state_before),
+                "to_state": str(state_after)
+            })
+        return True
+        
+    except pybreaker.CircuitBreakerError:
+        circuit_breaker_rejections.add(1, {"breaker": "payment_gateway"})
+        circuit_breaker_state.set(1, {"breaker": "payment_gateway"})  # OPEN
+        raise
+
+
 # ============================================================
 # Flask App
 # ============================================================
@@ -93,30 +165,12 @@ def redis_health_check():
     try:
         return redis_client.ping()
     except Exception as e:
-        # Log warning nhưng trả về True để Health Check pass (HTTP 200)
-        # Tránh việc ECS Fargate kill task liên tục do thiếu Redis ở Phase 1
         logger.warning(f"Redis is unavailable: {e}. Degrading gracefully (Idempotency disabled).")
         return True 
 
-# Truyền hàm đã wrap vào thay vì lambda raw
 _health_checks = {"redis": redis_health_check} if redis_client else {}
 health_bp = create_health_blueprint("payment-service", checks=_health_checks)
 app.register_blueprint(health_bp)
-
-# Hàm gọi Gateway giả lập qua HTTP thật (để test timeout)
-@payment_breaker
-def call_external_gateway(provider, delay):
-    """
-    [FIX] Simulate gateway latency locally.
-    Không gọi httpbin.org để tránh bị Rate-Limit / Network Jitter khi Load Test.
-    """
-    time.sleep(delay) 
-    
-    # Giả lập Business Failure (10% chance)
-    if random.random() < FAILURE_RATE:
-        raise Exception("Gateway rejected card")
-        
-    return True
 
 @app.route("/charge", methods=["POST"])
 def charge():
@@ -183,27 +237,35 @@ def charge():
         start_time = time.time()
         
         try:
-            # Gọi qua Circuit Breaker
-            call_external_gateway(provider, delay)
-            
-            # Simulate Business Failure (10% chance)
-            if random.random() < FAILURE_RATE:
-                raise Exception("Gateway rejected card")
+            # Gọi qua Circuit Breaker (with state tracking)
+            call_external_gateway_with_tracking(provider, delay)
                 
         except requests.exceptions.Timeout:
+            duration = time.time() - start_time
+            gateway_duration.record(duration, {"provider": provider})
+            payments_counter.add(1, {
+                "status": "failed", "provider": provider, "reason": "timeout"
+            })
             logger.error("Gateway Timeout", extra={"order_id": order_id})
-            # 🆕 Mark as failed để user retry được ngay (không cần chờ 60s)
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Gateway Timeout")
             return problem_response(504, "Gateway Timeout", "Payment gateway took too long", instance="/charge")
             
         except pybreaker.CircuitBreakerError:
+            payments_counter.add(1, {
+                "status": "failed", "provider": provider, "reason": "circuit_open"
+            })
             logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Circuit Breaker OPEN")
             return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
             
         except Exception as e:
+            duration = time.time() - start_time
+            gateway_duration.record(duration, {"provider": provider})
+            payments_counter.add(1, {
+                "status": "failed", "provider": provider, "reason": "gateway_rejected"
+            })
             logger.error("Payment failed", extra={"order_id": order_id, "error": str(e)})
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, str(e))
@@ -237,6 +299,20 @@ def charge():
         return jsonify(result)
 
 if __name__ == "__main__":
+    # Background thread: emit CB state mỗi 10s để Grafana không show "No Data" khi idle
+    if ENABLE_CIRCUIT_BREAKER_METRICS:
+        import threading
+        def emit_circuit_breaker_state_periodically():
+            while True:
+                state = get_breaker_state()
+                circuit_breaker_state.set(state, {"breaker": "payment_gateway"})
+                time.sleep(10)
+        threading.Thread(
+            target=emit_circuit_breaker_state_periodically,
+            daemon=True,
+            name="circuit-breaker-metrics"
+        ).start()
+    
     # Chỉ chạy watchdog khi app thực sự chạy (tránh chạy 2 lần do Flask reloader)
     start_otel_watchdog(interval=30, max_failures=3)
     app.run(host="0.0.0.0", port=5002)
