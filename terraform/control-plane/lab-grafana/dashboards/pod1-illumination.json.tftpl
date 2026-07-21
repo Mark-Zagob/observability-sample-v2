@@ -458,7 +458,7 @@
           "hide": true
         },
         {
-          "expression": "dropped / (accepted + 0.001)",
+          "expression": "IF(accepted > 100, dropped / accepted, 0)",
           "refId": "loss_percent",
           "id": "loss_percent",
           "label": "Loss %",
@@ -604,10 +604,15 @@
       "targets": [
         {
           "expr": "((1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=~\"$traffic_source\"}[5m])) / sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[5m])))) / (1 - 0.99)) or vector(0)",
-          "legendFormat": "Burn Rate (Target 99%)"
+          "legendFormat": "Burn Rate 5m (fast)"
+        },
+        {
+          "expr": "((1 - (sum(rate(orders_created_total{status=\"completed\", traffic_source=~\"$traffic_source\"}[30m])) / sum(rate(orders_created_total{traffic_source=~\"$traffic_source\"}[30m])))) / (1 - 0.99)) or vector(0)",
+          "legendFormat": "Burn Rate 30m (slow)"
         },
         { "expr": "14.4", "legendFormat": "🚨 Critical (14.4x)" },
-        { "expr": "3", "legendFormat": "⚠️ Warning (3x)" }
+        { "expr": "6", "legendFormat": "⚠️ Slow Burn (6x)" },
+        { "expr": "3", "legendFormat": "📋 Ticket (3x)" }
       ]
     },
     {
@@ -758,7 +763,7 @@
             "/ecs/obs/order-service",
             "/ecs/obs/payment-service"
           ],
-          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level in [\"ERROR\", \"CRITICAL\", \"WARNING\", \"INFO\"]\n| sort @timestamp desc\n| limit 50",
+          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level like /$${log_level}/\n| sort @timestamp desc\n| limit 50",
           "region": "default",
           "statsGroups": [],
           "refId": "A"
@@ -826,6 +831,18 @@
         "query": "All Traffic : $__all, 🌐 Browser : browser, 🤖 Synthetic Loadtest : synthetic_loadtest, 🩺 Synthetic Probe : synthetic_probe",
         "includeAll": true,
         "allValue": ".*"
+      },
+      {
+        "name": "log_level",
+        "type": "custom",
+        "label": "Log Level",
+        "current": { "text": "ERROR + CRITICAL", "value": "ERROR|CRITICAL" },
+        "options": [
+          { "text": "🔴 ERROR + CRITICAL", "value": "ERROR|CRITICAL", "selected": true },
+          { "text": "🟡 + WARNING", "value": "ERROR|CRITICAL|WARNING" },
+          { "text": "🟢 All (+ INFO)", "value": "ERROR|CRITICAL|WARNING|INFO" }
+        ],
+        "query": "🔴 ERROR + CRITICAL : ERROR|CRITICAL, 🟡 + WARNING : ERROR|CRITICAL|WARNING, 🟢 All (+ INFO) : ERROR|CRITICAL|WARNING|INFO"
       }
     ]
   },
