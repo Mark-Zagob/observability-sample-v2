@@ -180,97 +180,435 @@ Update Task Definition của Order Service & Payment Service:
 
 ---
 
-## 🗄️ PHASE 2: THE CRITICAL PATH (POD 2 — Full Distributed System)
+# 🗄️ PHASE 2: THE CRITICAL PATH (POD 2 — Full Distributed System)
 
-**Mục tiêu:** Deploy ĐỒNG LOẠT toàn bộ trục xương sống của E-commerce — không onboard rời rạc.
-**Thời gian:** 3 tuần
-**Rationale:** 6 services này tạo thành 1 functional unit không thể tách rời. Deploy cùng lúc để test được cascading failure, event-driven patterns, và full X-Ray trace.
+**Mục tiêu:** Deploy và master toàn bộ trục xương sống của E-commerce theo layered approach.
 
-### 🧩 Modules triển khai (Deploy cùng lúc)
+**Thời gian:** 5 tuần (100 hours với 20h/week commitment)
 
-- [ ] `database` (Module 4): RDS Multi-AZ + Secrets Manager + KMS
-- [ ] `cache` (Module 5): ElastiCache Redis (Cluster Mode Disabled, Auth Token)
-- [ ] `streaming` (Module 6): MSK Kafka (KRaft, 2 brokers)
-- [ ] Update `vpc-endpoints`: Thêm RDS, ElastiCache, MSK, Secrets Manager, SSM Endpoints
+**Rationale:** Thay vì deploy ĐỒNG LOẠT 6 services + 3 stateful resources cùng lúc (big bang), chúng ta áp dụng layered approach — master mỗi layer trước khi add complexity. Điều này giúp:
 
-### 📦 Workload Onboard ĐỒNG LOẠT (6 services cùng lúc)
+- Blast radius nhỏ → dễ debug
+- Contract testing giữa các layers
+- Knowledge transfer qua documentation
+- Muscle memory qua repetition
 
-**Backend Services:**
+## 📋 Layered Deployment Strategy
 
-- [ ] Order Service (`:5001`) — PostgreSQL + Redis + Kafka producer
-- [ ] Payment Service (`:5002`) — Redis idempotency + Circuit Breaker
-- [ ] API Gateway (`:5000`) — BFF pattern, RFC 7807 propagation
-- [ ] Web UI (`:8580`) — Frontend với traffic tagging
+| Sub-Phase | Focus | Time | Deliverables |
+|-----------|-------|------|---------------|
+| 2.1 | The Stateful Foundation (RDS Only) | Week 1 | RDS Multi-AZ + Order/Payment wired + Drill 11 |
+| 2.2 | The Cache Layer (ElastiCache) | Week 2 | Redis Replication Group + Cache-aside + Drill 12 |
+| 2.3 | The Event Bus (MSK Kafka) | Week 3-4 | MSK Cluster + Producers + Consumers + Drill 13-14 |
+| 2.4 | The Edge & Flow (API GW + Web UI) | Week 4-5 | BFF pattern + Traffic Gen + Drill 15 |
+| 2.5 | The Validation Week | Week 5 | E2E testing + Dashboards + Runbooks |
 
-**Async Workers:**
+---
 
-- [ ] Notification Worker (`:5004`) — Kafka consumer, idempotent
-- [ ] Inventory Worker (`:5005`) — Kafka consumer, pessimistic locking
+## 📦 Phase 2.1: The Stateful Foundation — RDS Only (Week 1)
 
-**Traffic Source:**
+**Mục tiêu:** Deploy RDS Multi-AZ, wire Order/Payment services, validate connectivity + failover.
 
-- [ ] Traffic Generator (`:5003`) — Synthetic load testing
+**Production Parallel:** Đây là công việc của DBA team trong production thực tế. Họ provision database trước, validate nó hoạt động, rồi mới "hand-off" cho app teams.
 
-### 2A: The Bootstrap Problem (How to run `init.sql` without Public Accessible)
+### 🧩 Modules triển khai
 
-**Option 1 (Recommended):** Deploy một "Bootstrap Task" chạy image `postgres:alpine` với ECS Exec enabled.
+- [ ] Enable `database` module (đã có trong Control Plane) với `multi_az = true`
+- [ ] Update `vpc-endpoints` module: thêm RDS endpoint (`com.amazonaws.{region}.rds`)
+- [ ] Wire Order Service → RDS (flip `ENABLE_POSTGRES=true` trong Data Plane)
+- [ ] Wire Payment Service → RDS (nếu cần, hoặc keep stateless)
 
-```bash
-aws ecs execute-command --cluster my-cluster --task <task-id> \
-  --container bootstrap --interactive \
-  --command "psql -h <rds-endpoint> -U admin -d orders -f /init.sql"
-```
-
-**Option 2:** Dùng Bastion Host + SSM Session Manager (kéo từ Phase 3 lên dùng sớm).
-
-### 2B: Wire Secrets & Environment Variables
+### 📦 Workload Wiring
 
 ```hcl
-secrets = [
-  {
-    name      = "DB_SECRET"
-    valueFrom = aws_secretsmanager_secret.rds_credentials.arn
-  }
-]
-
+# data-plane/order-service/main.tf
 environment = {
-  DB_HOST                 = data.aws_ssm_parameter.db_host.value
-  DB_PORT                 = data.aws_ssm_parameter.db_port.value
-  DB_NAME                 = data.aws_ssm_parameter.db_name.value
-  REDIS_URL               = "redis://${module.elasticache.endpoint}:6379"
-  KAFKA_BOOTSTRAP_SERVERS = module.msk.bootstrap_brokers
-  ENABLE_REDIS            = "true"   # ← BẬT LẠI (was false in Phase 1)
-  ENABLE_KAFKA            = "true"   # ← BẬT LẠI (was false in Phase 1)
+  # ... existing vars ...
+  ENABLE_POSTGRES = "true"  # ← Bật lại
+  ENABLE_REDIS    = "false" # ← Vẫn disable
+  ENABLE_KAFKA    = "false" # ← Vẫn disable
+}
+secrets = {
+  DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
 }
 ```
 
-### 2C: Verify End-to-End Flow
+### 🧪 Bootstrap Task (Option 1 từ ROADMAP)
 
+```bash
+# Deploy bootstrap task với image postgres:alpine
+aws ecs run-task \
+  --cluster obs-cluster \
+  --task-definition bootstrap-task \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx]}"
+
+# ECS Exec vào bootstrap task
+aws ecs execute-command \
+  --cluster obs-cluster \
+  --task <task-id> \
+  --container bootstrap \
+  --interactive \
+  --command "psql -h <rds-endpoint> -U dbadmin -d orders -f /init.sql"
 ```
-User → Web UI → API GW → Order → Payment (sync)
-                        ↓
-                      Kafka → Workers (async)
-                        ↓
-                      RDS + Redis (state)
+
+### 💥 Chaos Drills
+
+**Drill 11: The DB Earthquake** — `aws rds reboot-db-instance --force-failover`
+
+- **Pre-flight:** Verify Traffic Generator đang chạy (User Pain Score baseline)
+- **Inject:**
+
+```bash
+  aws rds reboot-db-instance --db-instance-identifier obs-lab-postgres --force-failover
 ```
+
+- **Observe:**
+  - X-Ray trace show "Database failover" span với ~60s latency
+  - Order Service reconnect trong < 5s nhờ `retry_connect()` + TCP Keep-Alive
+  - Metric: `db_pool_wait_duration_seconds` spike nhưng không có errors
+- **Success Criteria:**
+  - App tự reconnect thành công
+  - User Pain Score < 5% (nhờ retry logic)
+  - Zero lost orders trong 60s failover window
+
+### 📖 Skills bạn sẽ master
+
+- RDS Multi-AZ tradeoffs (cost ~$3/day vs resilience)
+- Connection pool exhaustion prevention
+- TCP Keep-Alive + `statement_timeout` (đã có trong code!)
+- Secrets Manager → ECS Task injection
+- Bootstrap pattern (ECS Exec method)
+
+### 📝 Definition of Done
+
+- [ ] RDS Multi-AZ deployed với `db.t3.micro`
+- [ ] Order Service connect thành công, query products từ RDS
+- [ ] Drill 11 passed: RDS failover transparent (app reconnects in < 5s)
+- [ ] X-Ray trace: Order Service → RDS với failover visible
+- [ ] Runbook section: "RDS Failover Recovery" written
+- [ ] Destroy RDS khi không dùng để tiết kiệm cost
+
+---
+
+## ⚡ Phase 2.2: The Cache Layer — ElastiCache Redis (Week 2)
+
+**Mục tiêu:** Deploy ElastiCache Replication Group, wire cache-aside pattern + Payment idempotency.
+
+**Production Parallel:** Đây là công việc của Platform team hoặc Senior SRE. Redis thường được provisioned như "shared infrastructure" mà nhiều services dùng chung.
+
+### 🧩 Modules triển khai
+
+- [ ] Deploy `cache` module (Module 5 từ Terraform Playbook)
+  - ElastiCache Replication Group (1 shard, 2 nodes)
+  - Auth Token + Transit Encryption
+  - CloudWatch Alarms (CPU, memory, connections, replication lag)
+- [ ] Update `vpc-endpoints` module: thêm ElastiCache endpoint
+- [ ] Export metadata to SSM: `/obs/lab/cache/*`
+
+### 📦 Workload Wiring
+
+```hcl
+# data-plane/order-service/main.tf
+data "aws_ssm_parameter" "redis_endpoint" {
+  name = "/obs/lab/cache/endpoint"
+}
+
+environment = {
+  # ... existing vars ...
+  REDIS_URL    = "redis://${data.aws_ssm_parameter.redis_endpoint.value}:6379"
+  ENABLE_REDIS = "true"  # ← Bật lại
+  ENABLE_KAFKA = "false" # ← Vẫn disable
+}
+```
+
+### 💥 Chaos Drills
+
+**Drill 12: The Cache Avalanche** — Flush Redis hoặc kill replica node
+
+- **Pre-flight:** Verify cache hit rate > 80% dưới normal load
+- **Inject:** `redis-cli -h <endpoint> -a <auth_token> FLUSHALL` hoặc delete 1 replica node
+- **Observe:**
+  - Cache miss storm → DB connection pool saturation
+  - Metric: `cache_operations_total{result="miss"}` spike
+  - Metric: `db_pool_wait_duration_seconds` tăng
+  - Business Impact: P95 latency từ 100ms → 500ms, nhưng KHÔNG có errors
+- **Success Criteria:**
+  - App không crash (graceful degradation)
+  - Cache hit rate phục hồi > 80% sau 5 phút
+  - DB connections không exhaust (nhờ pool sizing đúng)
+
+### 📖 Skills bạn sẽ master
+
+- Redis Replication Group vs Cluster Mode (trade-off)
+- Cache-aside pattern với TTL (đã có trong code!)
+- Idempotency State Machine (đã có trong `shared/idempotency.py`!)
+- Graceful Degradation: Redis down = cache miss, không phải outage
+
+### 📝 Definition of Done
+
+- [ ] ElastiCache Replication Group deployed (cost ~$2/day)
+- [ ] Order Service cache hit rate > 80% dưới load
+- [ ] Payment idempotency working (duplicate request trả cached result)
+- [ ] Drill 12 passed: Cache avalanche handled gracefully
+- [ ] X-Ray trace: Order Service → Redis → (miss) → RDS
+- [ ] Runbook section: "Redis Failover & Cache Miss Storm" written
+
+---
+
+## 📨 Phase 2.3: The Event Bus — MSK Kafka (Week 3-4)
+
+**Mục tiêu:** Deploy MSK Kafka (KRaft), wire producers + consumers, validate event-driven flow.
+
+**Production Parallel:** Đây là công việc của Event/Streaming team hoặc Data Platform team. Kafka là "central nervous system" của hệ thống.
+
+### 🧩 Modules triển khai
+
+- [ ] Deploy `streaming` module (Module 6 từ Terraform Playbook)
+  - MSK Kafka cluster (KRaft mode, 2 brokers, 3 partitions)
+  - IAM authentication (không dùng SASL/SCRAM)
+  - CloudWatch Alarms (under-replicated partitions, offline partitions, disk usage)
+- [ ] Update `vpc-endpoints` module: thêm MSK endpoint
+- [ ] Export metadata to SSM: `/obs/lab/streaming/*`
+
+### 📦 Workload Wiring
+
+```hcl
+# data-plane/order-service/main.tf
+data "aws_ssm_parameter" "kafka_bootstrap_servers" {
+  name = "/obs/lab/streaming/bootstrap_servers"
+}
+
+environment = {
+  # ... existing vars ...
+  KAFKA_BOOTSTRAP_SERVERS = data.aws_ssm_parameter.kafka_bootstrap_servers.value
+  ENABLE_KAFKA            = "true"  # ← Bật lại
+}
+```
+
+### 📦 Workload Onboard (Async Workers)
+
+- [ ] Deploy Notification Worker (`data-plane/notification-worker/`)
+  - Kafka consumer với `enable.auto.commit = false` (manual commit)
+  - Idempotent processing via `processed_events` table
+  - OTel trace context propagation from Kafka headers
+- [ ] Deploy Inventory Worker (`data-plane/inventory-worker/`)
+  - Kafka consumer với pessimistic locking (`SELECT FOR UPDATE`)
+  - Auto-restock logic khi stock < threshold
+  - Audit trail via `inventory_log` table
+
+### 💥 Chaos Drills
+
+**Drill 13: The Kafka Partition** — Kill 1 MSK broker
+
+- **Pre-flight:** Verify consumer lag < 100 messages dưới normal load
+- **Inject:** Reboot 1 MSK broker hoặc block SG port 9092 của 1 broker
+- **Observe:**
+  - Partition leader election (~30s)
+  - Consumer lag spike
+  - Metric: `kafka_consumer_lag` tăng, `kafka_events_consumed_total` tạm dừng
+  - Recovery: Consumers tự reconnect, process backlog
+- **Success Criteria:**
+  - Workers tự động resume consume từ offset cũ
+  - Không mất message (at-least-once delivery)
+  - Consumer lag < 100 messages sau 1 phút recovery
+
+**Drill 14: The Zombie Consumer** — Stop Notification Worker task
+
+- **Pre-flight:** Verify cả 2 workers đang consume
+- **Inject:**
+
+```bash
+  aws ecs stop-task --cluster obs-cluster --task <task-id>
+```
+
+- **Observe:**
+  - Consumer group rebalance
+  - Messages accumulate trong Kafka
+  - Metric: `kafka_consumer_lag{group="notification-workers"}` tăng liên tục
+  - Recovery: Task mới start, catch up backlog
+- **Success Criteria:**
+  - Graceful Shutdown handler commit offset TRƯỚC khi process exit
+  - Không duplicate processing (nhờ idempotency)
+  - Consumer lag về 0 sau khi task mới catch up
+
+### 📖 Skills bạn sẽ master
+
+- MSK KRaft vs ZooKeeper (trade-off)
+- Partition strategy (key-based partitioning với `order_id`)
+- Consumer group rebalancing
+- At-least-once delivery + idempotency
+- Kafka producer natural batching (đã có trong code!)
+- Manual commit pattern (đã có trong code!)
+
+### 📝 Definition of Done
+
+- [ ] MSK Kafka cluster deployed (cost ~$5/day)
+- [ ] Order Service publish events thành công (natural batching working)
+- [ ] Notification + Inventory Workers consume events, process idempotently
+- [ ] Drill 13 passed: MSK broker loss tự recover trong < 1 phút
+- [ ] Drill 14 passed: Zero message loss during rolling updates
+- [ ] X-Ray trace: Order Service → (Kafka) → Notification Worker
+- [ ] Runbook section: "Kafka Partition Leader Election" + "Consumer Lag Recovery" written
+
+---
+
+## 🌐 Phase 2.4: The Edge & Flow — API GW + Web UI + Traffic Gen (Week 4-5)
+
+**Mục tiêu:** Deploy edge layer, hoàn thiện full distributed flow, validate end-to-end.
+
+**Production Parallel:** Đây là công việc của Platform team (API GW) và Frontend team (Web UI). Traffic Generator là của SRE team để synthetic testing.
+
+### 🧩 Modules triển khai
+
+- [ ] Deploy API Gateway service (`data-plane/api-gateway/`)
+  - BFF pattern (Backend for Frontend)
+  - RFC 7807 error propagation
+  - Traffic source tagging (synthetic vs organic)
+- [ ] Deploy Web UI service (`data-plane/web-ui/`)
+  - Nginx với traffic tagging via Page Visibility API
+  - Auto-refresh pause khi tab hidden
+- [ ] Deploy Traffic Generator service (`data-plane/traffic-gen/`)
+  - Synthetic load testing với scenarios (normal, flash_sale, event_driven)
+- [ ] Update `loadbalancer` module: thêm API GW target group
+- [ ] Wire ALB → API GW → Order Service (thay vì ALB → Order trực tiếp)
+
+### 📦 Workload Wiring
+
+```hcl
+# Update loadbalancer module
+alb_services = {
+  "api-gateway" = {
+    port          = 5000
+    health_path   = "/health/live"
+    path_patterns = ["/*"]
+    priority      = 100
+  }
+}
+
+# data-plane/order-service/main.tf
+environment = {
+  # ... existing vars ...
+  # Order Service không còn expose ra ALB trực tiếp
+  # Chỉ API Gateway gọi qua Cloud Map DNS
+}
+```
+
+### 💥 Chaos Drills
+
+**Drill 15: The Graceful Guillotine** — ECS Stop Task trong khi có in-flight requests
+
+- **Pre-flight:** Verify Traffic Generator đang chạy scenario "normal"
+- **Inject:**
+
+```bash
+  aws ecs stop-task --cluster obs-cluster --task <order-service-task-id>
+```
+
+- **Observe:**
+  - Kafka producer flush (10s timeout)
+  - DB pool close (5s)
+  - Redis close (5s)
+  - Metric: `ecs_task_stopped_abnormal` event KHÔNG fire (graceful shutdown)
+  - Business Impact: Zero lost Kafka messages, zero DB connection leaks
+- **Success Criteria:**
+  - Zero dropped Kafka messages
+  - Zero ghost DB connections
+  - Task mới start và resume traffic seamlessly
+
+### 📖 Skills bạn sẽ master
+
+- BFF pattern (Backend for Frontend)
+- RFC 7807 error propagation (đã có trong code!)
+- Synthetic traffic vs organic traffic tagging (đã có trong code!)
+- Graceful shutdown orchestration (đã có trong code!)
+- Page Visibility API (đã có trong code!)
+
+### 📝 Definition of Done
+
+- [ ] API Gateway deployed, wire ALB → API GW → Order Service
+- [ ] Web UI accessible qua ALB, traffic tagging working
+- [ ] Traffic Generator chạy scenario "flash_sale" → 100% orders successful
+- [ ] Drill 15 passed: Zero message loss during rolling updates
+- [ ] Full X-Ray trace: Web UI → ALB → API GW → Order → Payment → RDS + Kafka → Workers
+- [ ] Runbook section: "Graceful Shutdown Orchestration" written
+
+---
+
+## ✅ Phase 2.5: The Validation Week (Week 5 — nửa sau)
+
+**Mục tiêu:** Integration testing, documentation, Grafana dashboards.
+
+### 🎯 Deliverables
+
+- [ ] End-to-end test script (Python):
+  - Tạo 100 orders qua Traffic Generator
+  - Verify 100 notifications trong Notification Worker
+  - Verify 100 inventory updates trong Inventory Worker
+  - Verify 100 X-Ray traces xuyên suốt full flow
+- [ ] Grafana dashboard "POD 2 — The Critical Path" (6 panels):
+  - Request rate (by `traffic_source`)
+  - Error rate (by HTTP status code)
+  - P95 latency (Order + Payment)
+  - DB pool wait duration
+  - Cache hit rate
+  - Kafka consumer lag
+- [ ] Runbook hoàn chỉnh cho 5 Chaos Drills (11-15)
+- [ ] Post-mortem template cho mỗi drill
+- [ ] Architecture Decision Records (ADRs) cho các decisions lớn:
+  - ADR-014: "RDS Multi-AZ vs Single-AZ trade-off"
+  - ADR-015: "ElastiCache Replication Group vs Cluster Mode"
+  - ADR-016: "MSK KRaft vs ZooKeeper"
+  - ADR-017: "Manual Kafka Commit vs Auto-Commit"
+
+### 📝 Definition of Done
+
+- [ ] All 5 Chaos Drills (11-15) passed với documented outcomes
+- [ ] Grafana dashboard visualize full POD 2 health
+- [ ] Runbook có thể được "người khác" (future you) follow để recover incidents
+- [ ] POD 2 Definition of Done hoàn thành 100%
+- [ ] Destroy expensive resources (MSK, Multi-AZ RDS) khi không dùng
 
 ### 💥 SRE / Chaos Drills (POD 2 — Stateful Chaos)
 
-| # | Drill | Blast Radius | Skill học được |
-|---|-------|--------------|-----------------|
-| 11 | The DB Earthquake (RDS Multi-AZ Failover) | RDS + Order + Payment | `aws rds reboot-db-instance --force-failover`, `psycopg2` retry logic |
-| 12 | The Cache Avalanche (Redis Flush) | ElastiCache + Order Service | Cache miss storm, DB connection pool saturation |
-| 13 | The Kafka Partition (MSK Broker Loss) | MSK + Workers | Partition leader election, consumer group rebalance |
-| 14 | The Zombie Consumer (Stop Worker) | Notification/Inventory Worker | Consumer lag detection, offset commit behavior |
-| 15 | The Graceful Guillotine (ECS Stop Task) | 1 ECS Task | SIGTERM handling, Kafka buffer flush, DB pool close |
+| # | Drill | Blast Radius | Sub-Phase | Skill học được |
+|---|-------|--------------|-----------|-----------------|
+| 11 | The DB Earthquake (RDS Multi-AZ Failover) | RDS + Order + Payment | 2.1 | `aws rds reboot-db-instance --force-failover`, `psycopg2` retry logic |
+| 12 | The Cache Avalanche (Redis Flush) | ElastiCache + Order Service | 2.2 | Cache miss storm, DB connection pool saturation |
+| 13 | The Kafka Partition (MSK Broker Loss) | MSK + Workers | 2.3 | Partition leader election, consumer group rebalance |
+| 14 | The Zombie Consumer (Stop Worker) | Notification/Inventory Worker | 2.3 | Consumer lag detection, offset commit behavior |
+| 15 | The Graceful Guillotine (ECS Stop Task) | 1 ECS Task | 2.4 | SIGTERM handling, Kafka buffer flush, DB pool close |
 
 ### ✅ POD 2 Definition of Done
 
-- [ ] **Observable:** 1 full X-Ray trace: Web UI → ALB → API GW → Order → Payment → RDS + Kafka event flow visible
-- [ ] **Resilient:** RDS Multi-AZ failover transparent với app (nhờ `retry_connect`)
-- [ ] **Efficient:** Verify RDS/Redis/MSK traffic KHÔNG đi qua NAT Gateway (dùng VPC Flow Logs + Athena)
-- [ ] **Graceful:** Kafka producer flush thành công khi ECS scale-in/stop task
-- [ ] **Testable:** Web UI có thể tạo order → thấy notification trong Notification Worker → thấy stock giảm trong Inventory Worker
+**Observable:**
+- [ ] 1 full X-Ray trace: Web UI → ALB → API GW → Order → Payment → RDS + Kafka event flow visible
+- [ ] Grafana dashboard "POD 2 — The Critical Path" với 6 panels hiển thị real-time data
+
+**Resilient:**
+- [ ] RDS Multi-AZ failover transparent với app (nhờ `retry_connect`)
+- [ ] ElastiCache auto-failover < 30s, app graceful degradation
+- [ ] MSK broker loss tự recover trong < 1 phút
+
+**Efficient:**
+- [ ] Verify RDS/Redis/MSK traffic KHÔNG đi qua NAT Gateway (dùng VPC Flow Logs + Athena)
+- [ ] Cache hit rate > 80% dưới normal load
+- [ ] Kafka producer natural batching working (linger.ms=50, batch.size=16KB)
+
+**Graceful:**
+- [ ] Kafka producer flush thành công khi ECS scale-in/stop task
+- [ ] DB pool close + Redis close on SIGTERM
+- [ ] Zero ghost connections sau rolling updates
+
+**Testable:**
+- [ ] Web UI có thể tạo order → thấy notification trong Notification Worker → thấy stock giảm trong Inventory Worker
+- [ ] Traffic Generator chạy scenario "flash_sale" → 100% orders successful
+- [ ] E2E test script: 100 orders → 100 notifications → 100 inventory updates
+
+**Documented:**
+- [ ] 5 Runbook sections cho Chaos Drills 11-15
+- [ ] 4 ADRs cho architectural decisions
+- [ ] Post-mortem template cho mỗi drill
 
 ## 🌪️ PHASE 2.7: THE AWS CHAOS DOJO (POD 3 — Production-Grade Chaos) 🆕
 
@@ -536,11 +874,15 @@ Tại Phase 4, hệ thống sẽ có 5+ services gọi nhau. Đây là thời đ
 ## 📊 Progress Tracker
 
 | Phase | Pod | Focus | Services / Modules | Status | Post-Mortem / Learnings |
-|-------|-----|-------|-------------------|--------|------------------------|
+|---|---|---|---|---|---|
 | Phase 1 | — | Sync Tracer Bullet | Order, Payment (ECS Fargate) | ✅ DONE | Chaos Drills 1-3.5 done. Identified gaps: Observability, API GW, SIGTERM handler |
-| Phase 1.5 | **POD 1** | The Illumination | AMP, X-Ray, ADOT Sidecar, AMG | 🟡 In Progress | AMP + AMG modules done. Grafana data sources tách state (`lab-grafana/`, SSM). Còn: ADOT sidecar wiring, dashboard import, verify e2e |
-| Phase 2 | **POD 2** | The Critical Path | RDS, ElastiCache, MSK, 6 services đồng loạt | ⚪ Not Started | **Mục tiêu:** Full distributed flow end-to-end |
-| Phase 2.7 🆕 | **POD 3** | The Chaos Dojo | AWS FIS, DR, Full-stack Chaos Drills | ⚪ Not Started | **Mục tiêu:** Self-healing validation + incident response |
+| Phase 1.5 | POD 1 | The Illumination | AMP, X-Ray, ADOT Sidecar, AMG | 🟡 In Progress | AMP + AMG modules done. Grafana data sources tách state. Còn: ADOT sidecar wiring, dashboard import, verify e2e |
+| **Phase 2.1** | **POD 2** | **Stateful Foundation** | **RDS Multi-AZ + Order/Payment wired** | **⚪ Not Started** | **Mục tiêu: RDS failover transparent** |
+| **Phase 2.2** | **POD 2** | **Cache Layer** | **ElastiCache + Cache-aside pattern** | **⚪ Not Started** | **Mục tiêu: Cache miss storm handled gracefully** |
+| **Phase 2.3** | **POD 2** | **Event Bus** | **MSK Kafka + Producers + Consumers** | **⚪ Not Started** | **Mục tiêu: Event-driven flow end-to-end** |
+| **Phase 2.4** | **POD 2** | **Edge & Flow** | **API GW + Web UI + Traffic Gen** | **⚪ Not Started** | **Mục tiêu: Full distributed flow** |
+| **Phase 2.5** | **POD 2** | **Validation** | **E2E testing + Dashboards + Runbooks** | **⚪ Not Started** | **Mục tiêu: Production-ready POD 2** |
+| Phase 2.7 🆕 | POD 3 | The Chaos Dojo | AWS FIS, DR, Full-stack Chaos Drills | ⚪ Not Started | Mục tiêu: Self-healing validation + incident response |
 | Phase 3 | — | Platform Shield | Bastion, CI/CD (OIDC+OPA), Budgets | ⚪ Not Started | |
 | Phase 4 | — | Security & Pooling | Auth (#7), RDS Proxy | ⚪ Not Started | |
 | Phase 5 | — | Saga Workflows | Shipping Svc, Worker (#8, #9) | ⚪ Not Started | |
