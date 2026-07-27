@@ -631,69 +631,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 85 },
       "id": 301,
       "title": "🔥 Order Service: CPU Utilization vs Throttling",
-      "description": "Nếu Utilization chạm 100% -> Fargate throttling CPU -> App chậm dù không có lỗi code. (Exp 3.5)",
-      "type": "timeseries",
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
-      },
-    "targets": [
-      {
-        "queryMode": "Metrics",
-        "namespace": "ECS/ContainerInsights",
-        "metricName": "CpuUtilized",
-        "dimensions": {
-          "ClusterName": "obs-cluster",
-          "ServiceName": "order-service"
-        },
-        "statistics": ["Average"],
-        "period": "60",
-        "label": "CPU Utilized (CPU Units)",
-        "refId": "A"
-      },
-      {
-        "queryMode": "Metrics",
-        "namespace": "ECS/ContainerInsights",
-        "metricName": "CpuReserved",
-        "dimensions": {
-          "ClusterName": "obs-cluster",
-          "ServiceName": "order-service"
-        },
-        "statistics": ["Average"],
-        "period": "60",
-        "label": "CPU Reserved (CPU Units)",
-        "refId": "B"
-      }
-    ]
-    },
-    {
-      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 85 },
-      "id": 302,
-      "title": "💾 Order Service: Memory Utilization (OOM Predictor)",
-      "description": "Leading indicator cho Exp 3B (OOM Kill). Alarm fire khi > 85%.",
-      "type": "timeseries",
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
-      },
-      "targets": [
-        {
-          "queryMode": "Metrics",
-          "namespace": "AWS/ECS",
-          "metricName": "MemoryUtilization",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
-          "statistics": ["Average", "Maximum"],
-          "period": "60",
-          "legendFormat": "Mem {{stat}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 93 },
-      "id": 304,
-      "title": "🔥 Payment Service: CPU Utilization vs Throttling",
-      "description": "Nếu Utilization chạm 100% → Fargate throttling CPU → Payment timeout → Order cascade failure.",
+      "description": "Nếu Utilization chạm 100% -> Fargate throttling CPU -> App chậm dù không có lỗi code. (Exp 3.5)\nSource: ECS/ContainerInsights — CpuUtilized / CpuReserved × 100",
       "type": "timeseries",
       "fieldConfig": {
         "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
@@ -703,30 +641,39 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuUtilized",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
           "statistics": ["Average"],
           "period": "60",
-          "label": "CPU Utilized (CPU Units)",
-          "refId": "A"
+          "refId": "cpu_used",
+          "id": "cpu_used",
+          "hide": true
         },
         {
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuReserved",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
           "statistics": ["Average"],
           "period": "60",
-          "label": "CPU Reserved (CPU Units)",
-          "refId": "B"
+          "refId": "cpu_reserved",
+          "id": "cpu_reserved",
+          "hide": true
+        },
+        {
+          "expression": "IF(cpu_reserved > 0, cpu_used / cpu_reserved * 100, 0)",
+          "refId": "cpu_pct",
+          "id": "cpu_pct",
+          "label": "CPU %",
+          "region": "${aws_region}"
         }
       ]
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 93 },
-      "id": 305,
-      "title": "💾 Payment Service: Memory Utilization (OOM Predictor)",
-      "description": "Leading indicator cho OOM Kill. Alarm fire khi > 85%.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 85 },
+      "id": 302,
+      "title": "💾 Order Service: Memory Utilization (OOM Predictor)",
+      "description": "Leading indicator cho Exp 3B (OOM Kill). Alarm fire khi > 85%.\nSource: ECS/ContainerInsights — MemoryUtilized / MemoryReserved × 100",
       "type": "timeseries",
       "fieldConfig": {
         "defaults": {
@@ -744,13 +691,126 @@
       "targets": [
         {
           "queryMode": "Metrics",
-          "namespace": "AWS/ECS",
-          "metricName": "MemoryUtilization",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
-          "statistics": ["Average", "Maximum"],
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "MemoryUtilized",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average"],
           "period": "60",
-          "legendFormat": "Mem {{stat}}",
-          "refId": "A"
+          "refId": "mem_used",
+          "id": "mem_used",
+          "hide": true
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "MemoryReserved",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "refId": "mem_reserved",
+          "id": "mem_reserved",
+          "hide": true
+        },
+        {
+          "expression": "IF(mem_reserved > 0, mem_used / mem_reserved * 100, 0)",
+          "refId": "mem_pct",
+          "id": "mem_pct",
+          "label": "Memory %",
+          "region": "${aws_region}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 93 },
+      "id": 304,
+      "title": "🔥 Payment Service: CPU Utilization vs Throttling",
+      "description": "Nếu Utilization chạm 100% → Fargate throttling CPU → Payment timeout → Order cascade failure.\nSource: ECS/ContainerInsights — CpuUtilized / CpuReserved × 100",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "CpuUtilized",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "refId": "cpu_used",
+          "id": "cpu_used",
+          "hide": true
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "CpuReserved",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "refId": "cpu_reserved",
+          "id": "cpu_reserved",
+          "hide": true
+        },
+        {
+          "expression": "IF(cpu_reserved > 0, cpu_used / cpu_reserved * 100, 0)",
+          "refId": "cpu_pct",
+          "id": "cpu_pct",
+          "label": "CPU %",
+          "region": "${aws_region}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 93 },
+      "id": 305,
+      "title": "💾 Payment Service: Memory Utilization (OOM Predictor)",
+      "description": "Leading indicator cho OOM Kill. Alarm fire khi > 85%.\nSource: ECS/ContainerInsights — MemoryUtilized / MemoryReserved × 100",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 85 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "MemoryUtilized",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "refId": "mem_used",
+          "id": "mem_used",
+          "hide": true
+        },
+        {
+          "queryMode": "Metrics",
+          "namespace": "ECS/ContainerInsights",
+          "metricName": "MemoryReserved",
+          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "statistics": ["Average"],
+          "period": "60",
+          "refId": "mem_reserved",
+          "id": "mem_reserved",
+          "hide": true
+        },
+        {
+          "expression": "IF(mem_reserved > 0, mem_used / mem_reserved * 100, 0)",
+          "refId": "mem_pct",
+          "id": "mem_pct",
+          "label": "Memory %",
+          "region": "${aws_region}"
         }
       ]
     },
@@ -883,13 +943,22 @@
           "metricName": "ResourceCount",
           "dimensions": {
             "Resource": "${amp_workspace_id}",
-            "Type": "ActiveSeries"
+            "Type": "ActiveSeries",
+            "Class": "None",
+            "Service": "Prometheus"
           },
           "statistics": ["Average"],
           "period": "60",
-          "label": "Monthly Cost",
-          "refId": "A",
-          "expression": "SEARCH('{\"Namespace\":\"AWS/Usage\",\"MetricName\":\"ResourceCount\",\"Dimensions\":[{\"Name\":\"Resource\",\"Value\":\"${amp_workspace_id}\"},{\"Name\":\"Type\",\"Value\":\"ActiveSeries\"}]}', 'Average', 60) * 360 * 24 * 30 / 10000 * 0.03"
+          "refId": "activeSeries",
+          "id": "activeSeries",
+          "hide": true
+        },
+        {
+          "expression": "activeSeries * 360 * 24 * 30 / 10000 * 0.03",
+          "refId": "monthlyCost",
+          "id": "monthlyCost",
+          "label": "Est. Monthly Cost (USD)",
+          "region": "${aws_region}"
         }
       ]
     },
