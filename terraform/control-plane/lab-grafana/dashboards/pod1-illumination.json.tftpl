@@ -584,14 +584,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 77 },
       "id": 207,
       "title": "🎯 Business Impact (User Pain Score)",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 72 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 78 },
       "id": 205,
       "title": "😭 User Pain Score (Browser Traffic Only)",
       "description": "Tỷ lệ user THẬT bị lỗi. Không bị nhiễu bởi Synthetic Loadtest khi chạy Chaos Drill.",
@@ -610,7 +610,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 72 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 78 },
       "id": 206,
       "title": "📉 Order Success Rate (Filtered by $traffic_source)",
       "type": "timeseries",
@@ -621,14 +621,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 78 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 84 },
       "id": 300,
       "title": "🖥️ ECS Fargate Resource (USE Method) — Blind Spot Killer",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 79 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 85 },
       "id": 301,
       "title": "🔥 Order Service: CPU Utilization vs Throttling",
       "description": "Nếu Utilization chạm 100% -> Fargate throttling CPU -> App chậm dù không có lỗi code. (Exp 3.5)",
@@ -667,7 +667,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 79 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 85 },
       "id": 302,
       "title": "💾 Order Service: Memory Utilization (OOM Predictor)",
       "description": "Leading indicator cho Exp 3B (OOM Kill). Alarm fire khi > 85%.",
@@ -690,7 +690,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 87 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 93 },
       "id": 304,
       "title": "🔥 Payment Service: CPU Utilization vs Throttling",
       "description": "Nếu Utilization chạm 100% → Fargate throttling CPU → Payment timeout → Order cascade failure.",
@@ -723,7 +723,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 87 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 93 },
       "id": 305,
       "title": "💾 Payment Service: Memory Utilization (OOM Predictor)",
       "description": "Leading indicator cho OOM Kill. Alarm fire khi > 85%.",
@@ -756,14 +756,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 96 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 102 },
       "id": 400,
       "title": "🎯 SLO & Error Budget (Reliability PM View)",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "amp-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 97 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 103 },
       "id": 401,
       "title": "🔥 Order Service: Fast Burn Rate (5m window)",
       "description": "Tốc độ đốt Error Budget. > 14.4x = SEV-1 (Page SRE). > 3x = SEV-3 (Ticket).",
@@ -799,14 +799,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 105 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 111 },
       "id": 500,
       "title": "💰 FinOps Guardrails (Drill 9 - Cardinality Bomb)",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 106 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 112 },
       "id": 501,
       "title": "📈 AMP Active Series (Cardinality Bomb Detector)",
       "description": "Số time series đang active trong AMP workspace.\n\n• Baseline (Phase 1.5): ~200-500 series\n• Warning: > 5,000 (có thể Dev gắn UUID labels)\n• Critical: > 10,000 (Cardinality Bomb confirmed — hóa đơn đang nổ!)\n\nXem Drill 9 trong AWS_CHAOS_PLAYBOOK.md để test.",
@@ -848,7 +848,7 @@
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 106 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 112 },
       "id": 502,
       "title": "💸 Estimated Monthly Cost (AMP Ingestion)",
       "description": "Chi phí ước tính mỗi tháng dựa trên Active Series.\n\nCông thức:\n• Samples/hour = ActiveSeries × 360 (mỗi series export mỗi 10s)\n• Monthly samples = Samples/hour × 24 × 30\n• Cost = Monthly samples / 10,000 × $0.03\n\n⚠️ Giá AMP: $0.03 per 10,000 samples ingested",
@@ -895,14 +895,14 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 115 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 121 },
       "id": 600,
       "title": "🪵 Logs & Traces — Deep Dive (Correlation)",
       "type": "row"
     },
     {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch-datasource" },
-      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 116 },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 122 },
       "id": 601,
       "title": "📋 Live App Logs (CloudWatch Logs Insights)",
       "description": "Structured JSON logs from Order + Payment services.\n\n• Auto-filter: chỉ hiện ERROR/CRITICAL/Exception\n• Click vào trace_id để jump sang X-Ray trace (cần setup data link)\n• Sort theo timestamp giảm dần (mới nhất ở trên)\n\nDùng để debug khi metrics cho thấy spike error nhưng không biết root cause.",
@@ -954,7 +954,7 @@
     },
     {
       "datasource": { "type": "grafana-x-ray-datasource", "uid": "xray-datasource" },
-      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 116 },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 122 },
       "id": 602,
       "title": "🔍 Recent Error Traces (X-Ray)",
       "description": "Top 10 traces có lỗi HTTP 5xx trong 1h vừa qua.\n\n• Click vào bất kỳ trace nào để xem full waterfall diagram\n• Filter: chỉ lấy traces từ order-service hoặc payment-service\n• Sort theo latency giảm dần (slowest first)\n\nDùng để debug distributed issues: ví dụ order-service timeout nhưng không biết payment-service hay DB là culprit.",
