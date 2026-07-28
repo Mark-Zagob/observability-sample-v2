@@ -236,7 +236,8 @@ variable "ecr_repository_names" {
     "order-service",
     "payment-service",
     "notification-service",
-    "inventory-service"
+    "inventory-service",
+    "migration"
   ]
 }
 
@@ -250,6 +251,7 @@ variable "image_tags" {
     payment-service      = "v1"
     notification-service = "v1"
     inventory-service    = "v1"
+    migration            = "v1"
   }
 }
 

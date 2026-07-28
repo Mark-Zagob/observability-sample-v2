@@ -136,3 +136,34 @@ resource "aws_route53_record" "app" {
     evaluate_target_health = true
   }
 }
+
+# 8. Bootstrap Migration (Phase 2.1 — Migration Plane)
+# Runs AFTER database is provisioned, BEFORE app services deploy
+# Pattern: Control Plane → Migration Plane → Data Plane
+module "bootstrap_migration" {
+  source = "../../modules/bootstrap-migration"
+
+  project_name     = var.project_name
+  environment      = var.environment
+  aws_region       = var.aws_region
+  ecs_cluster_name = module.ecs_cluster.cluster_name
+
+  migration_image = "${module.ecr.repository_urls["migration"]}:${var.image_tags["migration"]}"
+
+  db_host       = module.database.rds_address
+  db_name       = module.database.rds_db_name
+  db_secret_arn = module.database.db_secret_arn
+  kms_key_arn   = module.database.kms_key_arn
+
+  execution_role_arn = module.security.ecs_task_execution_role_arn
+  private_subnet_ids = module.network.private_subnet_ids
+  security_group_id  = module.security.application_security_group_id
+
+  # Re-trigger migration when SQL content changes
+  migration_sql_hash = filemd5("${path.root}/../../migration/init-app.sql")
+
+  common_tags = {
+    Module = "bootstrap-migration"
+    Plane  = "Migration"
+  }
+}
