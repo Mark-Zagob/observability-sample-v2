@@ -207,50 +207,131 @@ Update Task Definition của Order Service & Payment Service:
 
 ## 📦 Phase 2.1: The Stateful Foundation — RDS Only (Week 1)
 
-**Mục tiêu:** Deploy RDS Multi-AZ, wire Order/Payment services, validate connectivity + failover.
+**Mục tiêu:** Deploy RDS Multi-AZ, wire Order/Payment services, thiết lập production-grade database bootstrap pipeline, validate connectivity + failover.
 
-**Production Parallel:** Đây là công việc của DBA team trong production thực tế. Họ provision database trước, validate nó hoạt động, rồi mới "hand-off" cho app teams.
+**Production Parallel:** Đây là công việc của DBA/Platform team trong production thực tế. Họ provision database trước, chạy migration pipeline độc lập, validate nó hoạt động, rồi mới "hand-off" cho app teams.
+
+### ⚠️ Architecture Decision: ADR-018 "Database Bootstrap Strategy"
+
+| Approach | Production Grade | Learning Value | Risk |
+|----------|------------------|-----------------|------|
+| ❌ Option 1: ECS Exec + manual `psql` | Manual, no audit | Low | Human error, no rollback |
+| ✅ Tier 2: Dedicated Migration Task | Automated, auditable | High | Migration fail blocks deploy |
+| 🆕 Future (EKS): ArgoCD PreSync + Flyway | GitOps-native | Expert | K8s complexity |
+
+**Tại sao KHÔNG dùng app-level migration (`_ensure_schema()`)?**
+
+- **Coupling Anti-Pattern:** App "own" schema → vi phạm separation of concerns
+- **Blast Radius:** Migration fail = App crash → Zero availability
+- **Privilege Escalation:** App user cần DDL privileges → vi phạm least privilege
+- **No Version Control:** Schema embedded trong code → không có migration history
 
 ### 🧩 Modules triển khai
 
 - [ ] Enable `database` module (đã có trong Control Plane) với `multi_az = true`
 - [ ] Update `vpc-endpoints` module: thêm RDS endpoint (`com.amazonaws.{region}.rds`)
-- [ ] Wire Order Service → RDS (flip `ENABLE_POSTGRES=true` trong Data Plane)
-- [ ] Wire Payment Service → RDS (nếu cần, hoặc keep stateless)
+- [ ] 🆕 NEW: Tạo `bootstrap-migration` module (Dedicated Migration ECS Task)
+  - Task Definition riêng với DDL-privileged IAM role
+  - CloudWatch Log Group riêng cho migration audit trail
+  - `null_resource` trigger migration tự động sau khi RDS ready
+- [ ] 🆕 NEW: Build & Push migration Docker image lên ECR
+  - Base image: `postgres:16-alpine` + `aws-cli` + `jq`
+  - Entry script: `/usr/local/bin/run-migration.sh`
+  - Idempotent: `pg_advisory_lock` + `CREATE TABLE IF NOT EXISTS`
 
 ### 📦 Workload Wiring
 
 ```hcl
+# 1. Migration Task Definition (terraform/modules/bootstrap-migration/)
+resource "aws_ecs_task_definition" "migration" {
+  family                   = "${var.project_name}-${var.environment}-migration"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  task_role_arn            = aws_iam_role.migration.arn  # ← DDL-privileged role
+
+  container_definitions = jsonencode([{
+    name  = "migration"
+    image = var.migration_image
+    environment = [
+      { name = "DB_HOST", value = var.db_host },
+      { name = "DB_NAME", value = var.db_name },
+      { name = "DB_SECRET_ARN", value = var.db_secret_arn }
+    ]
+  }])
+}
+
+# 2. IAM Role Separation (Least Privilege)
+#    Migration Role: DDL (CREATE, ALTER, DROP) + Secrets read
+#    App Role:       DML only (SELECT, INSERT, UPDATE, DELETE)
+
+# 3. Auto-trigger migration sau khi RDS ready
+resource "null_resource" "run_migration" {
+  depends_on = [aws_ecs_task_definition.migration]
+  triggers = {
+    task_definition_arn = aws_ecs_task_definition.migration.arn
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws ecs run-task --cluster ${var.ecs_cluster_name} \
+        --task-definition ${aws_ecs_task_definition.migration.arn} \
+        --launch-type FARGATE \
+        --network-configuration "..."
+      aws ecs wait tasks-stopped --tasks "$TASK_ARN"
+      # Check exit code → fail terraform apply nếu migration fail
+    EOT
+  }
+}
+```
+
+```hcl
+# 4. Wire Order/Payment services → RDS (flip feature flags)
 # data-plane/order-service/main.tf
 environment = {
-  # ... existing vars ...
-  ENABLE_POSTGRES = "true"  # ← Bật lại
-  ENABLE_REDIS    = "false" # ← Vẫn disable
-  ENABLE_KAFKA    = "false" # ← Vẫn disable
+  ENABLE_POSTGRES = "true"   # ← Bật lại
+  ENABLE_REDIS    = "false"  # ← Vẫn disable
+  ENABLE_KAFKA    = "false"  # ← Vẫn disable
 }
 secrets = {
   DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
 }
 ```
 
-### 🧪 Bootstrap Task (Option 1 từ ROADMAP)
+### 🧪 Bootstrap Migration Pipeline (Tier 2)
 
-```bash
-# Deploy bootstrap task với image postgres:alpine
-aws ecs run-task \
-  --cluster obs-cluster \
-  --task-definition bootstrap-task \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx]}"
+**Flow:**
 
-# ECS Exec vào bootstrap task
-aws ecs execute-command \
-  --cluster obs-cluster \
-  --task <task-id> \
-  --container bootstrap \
-  --interactive \
-  --command "psql -h <rds-endpoint> -U dbadmin -d orders -f /init.sql"
 ```
+Terraform Apply (Control Plane)
+     │
+     ├─► RDS Provisioned (Multi-AZ)
+     ├─► Secrets Manager Secret Created
+     ├─► Migration Task Definition Created
+     │
+     ▼
+Migration Task (runs once, ~30s)
+     │
+     ├─► Read secret from Secrets Manager
+     ├─► Connect to RDS with DDL role
+     ├─► Acquire advisory lock (prevent race)
+     ├─► Run init-app.sql (idempotent)
+     ├─► Verify: ≥ 5 tables created
+     │
+     ▼
+Exit 0 (success) → App services deploy
+Exit 1 (fail)    → Block app deployment + Telegram alert
+```
+
+**Key Design Decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| Separate IAM role | DDL privileges isolated from app runtime |
+| CloudWatch Logs | Full audit trail cho mọi migration |
+| Advisory lock | Prevent concurrent migration tasks (multi-AZ safe) |
+| Fail-fast exit code | Block app deploy nếu schema không sẵn sàng |
+| Verification query | Đảm bảo migration thực sự thành công, không chỉ "no error" |
 
 ### 💥 Chaos Drills
 
@@ -272,22 +353,93 @@ aws ecs execute-command \
   - User Pain Score < 5% (nhờ retry logic)
   - Zero lost orders trong 60s failover window
 
+🆕 **Drill 11.5: The Migration Sabotage** — Inject bad SQL vào `init-app.sql`
+
+- **Pre-flight:** Verify migration pipeline working với good SQL
+- **Inject:**
+
+```sql
+  -- Modify init-app.sql with syntax error
+  CREATE TABLE IF NOT EXISTS orders (
+    id SERIAL PRIMARY KEY,
+    INVALID_SYNTAX_HERE  -- ← Error
+  );
+```
+
+```bash
+  # Rebuild migration image, push new tag
+  # Re-run terraform apply
+```
+
+- **Observe:**
+  - Migration task fails với exit code 1
+  - CloudWatch Logs show `psql` error
+  - App services KHÔNG deploy (`depends_on` migration)
+  - Telegram alert fires (SEV-2: Schema bootstrap failed)
+- **Recovery:**
+  - Fix SQL syntax
+  - Rebuild migration image với new tag
+  - Re-run `terraform apply`
+- **Success Criteria:**
+  - Migration failure blocks app deployment (circuit breaker)
+  - Recovery hoàn tất trong < 5 phút
+  - Zero data corruption (migration is idempotent)
+- **Learning Value:**
+  - Hiểu blast radius của migration failure
+  - Practice incident response với schema issues
+  - Validate "fail-fast" design principle
+
 ### 📖 Skills bạn sẽ master
 
-- RDS Multi-AZ tradeoffs (cost ~$3/day vs resilience)
-- Connection pool exhaustion prevention
-- TCP Keep-Alive + `statement_timeout` (đã có trong code!)
-- Secrets Manager → ECS Task injection
-- Bootstrap pattern (ECS Exec method)
+| Skill | Level | Production Application |
+|-------|-------|--------------------------|
+| RDS Multi-AZ | Expert | Design HA databases, measure actual RTO |
+| Secrets Manager Integration | Advanced | Zero-hardcoded credentials, auto-rotation |
+| IAM Separation (DDL vs DML) | Expert | Least privilege cho database access |
+| ECS Task Lifecycle | Advanced | One-shot tasks, exit code handling |
+| PostgreSQL Advisory Locks | Advanced | Prevent DDL race conditions |
+| Terraform `null_resource` | Advanced | Orchestrate cross-resource workflows |
+| Migration Pipeline Design | Expert | Production-grade schema management |
+| TCP Keep-Alive + `statement_timeout` | Advanced | Already in codebase! |
 
 ### 📝 Definition of Done
 
+**Infrastructure:**
+
 - [ ] RDS Multi-AZ deployed với `db.t3.micro`
+- [ ] Migration ECR image built & pushed
+- [ ] Migration IAM role với DDL privileges (separate from app role)
+- [ ] Migration task tự động chạy sau khi RDS ready
+
+**Bootstrap Pipeline:**
+
+- [ ] Migration task tạo ≥ 5 tables + seed data
+- [ ] CloudWatch Logs hiển thị full migration audit trail
+- [ ] Migration failure blocks app deployment (verified via Drill 11.5)
+- [ ] Advisory lock hoạt động khi 2 migration tasks chạy đồng thời
+
+**App Integration:**
+
 - [ ] Order Service connect thành công, query products từ RDS
+- [ ] App role KHÔNG có DDL privileges (verified qua IAM policy)
+- [ ] Zero hardcoded credentials trong app code
+
+**Resilience:**
+
 - [ ] Drill 11 passed: RDS failover transparent (app reconnects in < 5s)
+- [ ] Drill 11.5 passed: Migration failure blocks deployment
 - [ ] X-Ray trace: Order Service → RDS với failover visible
+
+**Documentation:**
+
 - [ ] Runbook section: "RDS Failover Recovery" written
-- [ ] Destroy RDS khi không dùng để tiết kiệm cost
+- [ ] Runbook section: "Migration Failure Recovery" written
+- [ ] ADR-018: "Database Bootstrap Strategy" documented
+
+**FinOps:**
+
+- [ ] Destroy RDS khi không dùng để tiết kiệm cost (~$3/day)
+- [ ] Migration task runs < 1 phút (cost < $0.01 per run)
 
 ---
 
