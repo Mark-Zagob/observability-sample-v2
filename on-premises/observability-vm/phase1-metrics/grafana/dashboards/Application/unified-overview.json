@@ -2,7 +2,10 @@
   "annotations": {
     "list": [
       {
-        "datasource": { "type": "loki", "uid": "loki-datasource" },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki-datasource"
+        },
         "enable": true,
         "expr": "{job=\"deploy-events\"} |= ``",
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -23,43 +26,94 @@
       "icon": "external link",
       "includeVars": false,
       "keepTime": true,
-      "tags": ["application"],
+      "tags": [
+        "application"
+      ],
       "title": "App Dashboards",
       "type": "dashboards"
     },
-    { "title": "SLO Overview", "url": "/d/slo-overview", "type": "link", "icon": "dashboard" },
-    { "title": "Alerting", "url": "/d/alerting-overview", "type": "link", "icon": "bolt" },
-    { "title": "Tracing", "url": "/d/tracing-overview", "type": "link", "icon": "search" },
-    { "title": "Infrastructure", "url": "/d/node-exporter-host", "type": "link", "icon": "server" }
+    {
+      "title": "SLO Overview",
+      "url": "/d/slo-overview",
+      "type": "link",
+      "icon": "dashboard"
+    },
+    {
+      "title": "Alerting",
+      "url": "/d/alerting-overview",
+      "type": "link",
+      "icon": "bolt"
+    },
+    {
+      "title": "Tracing",
+      "url": "/d/tracing-overview",
+      "type": "link",
+      "icon": "search"
+    },
+    {
+      "title": "Infrastructure",
+      "url": "/d/node-exporter-host",
+      "type": "link",
+      "icon": "server"
+    }
   ],
   "panels": [
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 100,
       "title": "🚦 Service Health (at a glance)",
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "reqps",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 0.01 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
       "id": 1,
       "title": "API Gateway — RPS",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "sum(rate(api_gateway_requests_total[5m]))",
@@ -68,25 +122,49 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "reqps",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 0.01 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
       "id": 2,
       "title": "Orders — RPS",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "sum(rate(orders_created_total[5m]))",
@@ -95,25 +173,49 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "reqps",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 0.01 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
       "id": 3,
       "title": "Payments — RPS",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "sum(rate(payments_total[5m]))",
@@ -122,25 +224,49 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "ops",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 0.01 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
       "id": 9,
       "title": "Notifications — OPS",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "sum(rate(notifications_sent_total[5m]))",
@@ -149,25 +275,49 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "ops",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 0.01 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
       "id": 10,
       "title": "Inventory — OPS",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "sum(rate(inventory_updates_total[5m]))",
@@ -176,27 +326,55 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "unit": "percentunit",
-          "min": 0, "max": 1,
+          "min": 0,
+          "max": 1,
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.01 },
-              { "color": "red", "value": 0.05 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
             ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
       "id": 4,
       "title": "Payment Error Rate",
       "type": "stat",
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))",
@@ -205,23 +383,272 @@
       ]
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "🚦 Phân bổ traffic theo nguồn: Browser (users thật), Synthetic Probe (Blackbox), Synthetic Loadtest (Traffic Generator).\n\n💡 SRE Insight: Nếu browser traffic = 0 mà vẫn có SLO alert → đó là PHANTOM ALERT.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "browser"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "synthetic_probe"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "synthetic_loadtest"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "percent",
+            "value"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "title": "🚦 Traffic Source Distribution",
+      "type": "piechart",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sum(rate(api_gateway_requests_total[5m])) by (traffic_source)",
+          "legendFormat": "{{ traffic_source }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "🛡️ Hiển thị tổng RPS từ sources thật (browser + unknown). Nếu < 0.1 RPS → Traffic Guard sẽ suppress SLO alerts.\n\nĐây là 'meta-metric' — đo xem hệ thống đo lường có đang hoạt động đúng không.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.1
+              }
+            ]
+          },
+          "unit": "reqps",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "No Data",
+                  "color": "dark-red"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "id": 14,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "title": "🛡️ Traffic Guard — Real Traffic RPS",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sum(rate(api_gateway_requests_total{traffic_source!~\"synthetic_.*\"}[5m]))",
+          "legendFormat": "Real Traffic RPS",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "📊 RPS từ synthetic sources (probes + loadtest). High value = chaos test đang chạy hoặc nhiều health probes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "id": 15,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "title": "🔬 Synthetic Traffic RPS",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sum(rate(api_gateway_requests_total{traffic_source=~\"synthetic_.*\"}[5m]))",
+          "legendFormat": "Synthetic RPS",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
       "id": 101,
       "title": "📈 Traffic & Latency (Metrics — Prometheus)",
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "reqps",
           "min": 0,
-          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
       "id": 5,
       "title": "Request Rate — All Services",
       "type": "timeseries",
@@ -249,16 +676,29 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "s",
           "min": 0,
-          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
       "id": 6,
       "title": "P95 Latency — All Services",
       "type": "timeseries",
@@ -294,16 +734,29 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "s",
           "min": 0,
-          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
         }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
       "id": 12,
       "title": "🔍 API Gateway P95 — Per Endpoint (Drill-down)",
       "description": "P95 latency tách theo từng endpoint. Dùng để debug SLO chính xác hơn so với panel aggregate bên trên.\n\n• GET /products: cache hit → rất nhanh (~10-30ms)\n• GET /orders: DB query (~80-150ms)\n• POST /order: bao gồm payment call → có 20% slow gateway (~1.5-2s)",
@@ -325,14 +778,27 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
       "id": 102,
       "title": "📋 Live Logs (Logs — Loki)",
       "type": "row"
     },
     {
-      "datasource": { "type": "loki", "uid": "loki-datasource" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-datasource"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
       "id": 7,
       "title": "Application Logs (JSON — click TraceID to jump to trace)",
       "description": "Structured JSON logs from all 3 services. Click the TraceID link to correlate with Tempo traces.",
@@ -349,7 +815,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "loki", "uid": "loki-datasource" },
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-datasource"
+          },
           "expr": "{container_name=~\"api-gateway|order-service|payment-service|notification-worker|inventory-worker\"} | json",
           "refId": "A"
         }
@@ -357,21 +826,37 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
       "id": 103,
       "title": "🔍 Recent Traces (Traces — Tempo)",
       "type": "row"
     },
     {
-      "datasource": { "type": "tempo", "uid": "tempo-datasource" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-datasource"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
       "id": 8,
       "title": "Recent Traces (click to explore full trace)",
       "description": "Recent distributed traces. Click any trace to view the full waterfall diagram.",
       "type": "table",
       "targets": [
         {
-          "datasource": { "type": "tempo", "uid": "tempo-datasource" },
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-datasource"
+          },
           "queryType": "nativeSearch",
           "limit": 20,
           "refId": "A"
@@ -380,9 +865,19 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["unified", "correlation", "phase6", "application"],
-  "templating": { "list": [] },
-  "time": { "from": "now-30m", "to": "now" },
+  "tags": [
+    "unified",
+    "correlation",
+    "phase6",
+    "application"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "Unified Overview — Metrics + Logs + Traces",

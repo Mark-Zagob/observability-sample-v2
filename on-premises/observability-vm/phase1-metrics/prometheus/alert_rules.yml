@@ -169,6 +169,42 @@ groups:
             sum(rate(api_gateway_requests_total{traffic_source!~"synthetic_.*"}[6h]))
           ) or vector(1)
 
+      # --- Browser-Only Availability SLI (all windows) ---
+      # Stricter than default rules: only counts traffic_source="browser"
+      # (default rules exclude synthetic_.* but include "unknown").
+      # Used by SLO dashboard variable toggle for pure user-experience SLO.
+      - record: sli:api_gateway_availability_browser:rate5m
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success", traffic_source="browser"}[5m]))
+            /
+            sum(rate(api_gateway_requests_total{traffic_source="browser"}[5m]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_availability_browser:rate30m
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success", traffic_source="browser"}[30m]))
+            /
+            sum(rate(api_gateway_requests_total{traffic_source="browser"}[30m]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_availability_browser:rate1h
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success", traffic_source="browser"}[1h]))
+            /
+            sum(rate(api_gateway_requests_total{traffic_source="browser"}[1h]))
+          ) or vector(1)
+
+      - record: sli:api_gateway_availability_browser:rate6h
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status="success", traffic_source="browser"}[6h]))
+            /
+            sum(rate(api_gateway_requests_total{traffic_source="browser"}[6h]))
+          ) or vector(1)
+
       # --- Latency SLI (P95 value for gauge display) ---
       - record: sli:api_gateway_latency_p95:rate5m
         expr: |
