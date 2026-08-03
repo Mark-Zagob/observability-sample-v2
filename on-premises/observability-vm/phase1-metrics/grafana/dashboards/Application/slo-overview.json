@@ -954,7 +954,7 @@
         "y": 31
       },
       "id": 103,
-      "title": "📝 Error Budget Remaining",
+      "title": "📝 Burn Rate Headroom (6h window)",
       "type": "row"
     },
     {
@@ -996,8 +996,8 @@
         "y": 32
       },
       "id": 8,
-      "title": "API Gateway Error Budget",
-      "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
+      "title": "API Gateway — Burn Rate Headroom",
+      "description": "📊 Headroom = 1 − burn_rate(6h). Cho biết burn rate hiện tại so với ngưỡng 1x.\n\n• 100% = không có lỗi (burn = 0)\n• 50% = burn rate 0.5x (bền vững)\n• 0% = burn rate ≥ 1x (đang tiêu error budget)\n\n⚠️ Đây KHÔNG phải Error Budget Remaining thực. EB thực cần tích lũy consumption theo thời gian (∫burn×dt). Panel này chỉ cho thấy tốc độ tiêu thụ hiện tại.",
       "type": "gauge",
       "options": {
         "reduceOptions": {
@@ -1011,7 +1011,7 @@
       "targets": [
         {
           "expr": "clamp_min(1 - ((1 - sli:api_gateway_availability${avail_suffix}:rate6h) / (1 - 0.995)), 0) or vector(1)",
-          "legendFormat": "Budget Remaining",
+          "legendFormat": "Headroom",
           "refId": "A"
         }
       ]
@@ -1055,8 +1055,8 @@
         "y": 32
       },
       "id": 9,
-      "title": "Payment Error Budget",
-      "description": "Based on 6h rolling window. Shows what fraction of 30-day error budget remains at current burn rate.",
+      "title": "Payment — Burn Rate Headroom",
+      "description": "📊 Headroom = 1 − burn_rate(6h). Cho biết burn rate hiện tại so với ngưỡng 1x.\n\n• 100% = không có lỗi (burn = 0)\n• 50% = burn rate 0.5x (bền vững)\n• 0% = burn rate ≥ 1x (đang tiêu error budget)\n\n⚠️ Đây KHÔNG phải Error Budget Remaining thực.",
       "type": "gauge",
       "options": {
         "reduceOptions": {
@@ -1070,7 +1070,7 @@
       "targets": [
         {
           "expr": "clamp_min(1 - ((1 - sli:payment_success_rate:rate6h) / (1 - 0.99)), 0) or vector(1)",
-          "legendFormat": "Budget Remaining"
+          "legendFormat": "Headroom"
         }
       ]
     },
@@ -1113,8 +1113,8 @@
         "y": 32
       },
       "id": 11,
-      "title": "Latency Error Budget",
-      "description": "Based on 6h rolling window. SLO: 95% requests < 500ms. Budget = 5% allowed slow requests.",
+      "title": "Latency — Burn Rate Headroom",
+      "description": "📊 Headroom = 1 − burn_rate(6h). Cho biết burn rate hiện tại so với ngưỡng 1x.\n\n• 100% = latency compliance perfect\n• 50% = burn rate 0.5x (bền vững)\n• 0% = burn rate ≥ 1x (đang vi phạm SLO)\n\n⚠️ Đây KHÔNG phải Error Budget Remaining thực.",
       "type": "gauge",
       "options": {
         "reduceOptions": {
@@ -1128,7 +1128,7 @@
       "targets": [
         {
           "expr": "clamp_min(1 - ((1 - sli:api_gateway_latency_compliance:rate6h) / (1 - 0.95)), 0) or vector(1)",
-          "legendFormat": "Budget Remaining"
+          "legendFormat": "Headroom"
         }
       ]
     }

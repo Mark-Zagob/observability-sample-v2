@@ -84,21 +84,29 @@ groups:
     interval: 30s
     rules:
 
-      # Notification worker error rate high
+      # Notification worker: consuming but failing to send, or stalled
+      # Metrics available: kafka_events_consumed_total, notifications_sent_total
+      # (notification-worker has NO error counter — unlike inventory-worker)
       - alert: NotificationWorkerHighErrorRate
         expr: |
-          rate(inventory_errors_total[5m]) > 0.1
+          (
+            sum(rate(kafka_events_consumed_total{service_name="notification-worker"}[5m])) > 0.05
+            and
+            sum(rate(notifications_sent_total[5m])) == 0
+          )
           or
-          rate(kafka_events_consumed_total{service_name="notification-worker"}[5m]) == 0
-          and
-          kafka_consumergroup_lag{consumergroup="notification-workers"} > 0
+          (
+            sum(rate(kafka_events_consumed_total{service_name="notification-worker"}[5m])) == 0
+            and
+            sum(kafka_consumergroup_lag{consumergroup="notification-workers"}) > 0
+          )
         for: 5m
         labels:
           severity: warning
           service: notification-worker
         annotations:
           summary: "Notification worker is failing or stalled"
-          description: "The notification worker is either producing errors or has stopped consuming despite pending messages."
+          description: "The notification worker is either consuming events but failing to send notifications, or has stopped consuming despite pending messages."
 
       # Inventory worker error rate high
       - alert: InventoryWorkerHighErrorRate

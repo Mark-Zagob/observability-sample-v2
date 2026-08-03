@@ -227,6 +227,7 @@ def charge():
     with tracer.start_as_current_span("call_payment_gateway") as span:
         span.set_attribute("app.order_id", order_id)
         span.set_attribute("app.provider", provider)
+        span.set_attribute("payment.amount", amount)
         
         delay = random.uniform(0.5, 1.5)
         is_slow = random.random() < SLOW_RATE

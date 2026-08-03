@@ -1,23 +1,51 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "links": [
-    { "title": "App Performance", "url": "/d/app-performance-microservices", "type": "link", "icon": "dashboard" },
-    { "title": "Cache", "url": "/d/cache-performance", "type": "link", "icon": "dashboard" },
-    { "title": "SLO Overview", "url": "/d/slo-overview", "type": "link", "icon": "dashboard" }
+    {
+      "title": "App Performance",
+      "url": "/d/app-performance-microservices",
+      "type": "link",
+      "icon": "dashboard"
+    },
+    {
+      "title": "Cache",
+      "url": "/d/cache-performance",
+      "type": "link",
+      "icon": "dashboard"
+    },
+    {
+      "title": "SLO Overview",
+      "url": "/d/slo-overview",
+      "type": "link",
+      "icon": "dashboard"
+    }
   ],
   "panels": [
     {
       "title": "DB Query Duration (p50 / p95 / p99)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
         }
       },
       "targets": [
@@ -38,12 +66,26 @@
     {
       "title": "DB Connection Pool Activity",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
         }
       },
       "targets": [
@@ -81,10 +123,22 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 0.1},
-              {"color": "orange", "value": 1},
-              {"color": "red", "value": 5}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
             ]
           }
         },
@@ -99,7 +153,11 @@
           "showLegend": true,
           "displayMode": "table",
           "placement": "bottom",
-          "calcs": ["mean", "max", "lastNotNull"]
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
         }
       },
       "targets": [
@@ -118,12 +176,23 @@
     {
       "title": "DB Queries per Second",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
-          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
         }
       },
       "targets": [
@@ -136,8 +205,16 @@
     {
       "title": "Slow Queries (> 100ms)",
       "type": "logs",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "datasource": { "type": "loki", "uid": "loki-datasource" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-datasource"
+      },
       "targets": [
         {
           "expr": "{compose_service=\"order-service\"} |= `Slow database query`",
@@ -149,18 +226,38 @@
       "title": "Avg Query Duration",
       "description": "Thời gian trung bình của DB queries (baseline 1-10ms). Tính bằng sum(rate(duration_sum)) / sum(rate(duration_count)). Grouped by operation (SELECT/INSERT/UPDATE/DELETE)",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.01 },
-              { "color": "orange", "value": 0.05 },
-              { "color": "red", "value": 0.1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "orange",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
             ]
           },
           "mappings": []
@@ -168,7 +265,13 @@
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "background",
@@ -187,8 +290,16 @@
       "title": "DB Connection Pool Utilization (%)",
       "description": "Tỷ lệ % pool đang thực thi query. Lưu ý: Ở baseline, giá trị thường = 0% do Sampling Artifact (query hoàn thành trong 1-3ms, OTel export mỗi 10s). Metric này chỉ thực sự có ý nghĩa khi chạy DB Saturation Experiment (pool đầy → active = 10/10 = 100%). Để đo Saturation sớm hơn, hãy nhìn panel 'DB Pool Wait Time (P95)'.",
       "type": "gauge",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -197,17 +308,35 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.6 },
-              { "color": "orange", "value": 0.8 },
-              { "color": "red", "value": 0.95 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
             ]
           }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "orientation": "auto"
@@ -240,10 +369,22 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 0.05},
-              {"color": "orange", "value": 0.5},
-              {"color": "red", "value": 2}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
             ]
           },
           "mappings": [
@@ -252,7 +393,10 @@
               "options": {
                 "from": 0,
                 "to": 0.05,
-                "result": {"text": "Healthy", "color": "green"}
+                "result": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
               }
             },
             {
@@ -260,7 +404,10 @@
               "options": {
                 "from": 0.05,
                 "to": 0.5,
-                "result": {"text": "Queueing", "color": "yellow"}
+                "result": {
+                  "text": "Queueing",
+                  "color": "yellow"
+                }
               }
             },
             {
@@ -268,7 +415,10 @@
               "options": {
                 "from": 0.5,
                 "to": 2,
-                "result": {"text": "Saturated", "color": "orange"}
+                "result": {
+                  "text": "Saturated",
+                  "color": "orange"
+                }
               }
             },
             {
@@ -276,7 +426,10 @@
               "options": {
                 "from": 2,
                 "to": 100,
-                "result": {"text": "EXHAUSTED", "color": "red"}
+                "result": {
+                  "text": "EXHAUSTED",
+                  "color": "red"
+                }
               }
             }
           ]
@@ -285,7 +438,9 @@
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -306,12 +461,23 @@
     {
       "title": "Order Processing Duration by Status",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
         }
       },
       "targets": [
@@ -323,9 +489,18 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["application", "database", "postgresql"],
-  "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
+  "tags": [
+    "application",
+    "database",
+    "postgresql"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "title": "Database Performance",
   "uid": "db-performance"
 }
