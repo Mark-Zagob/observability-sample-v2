@@ -117,26 +117,25 @@ def get_breaker_state():
 def call_external_gateway_with_tracking(provider, delay):
     """
     Wrap circuit breaker call với state tracking và metrics emission.
-    Consolidates failure simulation (fixes double-FAILURE_RATE bug).
+    Uses payment_breaker.call() — compatible with pybreaker==1.0.0.
     """
+    def _gateway_call():
+        time.sleep(delay)
+        if random.random() < FAILURE_RATE:
+            raise Exception("Gateway rejected card")
+        return True
+
     if not ENABLE_CIRCUIT_BREAKER_METRICS:
         # Fallback: gọi qua CB nhưng không track metrics
-        with payment_breaker:
-            time.sleep(delay)
-            if random.random() < FAILURE_RATE:
-                raise Exception("Gateway rejected card")
-        return True
-    
+        return payment_breaker.call(_gateway_call)
+
     # Record state TRƯỚC khi call
     state_before = get_breaker_state()
     circuit_breaker_state.set(state_before, {"breaker": "payment_gateway"})
-    
+
     try:
-        with payment_breaker:
-            time.sleep(delay)
-            if random.random() < FAILURE_RATE:
-                raise Exception("Gateway rejected card")
-        
+        result = payment_breaker.call(_gateway_call)
+
         # Record state SAU khi call
         state_after = get_breaker_state()
         circuit_breaker_state.set(state_after, {"breaker": "payment_gateway"})
@@ -146,8 +145,8 @@ def call_external_gateway_with_tracking(provider, delay):
                 "from_state": str(state_before),
                 "to_state": str(state_after)
             })
-        return True
-        
+        return result
+
     except pybreaker.CircuitBreakerError:
         circuit_breaker_rejections.add(1, {"breaker": "payment_gateway"})
         circuit_breaker_state.set(1, {"breaker": "payment_gateway"})  # OPEN
