@@ -377,7 +377,7 @@
       },
       "targets": [
         {
-          "expr": "(sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))",
+          "expr": "((sum(rate(payments_total{status=\"failed\"}[5m])) or vector(0)) / sum(rate(payments_total[5m]))) and (sum(rate(payments_total[5m])) > 0.1)",
           "legendFormat": "Error %"
         }
       ]

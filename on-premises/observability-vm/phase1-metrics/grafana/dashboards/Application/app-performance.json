@@ -128,16 +128,19 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "P50"
+          "expr": "histogram_quantile(0.50, sum(rate(api_gateway_request_duration_seconds_bucket{traffic_source!~\"synthetic_.*\"}[5m])) by (le))",
+          "legendFormat": "P50",
+          "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "P95"
+          "expr": "histogram_quantile(0.95, sum(rate(api_gateway_request_duration_seconds_bucket{traffic_source!~\"synthetic_.*\"}[5m])) by (le))",
+          "legendFormat": "P95",
+          "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(api_gateway_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "P99"
+          "expr": "histogram_quantile(0.99, sum(rate(api_gateway_request_duration_seconds_bucket{traffic_source!~\"synthetic_.*\"}[5m])) by (le))",
+          "legendFormat": "P99",
+          "refId": "C"
         }
       ]
     },
