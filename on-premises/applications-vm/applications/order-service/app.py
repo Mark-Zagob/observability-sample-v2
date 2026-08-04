@@ -269,17 +269,24 @@ def get_kafka_producer():
     return kafka_producer
 
 
-def kafka_delivery_callback(err, msg):
-    """Callback for Kafka produce delivery report"""
-    if err:
-        logger.error("Kafka delivery failed",
-                     extra={"topic": msg.topic(), "error": str(err)})
-        kafka_produced_counter.add(1, {"status": "failed", "topic": msg.topic()})
-    else:
-        logger.info("Kafka message delivered",
-                    extra={"topic": msg.topic(), "partition": msg.partition(),
-                           "offset": msg.offset()})
-        kafka_produced_counter.add(1, {"status": "success", "topic": msg.topic()})
+def make_kafka_delivery_callback(event_type):
+    """Factory returning a delivery callback with event_type in scope.
+    
+    Confluent Kafka callback signature is (err, msg). We use a closure
+    to capture event_type from the publish_event call site, since the
+    Message object doesn't expose custom metadata.
+    """
+    def _callback(err, msg):
+        labels = {"status": "failed" if err else "success", "topic": msg.topic(), "event_type": event_type}
+        kafka_produced_counter.add(1, labels)
+        if err:
+            logger.error("Kafka delivery failed",
+                         extra={"topic": msg.topic(), "event_type": event_type, "error": str(err)})
+        else:
+            logger.info("Kafka message delivered",
+                        extra={"topic": msg.topic(), "event_type": event_type,
+                               "partition": msg.partition(), "offset": msg.offset()})
+    return _callback
 
 
 def publish_event(event_type, order_id, data):
@@ -316,7 +323,7 @@ def publish_event(event_type, order_id, data):
                 key=order_id.encode("utf-8"),
                 value=json.dumps(event).encode("utf-8"),
                 headers=kafka_headers,
-                callback=kafka_delivery_callback,
+                callback=make_kafka_delivery_callback(event_type),
             )
             producer.poll(0)
             logger.info("Event published to Kafka",

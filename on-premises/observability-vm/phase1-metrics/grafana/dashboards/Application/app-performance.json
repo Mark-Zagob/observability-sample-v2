@@ -864,8 +864,8 @@
         "y": 49
       },
       "id": 18,
-      "title": "Errors — Processing Errors",
-      "description": "Difference between consumed events and sent notifications. 'No data' = zero errors (healthy).",
+      "title": "Errors — True Processing Failures",
+      "description": "🔴 Processing failures = consumed − sent − skipped.\n\nExcludes intentional skips:\n• no_template: event types without notification mapping (e.g., stock.depleted)\n• duplicate: idempotency-filtered re-deliveries\n\nIf this panel shows > 0, there is a REAL processing error — not a benign event type mismatch.\n\n'No data' = zero errors (healthy).",
       "type": "stat",
       "options": {
         "reduceOptions": {
@@ -878,8 +878,13 @@
       },
       "targets": [
         {
-          "expr": "(sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) - sum(rate(notifications_sent_total[5m]))) and (sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) > 0.05)",
-          "legendFormat": "Errors/s"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "(\n  sum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m]))\n  - sum(rate(notifications_sent_total[5m]))\n  - sum(rate(notifications_skipped_total[5m]))\n)\nand\nsum(rate(kafka_events_consumed_total{service_name=\"notification-worker\"}[5m])) > 0.05",
+          "legendFormat": "True Errors/s",
+          "refId": "A"
         }
       ]
     },
@@ -1353,6 +1358,110 @@
           "legendFormat": "Inventory"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "🔄 Circuit Breaker state transitions over time.\n\nShows when the breaker changes state:\n• closed(0) → open(1): Failure threshold reached\n• open(1) → half-open(2): Recovery timeout elapsed\n• half-open(2) → closed(0): Test request succeeded\n• half-open(2) → open(1): Test request failed\n\n💡 Exp 4 (Cascading Failure): Watch for rapid closed→open transitions when Payment Gateway is down, then open→half-open→closed recovery cycle.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal"
+            },
+            "barAlignment": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*→ open.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*→ half-open.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*→ closed.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "id": 32,
+      "title": "🔄 Circuit Breaker State Transitions",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sum(rate(payment_circuit_breaker_transitions_total[5m])) by (from_state, to_state)",
+          "legendFormat": "{{ from_state }} → {{ to_state }}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     }
   ],
   "schemaVersion": 39,

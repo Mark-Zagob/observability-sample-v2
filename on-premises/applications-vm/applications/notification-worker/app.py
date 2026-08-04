@@ -73,6 +73,12 @@ events_consumed_counter = meter.create_counter(
     unit="1",
 )
 
+notifications_skipped_counter = meter.create_counter(
+    name="notifications_skipped_total",
+    description="Events consumed but intentionally not sent (no template, duplicate)",
+    unit="1",
+)
+
 # ============================================================
 # Config
 # ============================================================
@@ -269,6 +275,7 @@ def consume_loop():
                             span.set_attribute("event.duplicate", True)
                             logger.info("Duplicate event skipped",
                                         extra={"event_id": event_id, "event_type": event_type})
+                            notifications_skipped_counter.add(1, {"reason": "duplicate", "event_type": event_type})
                             consumer_stats["skipped"] += 1
                             # Vẫn phải commit để advance offset
                             try: consumer.commit(asynchronous=False)
@@ -284,6 +291,8 @@ def consume_loop():
                                     "type": notif_type,
                                     "event_type": event_type,
                                 })
+                            else:
+                                notifications_skipped_counter.add(1, {"reason": "no_template", "event_type": event_type})
 
                         # Mark as processed
                         mark_event_processed(event_id, event_type)

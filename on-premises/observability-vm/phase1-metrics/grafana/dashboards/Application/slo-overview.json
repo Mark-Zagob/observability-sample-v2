@@ -1131,6 +1131,220 @@
           "legendFormat": "Headroom"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 105,
+      "panels": [],
+      "title": "📊 Error Budget Consumed (30d rolling window)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "📊 Error Budget tiêu thụ trong 30 ngày rolling window.\n\nCông thức: (1 − avg SLI) / (1 − SLO)\n• 0% = không tiêu budget nào (SLI = 100%)\n• 100% = tiêu hết budget (avg SLI = SLO target 99.5%)\n• >100% = VƯỢT budget → cần incident review\n\n⚠️ Lab note: Cần ≥ vài giờ data để có ý nghĩa. Giá trị sẽ ổn định dần theo thời gian.\n\n💡 Exp 5: Dùng công thức error_rate × thời_gian_lỗi / 216 phút để cross-check với gauge này.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 1.0
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.5
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 38
+      },
+      "id": 15,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "API Gateway — Budget Consumed (30d)",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "(1 - avg_over_time(sli:api_gateway_availability${avail_suffix}:rate1h[30d])) / (1 - 0.995)",
+          "legendFormat": "Budget Consumed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "📊 Error Budget tiêu thụ trong 30 ngày rolling window.\n\nCông thức: (1 − avg SLI) / (1 − SLO)\n• 0% = không tiêu budget nào (SLI = 100%)\n• 100% = tiêu hết budget (avg SLI = SLO target 99.0%)\n• >100% = VƯỢT budget → cần incident review\n\n⚠️ Lab note: Cần ≥ vài giờ data để có ý nghĩa. Giá trị sẽ ổn định dần theo thời gian.\n\n💡 Exp 5: Dùng công thức error_rate × thời_gian_lỗi / 216 phút để cross-check với gauge này.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 1.0
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.5
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 38
+      },
+      "id": 16,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Payment — Budget Consumed (30d)",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "(1 - avg_over_time(sli:payment_success_rate:rate1h[30d])) / (1 - 0.99)",
+          "legendFormat": "Budget Consumed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "📊 Error Budget tiêu thụ trong 30 ngày rolling window.\n\nCông thức: (1 − avg SLI) / (1 − SLO)\n• 0% = không tiêu budget nào (SLI = 100%)\n• 100% = tiêu hết budget (avg SLI = SLO target 95.0%)\n• >100% = VƯỢT budget → cần incident review\n\n⚠️ Lab note: Cần ≥ vài giờ data để có ý nghĩa. Giá trị sẽ ổn định dần theo thời gian.\n\n💡 Exp 5: Dùng công thức error_rate × thời_gian_lỗi / 216 phút để cross-check với gauge này.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 1.0
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.5
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 38
+      },
+      "id": 17,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Latency — Budget Consumed (30d)",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "(1 - avg_over_time(sli:api_gateway_latency_compliance:rate1h[30d])) / (1 - 0.95)",
+          "legendFormat": "Budget Consumed",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
