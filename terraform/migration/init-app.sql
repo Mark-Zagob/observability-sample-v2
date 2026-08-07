@@ -1,8 +1,16 @@
 -- ============================================================
 -- Database Initialization — Orders DB (Phase 2.1)
 -- ============================================================
+-- Migration Strategy:
+--   Current (Phase 2.1): Single bootstrap script (this file)
+--   Future  (Phase 5+):  Flyway-style versioned migrations
+--                         V2.1.0__initial_schema.sql → V2.2.0__xxx.sql → ...
+--                         with migration_runner.py reading schema_migrations table
+-- ============================================================
 
 -- Acquire advisory lock FIRST
+-- Note: pg_advisory_lock is DATABASE-SCOPED — no cross-DB collision even with same ID.
+-- Hardcoded value is intentional; parameterization adds complexity for a non-existent problem.
 SELECT pg_advisory_lock(8675309);
 
 -- ============================================================

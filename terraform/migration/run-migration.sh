@@ -65,7 +65,9 @@ done
 log "✅ RDS is accepting connections"
 
 # --- Run migration ---
-# 🌟 FIX: Xóa space ở cuối dòng statement_timeout để tránh bash interpret sai
+# Statement Timeout: 120s (migration) vs 30s (app runtime in shared/db_utils.py)
+# Migration is one-shot DDL — CREATE INDEX can be slow on large tables.
+# App is long-running DML — 30s prevents runaway queries from exhausting pool.
 log "🗄️  Executing migration scripts..."
 export PGPASSWORD="$DB_PASS"
 export PGSSLMODE="require"

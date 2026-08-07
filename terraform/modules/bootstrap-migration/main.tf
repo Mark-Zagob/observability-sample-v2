@@ -60,6 +60,25 @@ resource "aws_ecs_task_definition" "migration" {
   })
 }
 
+# --------------------------------------------------------------
+# ⚠️ TECH DEBT: local-exec provisioner
+# --------------------------------------------------------------
+# Current State (Phase 2.1):
+#   - Runs on developer's laptop via `terraform apply`
+#   - Requires AWS CLI installed locally
+#   - No retry mechanism at Terraform level
+#
+# Migration Path:
+#   Phase 3 (CI/CD): Move to GitHub Actions step with retry
+#   Phase 7 (EKS):   Migrate to ArgoCD PreSync hook
+#
+# Why acceptable now:
+#   - Learning phase, manual apply is OK
+#   - Migration task itself is idempotent (safe to re-run)
+#   - Blast radius: only affects this module, not entire infra
+#
+# See: docs/ADR-019_migration_orchestration.md
+# --------------------------------------------------------------
 resource "null_resource" "run_migration" {
   depends_on = [aws_ecs_task_definition.migration]
 
