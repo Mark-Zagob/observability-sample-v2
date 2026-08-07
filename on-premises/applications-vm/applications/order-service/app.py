@@ -163,16 +163,12 @@ cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
 
 
 # ============================================================
-# Auto-migration: Tạo schema + seed data nếu chưa có
+# Schema Management Architecture Note:
 # ============================================================
-# Tương đương docker-entrypoint-initdb.d/init.sql trên on-prem.
-# Idempotent: CREATE TABLE IF NOT EXISTS + ON CONFLICT DO NOTHING.
-#
-# ⚠️ CLOUD FIX: SERIAL PRIMARY KEY ngầm tạo Postgres Sequence.
-# Khi nhiều Gunicorn workers boot đồng thời (ECS Fargate), chúng
-# cùng bắn DDL → Race Condition trên pg_class → UniqueViolation.
-# On-prem ẩn bug này vì init.sql chạy trước App.
-# Fix: pg_advisory_lock serialize DDL — 1 worker chạy, còn lại chờ.
+# Schema creation, migrations & seed data are 100% decoupled from app code.
+# DDL execution is managed exclusively by the Migration Plane 
+# (Dedicated ECS Migration Task / init-app.sql).
+# Application runtime user operates under DML-only privileges (Least Privilege).
 
 # ============================================================
 # Kafka Producer Setup

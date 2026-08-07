@@ -221,10 +221,10 @@ Update Task Definition của Order Service & Payment Service:
 
 **Tại sao KHÔNG dùng app-level migration (`_ensure_schema()`)?**
 
-- **Coupling Anti-Pattern:** App "own" schema → vi phạm separation of concerns
-- **Blast Radius:** Migration fail = App crash → Zero availability
-- **Privilege Escalation:** App user cần DDL privileges → vi phạm least privilege
-- **No Version Control:** Schema embedded trong code → không có migration history
+- **Coupling Anti-Pattern:** App "own" schema → vi phạm separation of concerns (Đã xóa hoàn toàn `_ensure_schema()` khỏi `order-service/app.py`).
+- **Blast Radius:** Migration fail = App crash → Zero availability.
+- **Privilege Escalation:** App user cần DDL privileges → vi phạm least privilege (App runtime dùng DML-only).
+- **No Version Control:** Schema embedded trong code → không có migration history (Chuyển sang `schema_migrations` table tracking).
 
 ### 🧩 Modules triển khai
 
@@ -237,7 +237,7 @@ Update Task Definition của Order Service & Payment Service:
 - [ ] 🆕 NEW: Build & Push migration Docker image lên ECR
   - Base image: `postgres:16-alpine` + `aws-cli` + `jq`
   - Entry script: `/usr/local/bin/run-migration.sh`
-  - Idempotent: `pg_advisory_lock` + `CREATE TABLE IF NOT EXISTS`
+  - Idempotent & Versioned: `pg_advisory_lock` + `schema_migrations` table + `UNIQUE(name)` on `products`
 
 ### 📦 Workload Wiring
 
@@ -313,10 +313,11 @@ Terraform Apply (Control Plane)
 Migration Task (runs once, ~30s)
      │
      ├─► Read secret from Secrets Manager
-     ├─► Connect to RDS with DDL role
-     ├─► Acquire advisory lock (prevent race)
-     ├─► Run init-app.sql (idempotent)
-     ├─► Verify: ≥ 5 tables created
+     ├─► Connect to RDS with DDL role (SSL mode: require)
+     ├─► Acquire advisory lock (pg_advisory_lock)
+     ├─► Execute init-app.sql (Idempotent + Versioned 2.1.0)
+     ├─► SQL Verification (RAISE EXCEPTION if tables < 6 or products != 5)
+     ├─► Release advisory lock (only after 100% verification success)
      │
      ▼
 Exit 0 (success) → App services deploy
@@ -331,7 +332,9 @@ Exit 1 (fail)    → Block app deployment + Telegram alert
 | CloudWatch Logs | Full audit trail cho mọi migration |
 | Advisory lock | Prevent concurrent migration tasks (multi-AZ safe) |
 | Fail-fast exit code | Block app deploy nếu schema không sẵn sàng |
-| Verification query | Đảm bảo migration thực sự thành công, không chỉ "no error" |
+| Single Source of Truth Verification | SQL block tự verify & `RAISE EXCEPTION` trong transaction trước khi release advisory lock |
+| Schema Versioning | Bảng `schema_migrations` theo dõi version (2.1.0) giống Flyway/Liquibase |
+| Natural Key Unique Constraint | `products.name UNIQUE` đảm bảo seed data 100% idempotent, không nhân đôi |
 
 ### 💥 Chaos Drills
 
