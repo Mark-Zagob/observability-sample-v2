@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS inventory_log (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Schema version tracking — production-grade migration history
+-- Pattern: same as Flyway's flyway_schema_history / Liquibase's DATABASECHANGELOG
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     VARCHAR(50) PRIMARY KEY,
+    description TEXT NOT NULL,
+    checksum    VARCHAR(64),                          -- SHA-256 of migration SQL (detect tampering)
+    applied_at  TIMESTAMP DEFAULT NOW(),
+    applied_by  VARCHAR(100) DEFAULT current_user     -- audit: who ran this migration
+);
+
 -- ============================================================
 -- Indexes (all idempotent via IF NOT EXISTS)
 -- ============================================================
@@ -92,6 +102,15 @@ INSERT INTO products (name, price, stock, category) VALUES
     ('Premium Z', 299.99,  10, 'premium')
 ON CONFLICT DO NOTHING;
 
+-- Record schema version (idempotent)
+INSERT INTO schema_migrations (version, description, checksum)
+VALUES (
+    '2.1.0',
+    'Initial schema: orders, products, processed_events, notifications, inventory_log, schema_migrations',
+    'init-app-v2.1.0'  -- In production: SHA-256 of this file
+)
+ON CONFLICT (version) DO NOTHING;
+
 -- Release advisory lock
 SELECT pg_advisory_unlock(8675309);
 
@@ -102,6 +121,7 @@ DO $$
 DECLARE
     table_count INTEGER;
     product_count INTEGER;
+    schema_version VARCHAR(50);
 BEGIN
     SELECT count(*) INTO table_count
     FROM information_schema.tables
@@ -110,5 +130,10 @@ BEGIN
     SELECT count(*) INTO product_count
     FROM products;
 
-    RAISE NOTICE '✅ Migration verified: % tables, % products', table_count, product_count;
+    SELECT version INTO schema_version
+    FROM schema_migrations
+    ORDER BY applied_at DESC
+    LIMIT 1;
+
+    RAISE NOTICE '✅ Migration verified: % tables, % products, schema version: %', table_count, product_count, schema_version;
 END $$;

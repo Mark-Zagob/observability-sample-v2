@@ -85,27 +85,27 @@ resource "null_resource" "run_migration" {
         --output text)
 
       echo "Task ARN: $TASK_ARN"
+      echo "⏳ Waiting for migration task (max 10 minutes)..."
 
-      echo "⏳ Waiting for migration task to complete (timeout: 10 minutes)..."
-      aws ecs wait tasks-stopped \
+      # timeout prevents infinite hang if task stuck in PENDING/PROVISIONING
+      timeout 600 aws ecs wait tasks-stopped \
         --cluster ${var.ecs_cluster_name} \
         --tasks "$TASK_ARN" \
-        --region ${var.aws_region}
+        --region ${var.aws_region} || {
+          echo "❌ Migration task timed out after 600s — stopping task"
+          aws ecs stop-task --cluster ${var.ecs_cluster_name} \
+            --task "$TASK_ARN" --region ${var.aws_region}
+          exit 1
+        }
 
-      # Check exit code
       EXIT_CODE=$(aws ecs describe-tasks \
-        --cluster ${var.ecs_cluster_name} \
-        --tasks "$TASK_ARN" \
+        --cluster ${var.ecs_cluster_name} --tasks "$TASK_ARN" \
         --region ${var.aws_region} \
-        --query 'tasks[0].containers[0].exitCode' \
-        --output text)
-
+        --query 'tasks[0].containers[0].exitCode' --output text)
       STOP_REASON=$(aws ecs describe-tasks \
-        --cluster ${var.ecs_cluster_name} \
-        --tasks "$TASK_ARN" \
+        --cluster ${var.ecs_cluster_name} --tasks "$TASK_ARN" \
         --region ${var.aws_region} \
-        --query 'tasks[0].stoppedReason' \
-        --output text)
+        --query 'tasks[0].stoppedReason' --output text)
 
       if [ "$EXIT_CODE" != "0" ]; then
         echo "❌ Migration FAILED (exit code: $EXIT_CODE)"
@@ -113,8 +113,7 @@ resource "null_resource" "run_migration" {
         echo "   Logs: ${aws_cloudwatch_log_group.migration.name}"
         exit 1
       fi
-
-      echo "✅ Migration task completed successfully"
+      echo "✅ Migration completed successfully"
     EOT
   }
 }
