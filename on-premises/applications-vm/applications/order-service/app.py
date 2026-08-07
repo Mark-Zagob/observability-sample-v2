@@ -145,7 +145,7 @@ def _build_database_url():
         host = os.getenv("DB_HOST", s.get("host", "localhost"))
         port = os.getenv("DB_PORT", str(s.get("port", 5432)))
         dbname = os.getenv("DB_NAME", s.get("dbname", "orders"))
-        return f"postgresql://{s['username']}:{s['password']}@{host}:{port}/{dbname}"
+        return f"postgresql://{s['username']}:{s['password']}@{host}:{port}/{dbname}?sslmode=require"
     # secretlint-disable-next-line
     return os.getenv("DATABASE_URL", "postgresql://app:app_secret@postgres:5432/orders")
 
@@ -218,7 +218,10 @@ def _ensure_schema():
         # 🔓 ALWAYS release the lock, even if migration fails
         db.execute("SELECT pg_advisory_unlock(8675309);", fetch=False)
 
-_ensure_schema()
+if os.getenv("AUTO_MIGRATE", "true").lower() == "true":
+    _ensure_schema()
+else:
+    logger.info("AUTO_MIGRATE disabled — schema managed by Migration Plane")
 
 # ============================================================
 # Kafka Producer Setup

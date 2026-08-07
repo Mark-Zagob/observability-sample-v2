@@ -65,6 +65,7 @@ log "✅ RDS is accepting connections"
 # --- Run migration ---
 log "🗄️  Executing migration scripts..."
 export PGPASSWORD="$DB_PASS"
+export PGSSLMODE="require"  # RDS has rds.force_ssl=1 — fail-fast if TLS broken
 
 psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
   --set ON_ERROR_STOP=1 \
@@ -82,20 +83,27 @@ TABLE_COUNT=$(psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAM
 PRODUCT_COUNT=$(psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -tAc \
   "SELECT count(*) FROM products;")
 
-# Cleanup sensitive data from memory
-unset PGPASSWORD
+SCHEMA_VERSION=$(psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -tAc \
+  "SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1;")
 
-if [ "${TABLE_COUNT:-0}" -lt 3 ]; then
-  log "❌ Verification failed: expected >= 3 tables, got ${TABLE_COUNT:-0}"
+# Cleanup sensitive data from environment
+unset PGPASSWORD
+unset PGSSLMODE
+
+# Expect exactly 6 tables: orders, products, processed_events, notifications, inventory_log, schema_migrations
+if [ "${TABLE_COUNT:-0}" -ne 6 ]; then
+  log "❌ Verification failed: expected 6 tables, got ${TABLE_COUNT:-0}"
   exit 1
 fi
 
-if [ "${PRODUCT_COUNT:-0}" -lt 5 ]; then
-  log "❌ Verification failed: expected >= 5 seed products, got ${PRODUCT_COUNT:-0}"
+# Exact count: detect duplicates from non-idempotent seed runs
+if [ "${PRODUCT_COUNT:-0}" -ne 5 ]; then
+  log "❌ Verification failed: expected exactly 5 seed products, got ${PRODUCT_COUNT:-0}"
   exit 1
 fi
 
 log "✅ Migration completed successfully"
-log "   Tables created: $TABLE_COUNT"
-log "   Products seeded: $PRODUCT_COUNT"
+log "   Tables: $TABLE_COUNT"
+log "   Products: $PRODUCT_COUNT"
+log "   Schema version: ${SCHEMA_VERSION:-unknown}"
 exit 0

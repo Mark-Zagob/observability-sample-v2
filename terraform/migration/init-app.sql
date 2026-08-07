@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS orders (
 -- Products table (source of truth)
 CREATE TABLE IF NOT EXISTS products (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(100) NOT NULL UNIQUE,  -- natural key: prevents duplicate seed data
     price DECIMAL(10,2) NOT NULL,
     stock INTEGER DEFAULT 100,
     category VARCHAR(50) DEFAULT 'general'
@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_inventory_log_order ON inventory_log(order_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_log_product ON inventory_log(product_id);
 
 -- ============================================================
--- Seed data (idempotent via ON CONFLICT DO NOTHING)
+-- Seed data (idempotent via UNIQUE(name) constraint)
 -- ============================================================
 INSERT INTO products (name, price, stock, category) VALUES
     ('Widget A',   29.99, 100, 'widgets'),
@@ -100,7 +100,7 @@ INSERT INTO products (name, price, stock, category) VALUES
     ('Gadget X',   99.99,  30, 'gadgets'),
     ('Gadget Y',  149.99,  20, 'gadgets'),
     ('Premium Z', 299.99,  10, 'premium')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
 
 -- Record schema version (idempotent)
 INSERT INTO schema_migrations (version, description, checksum)
@@ -134,6 +134,11 @@ BEGIN
     FROM schema_migrations
     ORDER BY applied_at DESC
     LIMIT 1;
+
+    -- Exact count: detect duplicates from non-idempotent seed runs
+    IF product_count != 5 THEN
+        RAISE WARNING '⚠️ Expected 5 products, found %. Possible duplicate seed data!', product_count;
+    END IF;
 
     RAISE NOTICE '✅ Migration verified: % tables, % products, schema version: %', table_count, product_count, schema_version;
 END $$;

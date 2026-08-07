@@ -17,6 +17,7 @@ enable_interface_endpoints = false
 # ACM / DNS
 domain_name      = "app.bd-apa-coi.com"
 hosted_zone_name = "bd-apa-coi.com"
-# image_tags = {
-#   "payment-service" = "ecs-fargate-v1"
-# }
+# Cách 1: khai báo đủ key trong tfvars
+image_tags = {
+  "migration"       = "v1.0.0"
+}

@@ -86,7 +86,7 @@ module "ecr" {
   source               = "../../modules/ecr"
   project_name         = var.project_name
   repository_names     = var.ecr_repository_names
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   scan_on_push         = true
   common_tags          = { Module = "ecr" }
 }
