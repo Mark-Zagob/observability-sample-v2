@@ -174,55 +174,6 @@ cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
 # On-prem ẩn bug này vì init.sql chạy trước App.
 # Fix: pg_advisory_lock serialize DDL — 1 worker chạy, còn lại chờ.
 
-def _ensure_schema():
-    """Ensure DB tables and seed data exist. Idempotent — safe to run on every startup."""
-    # 🛡️ SRE PATTERN: Advisory Lock prevents concurrent DDL race conditions.
-    # Lock ID 8675309 is arbitrary but must be consistent across all workers.
-    # Worker 1 acquires lock, Worker 2+ WAIT until Worker 1 finishes.
-    db.execute("SELECT pg_advisory_lock(8675309);", fetch=False)
-    try:
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY, order_id VARCHAR(8) UNIQUE NOT NULL,
-                product_id INTEGER NOT NULL, product_name VARCHAR(100),
-                quantity INTEGER NOT NULL DEFAULT 1, total_amount DECIMAL(10,2) NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending', payment_txn_id VARCHAR(20),
-                created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
-            );
-            CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL,
-                price DECIMAL(10,2) NOT NULL, stock INTEGER DEFAULT 100,
-                category VARCHAR(50) DEFAULT 'general'
-            );
-            CREATE TABLE IF NOT EXISTS processed_events (
-                event_id VARCHAR(36) NOT NULL, event_type VARCHAR(50) NOT NULL,
-                processed_by VARCHAR(50) NOT NULL, processed_at TIMESTAMP DEFAULT NOW(),
-                PRIMARY KEY (event_id, processed_by)
-            );
-            CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-            CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-            CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
-            INSERT INTO products (name, price, stock, category) VALUES
-                ('Widget A',   29.99, 100, 'widgets'),
-                ('Widget B',   49.99,  50, 'widgets'),
-                ('Gadget X',   99.99,  30, 'gadgets'),
-                ('Gadget Y',  149.99,  20, 'gadgets'),
-                ('Premium Z', 299.99,  10, 'premium')
-            ON CONFLICT DO NOTHING;
-        """, fetch=False)
-        logger.info("Schema migration completed (idempotent)")
-    except Exception as e:
-        logger.error("Schema migration failed", extra={"error": str(e)})
-        raise
-    finally:
-        # 🔓 ALWAYS release the lock, even if migration fails
-        db.execute("SELECT pg_advisory_unlock(8675309);", fetch=False)
-
-if os.getenv("AUTO_MIGRATE", "true").lower() == "true":
-    _ensure_schema()
-else:
-    logger.info("AUTO_MIGRATE disabled — schema managed by Migration Plane")
-
 # ============================================================
 # Kafka Producer Setup
 # ============================================================
