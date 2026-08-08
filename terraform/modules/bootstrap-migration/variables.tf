@@ -90,6 +90,17 @@ variable "migration_sql_hash" {
   default     = ""
 }
 
+variable "app_user_secret_arn" {
+  description = "ARN of the DML-only app user secret (migration task reads it to provision the role)"
+  type        = string
+}
+
+variable "db_instance_arn" {
+  description = "RDS instance ARN — trigger re-run if RDS is recreated"
+  type        = string
+  default     = ""
+}
+
 #--------------------------------------------------------------
 # Tags
 #--------------------------------------------------------------

@@ -36,8 +36,8 @@ data "aws_ssm_parameter" "ecr_url" {
 }
 
 # 5. Đọc Database config từ SSM
-data "aws_ssm_parameter" "db_secret_arn" {
-  name = "/obs/lab/database/secret-arn"
+data "aws_ssm_parameter" "db_app_secret_arn" {
+  name = "/obs/lab/database/app-secret-arn"
 }
 
 data "aws_ssm_parameter" "db_host" {
@@ -123,13 +123,32 @@ module "order_service" {
   }
 
   # Secrets (From SSM → Secrets Manager ARN)
+  # 🔐 DML-only app_user secret (NOT master secret)
   secrets = {
-    DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
+    DB_SECRET = data.aws_ssm_parameter.db_app_secret_arn.value
   }
 
   common_tags = {
     Module  = "ecs-service"
     Service = var.service_name
     Plane   = "Data"
+  }
+}
+
+#--------------------------------------------------------------
+# MIGRATION GATE — Block deploy if migration not SUCCESS
+#--------------------------------------------------------------
+# Terraform check block (1.5+): warns/errors if migration
+# hasn't completed before Data Plane deploy.
+# SSM parameter written by bootstrap-migration local-exec.
+#--------------------------------------------------------------
+data "aws_ssm_parameter" "migration_status" {
+  name = "/obs/lab/migration/status"
+}
+
+check "migration_gate" {
+  assert {
+    condition     = data.aws_ssm_parameter.migration_status.value == "SUCCESS"
+    error_message = "🛑 BLOCKED: Migration status = '${data.aws_ssm_parameter.migration_status.value}'. Control Plane migration must SUCCESS before deploying Data Plane."
   }
 }

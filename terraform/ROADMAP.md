@@ -340,21 +340,65 @@ Exit 1 (fail)    → Block app deployment + Telegram alert
 
 **Drill 11: The DB Earthquake** — `aws rds reboot-db-instance --force-failover`
 
-- **Pre-flight:** Verify Traffic Generator đang chạy (User Pain Score baseline)
-- **Inject:**
+> ⚠️ **Redesigned**: Success criteria cũ ("reconnect < 5s", "zero lost orders") bất khả thi
+> với kiến trúc hiện tại. AWS Multi-AZ failover = 60–120s, TCP keepalive phát hiện dead
+> connection sau ~105s (`idle=60 + 3×15`), `retry_connect()` chỉ retry khi tạo pool mới,
+> `execute()` không có query-level retry. Trong cửa sổ failover **chắc chắn có 5xx**.
+> Tư duy: đo sự thật, rồi quyết định đầu tư gì để đóng gap.
+
+**Protocol: 2 Runs**
+
+**RUN A — Đo sự thật (bắt buộc):**
 
 ```bash
-  aws rds reboot-db-instance --db-instance-identifier obs-lab-postgres --force-failover
+# Terminal 1: Traffic nền (5 phút, 1 request/2s)
+for i in $(seq 1 150); do
+  echo "$(date +%H:%M:%S) $(curl -s -o /dev/null -w '%{http_code}' \
+    -X POST https://app.bd-apa-coi.com/process \
+    -H 'Content-Type: application/json' \
+    -d '{"product_id": 1, "quantity": 1}')" >> /tmp/drill11_runA.txt
+  sleep 2
+done
+
+# Terminal 2: Inject sau ~30s traffic nền
+aws rds reboot-db-instance --db-instance-identifier obs-lab-postgres --force-failover
+
+# Terminal 3: Watch metrics
+# - db_pool_wait_duration_seconds (spike)
+# - http_request_duration_seconds (spike)
+# - X-Ray traces (error spans)
 ```
 
-- **Observe:**
-  - X-Ray trace show "Database failover" span với ~60s latency
-  - Order Service reconnect trong < 5s nhờ `retry_connect()` + TCP Keep-Alive
-  - Metric: `db_pool_wait_duration_seconds` spike nhưng không có errors
-- **Success Criteria:**
-  - App tự reconnect thành công
-  - User Pain Score < 5% (nhờ retry logic)
-  - Zero lost orders trong 60s failover window
+**Bảng đo lường (điền vào post-mortem — đây là deliverable):**
+
+| Metric | Kỳ vọng lý thuyết | Thực đo |
+|--------|-------------------|---------|
+| Failover duration (RDS Events console) | 60–120s | ___ |
+| Request 5xx đầu tiên sau inject | +0–15s | ___ |
+| Request 200 đầu tiên sau recovery | +60–150s | ___ |
+| Tổng failed / tổng requests | > 0 (không có retry layer) | ___ |
+| User Pain Score thực đo | — | ___ % |
+| Alert Telegram nào fire? | Có thể KHÔNG → blind spot đáng ghi nhận | ___ |
+| Cần human can thiệp? | Kỳ vọng: KHÔNG | ___ |
+
+**Success Criteria (realistic):**
+
+- ✅ App tự phục hồi không cần human intervention
+- ✅ RTO thực tế được đo và ghi vào post-mortem
+- ✅ Metrics/traces trong cửa sổ failover query được (observability hoạt động)
+- ✅ User Pain Score được đo, không giả định
+- 📝 "Zero lost orders" → chuyển thành finding: "X orders failed → decision: có đáng đầu tư request-level retry không?"
+
+**RUN B — Cải thiện (stretch, chỉ nếu Run A cho thấy đáng đầu tư):**
+
+> ⚠️ Retry cho SELECT thì an toàn, nhưng retry cho INSERT orders thì không an toàn
+> nếu không có idempotency key (tạo đơn hàng đôi). Production dùng idempotency key + retry
+> cùng nhau. Nếu không làm Run B: ghi vào ADR rằng gap sẽ được giải quyết bởi
+> RDS Proxy (Phase 4) — proxy che phần lớn failover khỏi app.
+
+- Thêm connection-level + SELECT-only retry trong `shared/db_utils.py`
+- Đo lại, so sánh trước/sau
+- Ghi kết quả vào post-mortem
 
 🆕 **Drill 11.5: The Migration Sabotage** — Inject bad SQL vào `init-app.sql`
 
@@ -370,26 +414,38 @@ Exit 1 (fail)    → Block app deployment + Telegram alert
 ```
 
 ```bash
-  # Rebuild migration image, push new tag
-  # Re-run terraform apply
+  # ⚠️ Sửa SQL phải đi kèm rebuild + push image tag mới
+  # (SQL baked vào Docker image, không mount runtime)
+  docker build -t migration:v1.1.0-bad .
+  docker push <ecr>/migration:v1.1.0-bad
+  # Bump image_tags["migration"] = "v1.1.0-bad" → terraform apply control-plane
 ```
 
 - **Observe:**
   - Migration task fails với exit code 1
-  - CloudWatch Logs show `psql` error
-  - App services KHÔNG deploy (`depends_on` migration)
-  - Telegram alert fires (SEV-2: Schema bootstrap failed)
+  - CloudWatch Logs `/ecs/obs/lab/migration` show `psql` error
+  - SSM Gate ghi `status=FAILED`
+  - Data Plane `check "migration_gate"` chặn deploy
+
+**Machine-Verifiable Success Criteria:**
+
+| Check | Lệnh verify | Kỳ vọng |
+|-------|-------------|---------|
+| Migration task fail | CloudWatch logs `/ecs/obs/lab/migration` | psql syntax error, exit 1 |
+| Gate ghi FAILED | `aws ssm get-parameter --name "/obs/lab/migration/status"` | `"FAILED"` |
+| Data Plane bị chặn | `cd data-plane/order-service && terraform plan` | 🛑 `check "migration_gate"` error |
+| Recovery | Sửa SQL → rebuild `v1.1.1` → bump tag → apply control → apply data | `status = SUCCESS`, data plane pass |
+| Thời gian recovery | Bấm giờ toàn bộ | < 5 phút |
+
 - **Recovery:**
   - Fix SQL syntax
-  - Rebuild migration image với new tag
-  - Re-run `terraform apply`
-- **Success Criteria:**
-  - Migration failure blocks app deployment (circuit breaker)
-  - Recovery hoàn tất trong < 5 phút
-  - Zero data corruption (migration is idempotent)
+  - Rebuild migration image với **new tag** (e.g., `v1.1.1`)
+  - Apply control-plane → migration SUCCESS → gate = SUCCESS
+  - Apply data-plane → `check "migration_gate"` pass → deploy
 - **Learning Value:**
   - Hiểu blast radius của migration failure
   - Practice incident response với schema issues
+  - Validate SSM Gate pattern (cross-state blocking)
   - Validate "fail-fast" design principle
 
 ### 📖 Skills bạn sẽ master

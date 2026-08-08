@@ -107,6 +107,37 @@ VALUES (
 ON CONFLICT (version) DO NOTHING;
 
 -- ============================================================
+-- Application User: DML-only (Least Privilege at DB level)
+-- ============================================================
+-- Password injected by run-migration.sh via psql -v app_password="..."
+-- \gexec: query returns 0 rows → nothing executes; 1 row → executes the SQL.
+
+-- Create role if not exists
+SELECT format('CREATE ROLE app_user LOGIN PASSWORD %L', :'app_password') AS cmd
+WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user')
+\gexec
+
+-- Sync password if role already exists (secret = single source of truth)
+SELECT format('ALTER ROLE app_user LOGIN PASSWORD %L', :'app_password') AS cmd
+WHERE EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user')
+\gexec
+
+-- Grant CONNECT + DML-only
+SELECT format('GRANT CONNECT ON DATABASE %I TO app_user', current_database()) AS cmd
+\gexec
+
+GRANT USAGE ON SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+
+-- Future-proof: tables created by migration user in future migrations
+-- will automatically have DML grants for app_user
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+
+-- ============================================================
 -- Verification & Lock Release (Single Source of Truth)
 -- ============================================================
 DO $$
@@ -136,10 +167,25 @@ BEGIN
     IF product_count != 5 THEN
         RAISE EXCEPTION '❌ Verification failed: Expected exactly 5 products, found %. Possible duplicate seed data!', product_count;
     END IF;
+
+    -- Verify app_user role exists
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user') THEN
+        RAISE EXCEPTION '❌ Verification failed: app_user role was not created';
+    END IF;
+
+    -- Verify app_user has DML
+    IF NOT has_table_privilege('app_user', 'orders', 'SELECT') THEN
+        RAISE EXCEPTION '❌ Verification failed: app_user lacks SELECT on orders';
+    END IF;
+
+    -- Verify app_user does NOT have DDL (most important check!)
+    IF has_schema_privilege('app_user', 'public', 'CREATE') THEN
+        RAISE EXCEPTION '❌ Verification failed: app_user has CREATE privilege — DDL isolation violated!';
+    END IF;
     
-    RAISE NOTICE '✅ Migration verified: % tables, % products, schema version: %', 
+    RAISE NOTICE '✅ Migration verified: % tables, % products, schema version: %, app_user: DML-only ✓', 
         table_count, product_count, schema_version;
 END $$;
 
--- Chỉ nhả lock khi mọi thứ (DDL + Seed + Verify) đã thành công 100%
+-- Chỉ nhả lock khi mọi thứ (DDL + Seed + Role + Verify) đã thành công 100%
 SELECT pg_advisory_unlock(8675309);

@@ -41,6 +41,7 @@ resource "aws_ecs_task_definition" "migration" {
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_PORT", value = tostring(var.db_port) },
       { name = "DB_SECRET_ARN", value = var.db_secret_arn },
+      { name = "APP_USER_SECRET_ARN", value = var.app_user_secret_arn },
       { name = "AWS_REGION", value = var.aws_region }
     ]
 
@@ -83,9 +84,10 @@ resource "null_resource" "run_migration" {
   depends_on = [aws_ecs_task_definition.migration]
 
   triggers = {
-    # Re-run when task definition changes OR when SQL content changes
+    # Re-run when task definition changes, SQL content changes, or RDS is recreated
     task_definition_arn = aws_ecs_task_definition.migration.arn
-    migration_sql_hash = var.migration_sql_hash
+    migration_sql_hash  = var.migration_sql_hash
+    db_instance_arn     = var.db_instance_arn
   }
 
   provisioner "local-exec" {
@@ -130,9 +132,30 @@ resource "null_resource" "run_migration" {
         echo "❌ Migration FAILED (exit code: $EXIT_CODE)"
         echo "   Reason: $STOP_REASON"
         echo "   Logs: ${aws_cloudwatch_log_group.migration.name}"
+        # SSM Gate: signal failure to Data Plane
+        aws ssm put-parameter \
+          --name "/${var.project_name}/${var.environment}/migration/status" \
+          --value "FAILED" --type "String" --overwrite \
+          --region ${var.aws_region} || true
         exit 1
       fi
+
+      # SSM Gate: signal success to Data Plane
+      aws ssm put-parameter \
+        --name "/${var.project_name}/${var.environment}/migration/status" \
+        --value "SUCCESS" --type "String" --overwrite \
+        --region ${var.aws_region}
+      aws ssm put-parameter \
+        --name "/${var.project_name}/${var.environment}/migration/schema_version" \
+        --value "2.1.0" --type "String" --overwrite \
+        --region ${var.aws_region}
+      aws ssm put-parameter \
+        --name "/${var.project_name}/${var.environment}/migration/last_success" \
+        --value "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --type "String" --overwrite \
+        --region ${var.aws_region}
+
       echo "✅ Migration completed successfully"
+      echo "🔓 Migration gate updated: status=SUCCESS, version=2.1.0"
     EOT
   }
 }

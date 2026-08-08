@@ -33,14 +33,14 @@ resource "aws_iam_role_policy" "migration" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # Read database secret (for psql authentication)
+      # Read database secrets (master for DDL, app_user for role provisioning)
       {
-        Sid    = "ReadDatabaseSecret"
+        Sid    = "ReadDatabaseSecrets"
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [var.db_secret_arn]
+        Resource = [var.db_secret_arn, var.app_user_secret_arn]
       },
       # Decrypt KMS key (secrets are KMS-encrypted)
       {

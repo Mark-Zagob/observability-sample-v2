@@ -87,3 +87,16 @@ resource "aws_ssm_parameter" "db_secret_arn" {
     Component = "database"
   })
 }
+
+resource "aws_ssm_parameter" "db_app_secret_arn" {
+  name        = "/${var.project_name}/${var.environment}/database/app-secret-arn"
+  description = "ARN of DML-only app user secret"
+  type        = "SecureString"
+  key_id      = aws_kms_key.rds.arn
+  value       = aws_secretsmanager_secret.app_user.arn
+
+  tags = merge(var.common_tags, {
+    Name      = "${var.project_name}-db-app-secret-arn"
+    Component = "database"
+  })
+}

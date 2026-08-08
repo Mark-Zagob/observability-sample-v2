@@ -150,10 +150,12 @@ module "bootstrap_migration" {
 
   migration_image = "${module.ecr.repository_urls["migration"]}:${var.image_tags["migration"]}"
 
-  db_host       = module.database.rds_address
-  db_name       = module.database.rds_db_name
-  db_secret_arn = module.database.db_secret_arn
-  kms_key_arn   = module.database.kms_key_arn
+  db_host              = module.database.rds_address
+  db_name              = module.database.rds_db_name
+  db_secret_arn        = module.database.db_secret_arn
+  app_user_secret_arn  = module.database.db_app_secret_arn
+  kms_key_arn          = module.database.kms_key_arn
+  db_instance_arn      = module.database.rds_arn
 
   execution_role_arn = module.security.ecs_task_execution_role_arn
   private_subnet_ids = module.network.private_subnet_ids

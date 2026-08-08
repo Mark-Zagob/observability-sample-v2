@@ -55,6 +55,11 @@ output "db_secret_status" {
   value       = aws_db_instance.postgres.master_user_secret[0].secret_status
 }
 
+output "db_app_secret_arn" {
+  description = "ARN of the DML-only app user secret"
+  value       = aws_secretsmanager_secret.app_user.arn
+}
+
 #--------------------------------------------------------------
 # SSM Parameter ARNs (for IAM policy construction)
 #--------------------------------------------------------------
@@ -62,12 +67,13 @@ output "db_secret_status" {
 output "ssm_parameter_arns" {
   description = "Map of SSM parameter ARNs for IAM policy construction"
   value = {
-    endpoint   = aws_ssm_parameter.db_endpoint.arn
-    host       = aws_ssm_parameter.db_host.arn
-    port       = aws_ssm_parameter.db_port.arn
-    name       = aws_ssm_parameter.db_name.arn
-    username   = aws_ssm_parameter.db_username.arn
-    secret_arn = aws_ssm_parameter.db_secret_arn.arn
+    endpoint       = aws_ssm_parameter.db_endpoint.arn
+    host           = aws_ssm_parameter.db_host.arn
+    port           = aws_ssm_parameter.db_port.arn
+    name           = aws_ssm_parameter.db_name.arn
+    username       = aws_ssm_parameter.db_username.arn
+    secret_arn     = aws_ssm_parameter.db_secret_arn.arn
+    app_secret_arn = aws_ssm_parameter.db_app_secret_arn.arn
   }
 }
 
