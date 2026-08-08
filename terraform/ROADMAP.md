@@ -286,15 +286,14 @@ resource "null_resource" "run_migration" {
 ```
 
 ```hcl
-# 4. Wire Order/Payment services → RDS (flip feature flags)
+# 4. Wire Order/Payment services → RDS
 # data-plane/order-service/main.tf
 environment = {
-  ENABLE_POSTGRES = "true"   # ← Bật lại
-  ENABLE_REDIS    = "false"  # ← Vẫn disable
-  ENABLE_KAFKA    = "false"  # ← Vẫn disable
+  ENABLE_REDIS    = "false"  # ← Vẫn disable (Phase 2 khi có ElastiCache)
+  ENABLE_KAFKA    = "false"  # ← Vẫn disable (Phase 2 khi có MSK)
 }
 secrets = {
-  DB_SECRET = data.aws_ssm_parameter.db_secret_arn.value
+  DB_SECRET = data.aws_ssm_parameter.db_app_secret_arn.value  # ← DML-only app_user
 }
 ```
 
@@ -480,13 +479,13 @@ aws rds reboot-db-instance --db-instance-identifier obs-lab-postgres --force-fai
 **App Integration:**
 
 - [ ] Order Service connect thành công, query products từ RDS
-- [ ] App role KHÔNG có DDL privileges (verified qua IAM policy)
+- [ ] App role KHÔNG có DDL privileges (verified qua SQL negative test: `CREATE TABLE` bị block)
 - [ ] Zero hardcoded credentials trong app code
 
 **Resilience:**
 
-- [ ] Drill 11 passed: RDS failover transparent (app reconnects in < 5s)
-- [ ] Drill 11.5 passed: Migration failure blocks deployment
+- [ ] Drill 11 passed: App tự phục hồi sau failover, RTO thực tế được đo và ghi post-mortem
+- [ ] Drill 11.5 passed: Migration failure → SSM gate FAILED → Data Plane bị chặn
 - [ ] X-Ray trace: Order Service → RDS với failover visible
 
 **Documentation:**

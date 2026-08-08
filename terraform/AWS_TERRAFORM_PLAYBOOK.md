@@ -208,7 +208,7 @@ Sau khi hoàn thành module này, bạn sẽ:
 | RDS PostgreSQL 16 | db.t3.micro, gp3, encrypted (CMK) |
 | Multi-AZ | Configurable (true for production) |
 | Secrets Manager | RDS-managed auto-rotation (7 days) |
-| SSM Parameters | endpoint, host, port, db_name, username, secret_arn |
+| SSM Parameters | endpoint, host, port, db_name, username, secret_arn, app_secret_arn |
 | CloudWatch Alarms | CPU, storage, connections, secret rotation failure |
 | Performance Insights | Enabled (7d free, 731d prod) |
 | Read Replicas | Configurable count (0 for lab) |

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **DML-only `app_user`** (`app_user.tf`):
+  - `random_password` with URL-safe special chars (no `$`, `!`, `@`)
+  - `aws_secretsmanager_secret` with KMS encryption
+  - SSM parameter: `/{project}/{env}/database/app-secret-arn`
+  - New output: `db_app_secret_arn`
+  - SSM parameter ARN map expanded to 7 entries
+
+### Changed
+- `outputs.tf`: Added `db_app_secret_arn` output
+- `parameters.tf`: Added `db_app_secret_arn` SSM parameter
+- `ssm_parameter_arns` map: added `app_secret_arn` key
+
+### Security
+- App runtime uses DML-only `app_user` (SELECT/INSERT/UPDATE/DELETE)
+- Master credentials restricted to migration task only (DDL)
+- Enforced via SQL GRANT + verified by `has_schema_privilege` check in `init-app.sql`
+
 ## [1.0.0] - 2026-04-21
 
 ### Added

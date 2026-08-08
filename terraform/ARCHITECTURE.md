@@ -358,6 +358,7 @@ Control Plane (writes)          SSM Parameter Store           Consumers (reads)
 │ module.network   │───▶  vpc_id, private_subnets    │ Data Plane       │
 │ module.security  │───▶  app_sg_id, iam_role_arns   │ (data.aws_ssm_*) │
 │ module.database  │───▶  endpoint, secret-arn       │                  │
+│                  │───▶  app-secret-arn (DML-only)  │                  │
 │ module.ecr       │───▶  ecr/{service-name}         │                  │
 │ module.ecs_cluster│──▶  cluster_id, namespace_id   │                  │
 │                  │                                  │                  │
