@@ -17,12 +17,6 @@ provider "aws" {
   region  = var.aws_region
   profile = "default"
 
-# readonly chỉ để mục đích kiểm tra tính năng assume role trong terraform nên đã comment lại
-  # assume_role {
-  #   role_arn     = "arn:aws:iam::730335245469:role/tud7hc-readonly-assume-role"
-  #   session_name = "terraform-shared-readonly"    # ← tên bạn tự đặt
-  # }
-
   default_tags {
     tags = {
       Project     = var.project_name

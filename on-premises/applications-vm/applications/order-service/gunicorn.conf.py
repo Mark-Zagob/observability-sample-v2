@@ -24,7 +24,26 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-# --- Hooks: Bắt sự kiện SIGTERM để log (Rất quan trọng khi debug Chaos Drill) ---
+# --- Hooks ---
+
+# 🔴 Finding 1 Fix: OTel Watchdog phải start PER WORKER.
+# Dockerfile CMD chạy gunicorn → __name__ == "app" → if __name__ == "__main__"
+# trong app.py KHÔNG chạy → watchdog inactive → silent telemetry loss.
+# post_worker_init chạy SAU khi worker fork, đúng lifecycle.
+def post_worker_init(worker):
+    from shared.otel_watchdog import start_otel_watchdog
+    start_otel_watchdog(interval=30, max_failures=3)
+    worker.log.info("✅ OTel Watchdog started for worker %s", worker.pid)
+
+# 🔴 Finding 2 Fix: Gunicorn Worker.init_signals() ghi đè SIGTERM.
+# shutdown_manager.exit_gracefully() KHÔNG BAO GIỜ được gọi dưới gunicorn.
+# → flush_kafka, close_db_pool, close_redis KHÔNG chạy.
+# worker_exit chạy SAU khi gunicorn xử lý SIGTERM, TRƯỚC khi process exit.
+def worker_exit(server, worker):
+    from shared.shutdown_handler import shutdown_manager
+    worker.log.info("🛑 Worker %s exiting, running cleanup callbacks...", worker.pid)
+    shutdown_manager.run_cleanup()
+
 def worker_int(worker):
     worker.log.info("🛑 Received SIGINT/SIGTERM, finishing current request gracefully...")
 

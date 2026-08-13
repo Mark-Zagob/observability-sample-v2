@@ -78,48 +78,50 @@ class GracefulShutdown:
         })
         logger.debug(f"Registered cleanup callback: {name}")
 
-    def exit_gracefully(self, signum, frame):
+    def run_cleanup(self):
         """
-        Handler cho SIGTERM/SIGINT.
+        Chạy TẤT CẢ registered cleanup callbacks.
         
-        Flow:
-        1. Log tín hiệu nhận được
-        2. Chạy TẤT CẢ callbacks (kể cả khi 1 cái fail)
-        3. sys.exit(0) để Gunicorn biết process đã tắt sạch
+        Tách riêng khỏi signal handler để có thể gọi từ:
+        - gunicorn worker_exit hook (Finding 2: gunicorn ghi đè SIGTERM)
+        - exit_gracefully (dev mode / direct python run)
+        
+        Idempotent: gọi nhiều lần chỉ chạy 1 lần.
         """
-        # Tránh chạy 2 lần (race condition)
         if self._shutdown_initiated:
             return
         self._shutdown_initiated = True
-        
-        sig_name = signal.Signals(signum).name
-        logger.warning(f"🛑 Received {sig_name}. Initiating Graceful Shutdown...")
-        
-        # Chạy các callback dọn dẹp
+
         total_callbacks = len(self.cleanup_callbacks)
         for i, cb_info in enumerate(self.cleanup_callbacks, 1):
             name = cb_info["name"]
             callback = cb_info["callback"]
-            timeout = cb_info["timeout"]
-            
+
             try:
                 logger.info(f"🧹 [{i}/{total_callbacks}] Cleaning up: {name}...")
                 start_time = time.time()
-                
-                # Thực thi callback
                 callback()
-                
                 duration = time.time() - start_time
                 logger.info(f"✅ [{i}/{total_callbacks}] {name} cleaned up in {duration:.2f}s")
-                
             except Exception as e:
                 logger.error(f"❌ [{i}/{total_callbacks}] Failed to cleanup {name}: {e}")
-                # KHÔNG raise exception — tiếp tục chạy các callback khác
+
+        logger.info("👋 All cleanup complete.")
+
+    def exit_gracefully(self, signum, frame):
+        """
+        Handler cho SIGTERM/SIGINT (dev mode).
         
-        logger.info("👋 All cleanup complete. Exiting process.")
-        
-        # sys.exit(0) để Gunicorn biết process đã tắt sạch sẽ
-        # Exit code 0 = clean shutdown (không phải crash)
+        Lưu ý: Khi chạy dưới gunicorn, handler này bị ghi đè bởi
+        gunicorn Worker.init_signals(). Cleanup được gọi qua
+        gunicorn worker_exit hook thay thế.
+        """
+        sig_name = signal.Signals(signum).name
+        logger.warning(f"🛑 Received {sig_name}. Initiating Graceful Shutdown...")
+
+        self.run_cleanup()
+
+        # sys.exit(0) để process tắt sạch sẽ
         sys.exit(0)
 
 
