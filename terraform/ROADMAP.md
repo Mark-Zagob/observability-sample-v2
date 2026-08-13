@@ -107,12 +107,12 @@ Mỗi Pod PHẢI đạt được **3 tiêu chí** trước khi chuyển Pod ti�
 ### 🧩 Modules triển khai
 
 - [x] `observability/amp` (Module mới): Tạo Amazon Managed Prometheus workspace. KMS CMK encryption, SSM exports, cardinality alarm.
-- [ ] `observability/xray`: Enable X-Ray tracing cho ECS Tasks.
+- [x] `observability/xray`: Enable X-Ray tracing cho ECS Tasks.
 - [x] `observability/amg` (Module mới): Tạo Amazon Managed Grafana workspace.
   - Authentication: AWS IAM Identity Center (SSO)
   - Data sources: AMP + X-Ray + CloudWatch — provisioned via Grafana Terraform Provider tại `control-plane/lab-grafana/` (tách state, đọc SSM). Xem [`docs/GRAFANA_PROVIDER_BOOTSTRAP.md`](docs/GRAFANA_PROVIDER_BOOTSTRAP.md).
   - Dashboard as Code: JSON provisioned từ Git (Phase 3 sẽ áp dụng)
-- [ ] Update `compute/ecs-service` module:
+- [x] Update `compute/ecs-service` module:
   - Thêm **ADOT Collector làm Sidecar Container** trong Task Definition.
   - Inject IAM Task Role với permissions: `aps:RemoteWrite`, `xray:PutTraceSegments`, `logs:PutLogEvents`.
   - Đổi biến môi trường của App: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` (App chỉ biết push về localhost, Sidecar lo phần còn lại).
@@ -141,16 +141,16 @@ Update Task Definition của Order Service & Payment Service:
 }
 ```
 
-- [ ] Verify traces xuất hiện trên X-Ray Service Map.
+- [x] Verify traces xuất hiện trên X-Ray Service Map.
 - [x] **Setup Amazon Managed Grafana (AMG):**
   - Tạo AMG workspace qua Terraform (`aws_grafana_workspace`) — `modules/observability/amg/`
   - Configure AWS IAM Identity Center làm identity provider (SSO)
   - Add AMP workspace làm Prometheus data source (SigV4 auth) — `control-plane/lab-grafana/`
   - Add X-Ray + CloudWatch làm data source — `control-plane/lab-grafana/`
   - Import JSON dashboard từ `on-premises/observability-vm/grafana/dashboards/Application/`
-- [ ] Verify traces xuất hiện trên X-Ray Service Map.
-- [ ] Verify metrics trên AMP hiển thị đúng trên AMG dashboard.
-- [ ] Create 1 custom dashboard: "POD 1 — The Illumination" với 4 panels:
+- [x] Verify traces xuất hiện trên X-Ray Service Map.
+- [x] Verify metrics trên AMP hiển thị đúng trên AMG dashboard.
+- [x] Create 1 custom dashboard: "POD 1 — The Illumination" với 4 panels:
   - P95 latency (Order + Payment)
   - Error rate (by HTTP status code)
   - Request rate (by traffic_source)
@@ -158,12 +158,12 @@ Update Task Definition của Order Service & Payment Service:
 
 ### 🎯 POD 1 Definition of Done
 
-- [ ] **Observable**: X-Ray Service Map hiện rõ `Order → Payment → RDS` với latency breakdown
+- [x] **Observable**: X-Ray Service Map hiện rõ `Order → Payment → RDS` với latency breakdown
 - [ ] **Queryable**: AMP có ít nhất 5 metrics: `http_server_duration`, `http_server_request_count`, `db_pool_wait_duration_seconds`, `payment_gateway_duration_seconds`, `orders_created_total`
-- [ ] **Dashboardable**: AMG workspace deployed và accessible qua SSO
-- [ ] **Dashboardable**: AMP + X-Ray data sources connected thành công
-- [ ] **Dashboardable**: 1 custom dashboard "POD 1 — The Illumination" với 4 panels hiển thị real-time data
-- [ ] **Testable**: Python E2E script bắn 100 requests → verify 100 traces trên X-Ray
+- [x] **Dashboardable**: AMG workspace deployed và accessible qua SSO
+- [x] **Dashboardable**: AMP + X-Ray data sources connected thành công
+- [x] **Dashboardable**: 1 custom dashboard "POD 1 — The Illumination" với 4 panels hiển thị real-time data
+- [x] **Testable**: Python E2E script bắn 100 requests → verify 100 traces trên X-Ray
 
 💥 SRE / Chaos Drill (The "Who Watches the Watchmen?" Series)
 - [x] Drill 7 (Trace Storm): Spam 50k spans → Verify `memory_limiter` backpressure & Tail-based sampling.
@@ -230,11 +230,11 @@ Update Task Definition của Order Service & Payment Service:
 
 - [ ] Enable `database` module (đã có trong Control Plane) với `multi_az = true`
 - [ ] Update `vpc-endpoints` module: thêm RDS endpoint (`com.amazonaws.{region}.rds`)
-- [ ] 🆕 NEW: Tạo `bootstrap-migration` module (Dedicated Migration ECS Task)
+- [x] 🆕 NEW: Tạo `bootstrap-migration` module (Dedicated Migration ECS Task)
   - Task Definition riêng với DDL-privileged IAM role
   - CloudWatch Log Group riêng cho migration audit trail
   - `null_resource` trigger migration tự động sau khi RDS ready
-- [ ] 🆕 NEW: Build & Push migration Docker image lên ECR
+- [x] 🆕 NEW: Build & Push migration Docker image lên ECR
   - Base image: `postgres:16-alpine` + `aws-cli` + `jq`
   - Entry script: `/usr/local/bin/run-migration.sh`
   - Idempotent & Versioned: `pg_advisory_lock` + `schema_migrations` table + `UNIQUE(name)` on `products`
