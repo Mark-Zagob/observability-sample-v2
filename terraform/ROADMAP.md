@@ -238,6 +238,34 @@ Update Task Definition của Order Service & Payment Service:
   - Entry script: `/usr/local/bin/run-migration.sh`
   - Idempotent & Versioned: `pg_advisory_lock` + `schema_migrations` table + `UNIQUE(name)` on `products`
 
+### 🐔🥚 First-Time Bootstrap Sequence
+
+> [!WARNING]
+> **Chicken-and-egg:** `null_resource.run_migration` chạy `aws ecs run-task` ngay trong `terraform apply`. Nếu ECR repo vừa tạo (rỗng), ECS sẽ fail ở bước pull image → `CannotPullContainerError` → terraform apply fail.
+>
+> Điều này **chỉ xảy ra lần đầu tiên**. Từ lần thứ 2 trở đi (image đã có trong ECR), `terraform apply` chạy bình thường.
+
+**Trình tự first-time deploy:**
+
+```bash
+cd terraform/control-plane/lab
+
+# Bước 1: Chỉ tạo ECR repos trước
+terraform apply -target=module.ecr
+
+# Bước 2: Build + push migration image
+cd ../../migration
+aws ecr get-login-password --region ap-southeast-2 | \
+  docker login --username AWS --password-stdin <account>.dkr.ecr.ap-southeast-2.amazonaws.com
+docker build -t obs-migration:v1.1.0 .
+docker tag obs-migration:v1.1.0 <account>.dkr.ecr.ap-southeast-2.amazonaws.com/obs/migration:v1.1.0
+docker push <account>.dkr.ecr.ap-southeast-2.amazonaws.com/obs/migration:v1.1.0
+
+# Bước 3: Apply toàn bộ — image đã có, RDS tạo xong → migration chạy được
+cd ../control-plane/lab
+terraform apply
+```
+
 ### 📦 Workload Wiring
 
 ```hcl
