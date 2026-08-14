@@ -229,7 +229,6 @@ Update Task Definition của Order Service & Payment Service:
 ### 🧩 Modules triển khai
 
 - [ ] Enable `database` module (đã có trong Control Plane) với `multi_az = true`
-- [ ] Update `vpc-endpoints` module: thêm RDS endpoint (`com.amazonaws.{region}.rds`)
 - [x] 🆕 NEW: Tạo `bootstrap-migration` module (Dedicated Migration ECS Task)
   - Task Definition riêng với DDL-privileged IAM role
   - CloudWatch Log Group riêng cho migration audit trail
@@ -513,7 +512,6 @@ aws rds reboot-db-instance --db-instance-identifier obs-lab-postgres --force-fai
   - ElastiCache Replication Group (1 shard, 2 nodes)
   - Auth Token + Transit Encryption
   - CloudWatch Alarms (CPU, memory, connections, replication lag)
-- [ ] Update `vpc-endpoints` module: thêm ElastiCache endpoint
 - [ ] Export metadata to SSM: `/obs/lab/cache/*`
 
 ### 📦 Workload Wiring
@@ -578,7 +576,6 @@ environment = {
   - MSK Kafka cluster (KRaft mode, 2 brokers, 3 partitions)
   - IAM authentication (không dùng SASL/SCRAM)
   - CloudWatch Alarms (under-replicated partitions, offline partitions, disk usage)
-- [ ] Update `vpc-endpoints` module: thêm MSK endpoint
 - [ ] Export metadata to SSM: `/obs/lab/streaming/*`
 
 ### 📦 Workload Wiring
