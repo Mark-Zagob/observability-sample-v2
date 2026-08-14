@@ -159,7 +159,7 @@ Update Task Definition của Order Service & Payment Service:
 ### 🎯 POD 1 Definition of Done
 
 - [x] **Observable**: X-Ray Service Map hiện rõ `Order → Payment → RDS` với latency breakdown
-- [ ] **Queryable**: AMP có ít nhất 5 metrics: `http_server_duration`, `http_server_request_count`, `db_pool_wait_duration_seconds`, `payment_gateway_duration_seconds`, `orders_created_total`
+- [x] **Queryable**: AMP có ít nhất 5 metrics: `http_server_duration`, `http_server_request_count`, `db_pool_wait_duration_seconds`, `payment_gateway_duration_seconds`, `orders_created_total`
 - [x] **Dashboardable**: AMG workspace deployed và accessible qua SSO
 - [x] **Dashboardable**: AMP + X-Ray data sources connected thành công
 - [x] **Dashboardable**: 1 custom dashboard "POD 1 — The Illumination" với 4 panels hiển thị real-time data
