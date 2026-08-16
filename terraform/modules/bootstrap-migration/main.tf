@@ -88,11 +88,24 @@ resource "null_resource" "run_migration" {
     task_definition_arn = aws_ecs_task_definition.migration.arn
     migration_sql_hash  = var.migration_sql_hash
     db_instance_arn     = var.db_instance_arn
+    # Stored in triggers so destroy-time provisioner can reference via self.triggers.*
+    project_name = var.project_name
+    environment  = var.environment
+    aws_region   = var.aws_region
   }
 
   provisioner "local-exec" {
     command = <<-EOT
       set -e
+
+      # Safety net: any unhandled error (e.g. run-task API fail, network timeout)
+      # writes FAILED to SSM gate. Without this, set -e kills the script before
+      # reaching the explicit FAILED write at the exit code check.
+      trap 'echo "❌ Unexpected error — marking migration as FAILED"; \
+        aws ssm put-parameter \
+          --name "/${var.project_name}/${var.environment}/migration/status" \
+          --value "FAILED" --type "String" --overwrite \
+          --region ${var.aws_region} || true' ERR
 
       echo "🚀 Running database migration task..."
 
@@ -156,6 +169,22 @@ resource "null_resource" "run_migration" {
 
       echo "✅ Migration completed successfully"
       echo "🔓 Migration gate updated: status=SUCCESS, version=2.1.0"
+    EOT
+  }
+
+  # Fix: Cleanup SSM gate parameters on destroy to prevent orphan SUCCESS.
+  # Without this: destroy → SSM status stays SUCCESS → re-apply with broken
+  # migration → gate passes on stale data → order-service deploys on empty RDS.
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      echo "🧹 Cleaning up migration SSM gate parameters..."
+      aws ssm delete-parameters \
+        --names "/${self.triggers.project_name}/${self.triggers.environment}/migration/status" \
+               "/${self.triggers.project_name}/${self.triggers.environment}/migration/schema_version" \
+               "/${self.triggers.project_name}/${self.triggers.environment}/migration/last_success" \
+        --region ${self.triggers.aws_region} || true
+      echo "✅ Migration gate parameters cleaned up"
     EOT
   }
 }

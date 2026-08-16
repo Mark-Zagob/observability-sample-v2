@@ -148,7 +148,12 @@ data "aws_ssm_parameter" "migration_status" {
 
 check "migration_gate" {
   assert {
-    condition     = data.aws_ssm_parameter.migration_status.value == "SUCCESS"
-    error_message = "🛑 BLOCKED: Migration status = '${data.aws_ssm_parameter.migration_status.value}'. Control Plane migration must SUCCESS before deploying Data Plane."
+    condition = data.aws_ssm_parameter.migration_status.value == "SUCCESS"
+
+    # nonsensitive() AN TOÀN: giá trị là enum trạng thái (SUCCESS/FAILED) do
+    # migration script tự ghi — KHÔNG phải secret. Provider đánh dấu mọi
+    # SSM data source value là sensitive bất kể type thực tế.
+    # Error message phải actionable: on-call đọc xong biết ngay bước tiếp theo.
+    error_message = "🛑 BLOCKED: Migration status = '${nonsensitive(data.aws_ssm_parameter.migration_status.value)}' (expected: SUCCESS). Remediate: cd terraform/control-plane/lab && terraform apply -replace='module.bootstrap_migration.null_resource.run_migration' — chi tiết: docs/ADR-019_migration_orchestration.md"
   }
 }
