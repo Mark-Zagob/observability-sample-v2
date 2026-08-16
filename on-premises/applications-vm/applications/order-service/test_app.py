@@ -242,7 +242,19 @@ class TestProcessOrder:
         assert 'trace_id' in data  # RFC 7807 includes trace_id for correlation
 
 @pytest.fixture
-def client():
+def plain_client():
+    """Flask test client KHÔNG mock OTel/DB/Redis/Kafka — dùng riêng cho
+    2 SRE contract test bên dưới (chúng tự patch app.requests.post,
+    app.db.execute, app.cache.get trực tiếp qua module `app` gốc).
+
+    LƯU Ý: KHÔNG được đặt tên trùng `client` với fixture ở đầu file —
+    Python module chỉ giữ định nghĩa cuối cùng cho cùng 1 tên, nên nếu
+    trùng tên, fixture `client` (có mock OTel/DB/Redis/Kafka, yield tuple
+    (test_client, app_module)) ở đầu file sẽ bị ghi đè hoàn toàn, khiến
+    mọi test dùng `client` ở các class phía trên nhận nhầm object này
+    (yield trực tiếp, không phải tuple) và crash với TypeError khi
+    unpack "test_client, _ = client".
+    """
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
@@ -254,7 +266,7 @@ def client():
 @patch('app.requests.post')
 @patch('app.db.execute')
 @patch('app.cache.get')
-def test_payment_timeout_must_return_502_bad_gateway(mock_cache_get, mock_db_execute, mock_requests_post, client):
+def test_payment_timeout_must_return_502_bad_gateway(mock_cache_get, mock_db_execute, mock_requests_post, plain_client):
     """
     [Infra Failure] Khi Payment Service timeout (infra failure), 
     Order Service PHẢI trả về 502 Bad Gateway, TUYỆT ĐỐI KHÔNG ĐƯỢC là 200 OK.
@@ -267,7 +279,7 @@ def test_payment_timeout_must_return_502_bad_gateway(mock_cache_get, mock_db_exe
     mock_requests_post.side_effect = Exception("Connection timeout")
 
     # Execute
-    response = client.post('/process', json={"product_id": 1, "quantity": 1})
+    response = plain_client.post('/process', json={"product_id": 1, "quantity": 1})
 
     # Assert HTTP Semantic
     assert response.status_code == 502, \
@@ -281,7 +293,7 @@ def test_payment_timeout_must_return_502_bad_gateway(mock_cache_get, mock_db_exe
 @patch('app.requests.post')
 @patch('app.db.execute')
 @patch('app.cache.get')
-def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_db_execute, mock_requests_post, client):
+def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_db_execute, mock_requests_post, plain_client):
     """
     [Business Failure] Khi Payment Gateway từ chối giao dịch (business failure), 
     Order Service PHẢI trả về 402 Payment Required.
@@ -295,7 +307,7 @@ def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_
     mock_response.json.return_value = {"status": "failed", "error": "insufficient_funds"}
     mock_requests_post.return_value = mock_response
 
-    response = client.post('/process', json={"product_id": 1, "quantity": 1})
+    response = plain_client.post('/process', json={"product_id": 1, "quantity": 1})
 
     assert response.status_code == 402, \
         "🚨 Business failure must return 4xx (402 Payment Required), not 5xx or 200."
