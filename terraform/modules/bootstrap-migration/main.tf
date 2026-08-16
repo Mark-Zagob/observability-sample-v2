@@ -154,10 +154,17 @@ resource "null_resource" "run_migration" {
       fi
 
       # SSM Gate: signal success to Data Plane
-      aws ssm put-parameter \
-        --name "/${var.project_name}/${var.environment}/migration/status" \
-        --value "SUCCESS" --type "String" --overwrite \
-        --region ${var.aws_region}
+      #
+      # THỨ TỰ QUAN TRỌNG: ghi metadata phụ (schema_version, last_success)
+      # TRƯỚC, ghi "status=SUCCESS" (gate marker mà Data Plane thực sự dựa
+      # vào) SAU CÙNG. Nếu ghi metadata phụ fail (transient SSM error),
+      # script dừng ở đây với set -e/trap ERR TRƯỚC KHI status kịp
+      # chuyển thành SUCCESS — không cần dựa vào trap ERR overwrite lại
+      # FAILED (điều này chỉ tình cờ đúng nếu bản thân lệnh ghi FAILED
+      # trong trap cũng không bị fail do cùng nguyên nhân transient).
+      # Ngược lại (SUCCESS ghi trước như cũ): nếu ghi schema_version/
+      # last_success fail VÀ lệnh ghi FAILED trong trap cũng fail (outage
+      # kép), status bị kẹt ở SUCCESS sai lệch dù metadata chưa đầy đủ.
       aws ssm put-parameter \
         --name "/${var.project_name}/${var.environment}/migration/schema_version" \
         --value "2.1.0" --type "String" --overwrite \
@@ -165,6 +172,10 @@ resource "null_resource" "run_migration" {
       aws ssm put-parameter \
         --name "/${var.project_name}/${var.environment}/migration/last_success" \
         --value "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --type "String" --overwrite \
+        --region ${var.aws_region}
+      aws ssm put-parameter \
+        --name "/${var.project_name}/${var.environment}/migration/status" \
+        --value "SUCCESS" --type "String" --overwrite \
         --region ${var.aws_region}
 
       echo "✅ Migration completed successfully"
