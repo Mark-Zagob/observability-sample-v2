@@ -231,8 +231,8 @@ resource "aws_iam_role_policy" "cloudwatch_read" {
           "logs:FilterLogEvents"
         ]
         Resource = [
-          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/*",
-          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/*:*"
+            "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*",
+            "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*:*"
         ]
       },
       {
