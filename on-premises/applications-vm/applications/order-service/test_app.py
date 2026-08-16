@@ -59,6 +59,19 @@ class TestParseDbUrl:
         assert result['port'] == 5433
         assert result['dbname'] == 'orders_prod'
 
+    def test_parse_url_with_sslmode_query(self):
+        """AWS RDS URL có ?sslmode=require — dbname KHÔNG được nuốt query string.
+
+        Regression: trước đây parse_db_url trả dbname='orders?sslmode=require'
+        → PostgreSQL báo 'database "orders?sslmode=require" does not exist'.
+        """
+        from shared.db_utils import parse_db_url
+        # secretlint-disable-next-line
+        result = parse_db_url("postgresql://app:pw@db.rds.amazonaws.com:5432/orders?sslmode=require")
+        assert result['dbname'] == 'orders'
+        assert result['sslmode'] == 'require'
+        assert result['port'] == 5432
+
 
 # ============================================================
 # Test /health endpoints

@@ -51,17 +51,40 @@ def retry_connect(name, connect_fn, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
 
 
 def parse_db_url(url):
-    """Parse postgresql://user:pass@host:port/dbname into dict."""
+    """Parse postgresql://user:pass@host:port/dbname[?param=value...] into dict.
+
+    Query-string params (VD sslmode=require) được tách ra và trả về như
+    psycopg2 connection keywords. Nếu KHÔNG tách ở đây, phần
+    "?sslmode=require" bị nuốt vào dbname → PostgreSQL báo lỗi
+    'database "orders?sslmode=require" does not exist'.
+    """
     url = url.replace("postgresql://", "")
     userpass, hostdb = url.split("@")
     # maxsplit=1: password từ AWS Secrets Manager thường chứa ":" (VD: "p@ss:w0rd!")
     user, password = userpass.split(":", 1)
-    hostport, dbname = hostdb.split("/")
+    # maxsplit=1: dbname + query string tách riêng bên dưới
+    hostport, path = hostdb.split("/", 1)
     host, port = hostport.split(":")
-    return {
+
+    # Tách query string (?sslmode=require&...) khỏi dbname
+    extra_params = {}
+    if "?" in path:
+        dbname, query = path.split("?", 1)
+        for pair in query.split("&"):
+            if not pair:
+                continue
+            key, _, value = pair.partition("=")
+            extra_params[key] = value
+    else:
+        dbname = path
+
+    result = {
         "user": user, "password": password,
         "host": host, "port": int(port), "dbname": dbname,
     }
+    # sslmode, connect_timeout, ... → truyền thẳng làm psycopg2 kwargs
+    result.update(extra_params)
+    return result
 
 
 # ----------------------------------------------------------
