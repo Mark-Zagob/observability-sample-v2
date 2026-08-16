@@ -1056,7 +1056,7 @@
       "targets": [
         {
           "queryType": "getTraceSummaries",
-          "query": "service(id(name: \"order-service\")) OR service(id(name: \"payment-service\")) { http.status_code >= 500 OR rootcause { status_code >= 500 } }",
+          "query": "(service(\"order-service\") OR service(\"payment-service\")) AND (fault = true OR http.status >= 500)",
           "region": "default",
           "size": 10,
           "refId": "A"

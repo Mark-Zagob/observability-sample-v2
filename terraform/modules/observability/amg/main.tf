@@ -74,25 +74,118 @@ resource "aws_grafana_workspace" "this" {
 # 1b. Plugin Install — X-Ray (CUSTOMER_MANAGED workaround)
 #--------------------------------------------------------------
 # CUSTOMER_MANAGED + data_sources = ["XRAY"] khai báo intent nhưng
-# KHÔNG auto-install plugin. Phải gọi AWS API để install explicitly.
-# Dùng terraform_data (built-in) thay vì null_resource (cần provider).
-resource "terraform_data" "install_xray_plugin" {
-  depends_on = [aws_grafana_workspace.this]
+# KHÔNG auto-install plugin. AWS CLI cũng KHÔNG có `aws grafana
+# install-plugin` — danh sách subcommand duy nhất là: create/
+# describe/update/delete workspace + service-account + api-key +
+# license + tags + versions + permissions. Để install plugin phải
+# gọi trực tiếp Grafana HTTP API (POST /api/plugins/<id>/install)
+# với Bearer token của service account, sau khi đã bật
+# pluginAdminEnabled = true trên workspace configuration.
+#
+# Thứ tự bắt buộc (nếu sai sẽ tái diễn bug "Datasource not found"):
+#   1. Workspace ACTIVE
+#   2. Service account token đã tạo (để có Bearer)
+#   3. update-workspace-configuration pluginAdminEnabled=true
+#   4. workspace trở lại ACTIVE (updating mất 1-2 phút)
+#   5. POST /api/plugins/grafana-x-ray-datasource/install
+#   6. verify /api/plugins/<id>/settings trả signature=valid
+#   7. SSM export endpoint + token (lab-grafana sẽ đọc để tạo datasource)
+#
+# Không đảo thứ tự 5→7: nếu SSM được export trước khi plugin
+# install xong, lab-grafana có thể apply song song, tạo datasource
+# trỏ tới plugin chưa tồn tại → Grafana lưu stub với typeLogoUrl
+# generic → panel query bị bind sai backend. Depends_on trên
+# SSM params thực thi ordering này.
 
-  # Chỉ re-run khi workspace bị recreate (destroy/apply cycle)
-  triggers_replace = [aws_grafana_workspace.this.id]
+resource "terraform_data" "install_xray_plugin" {
+  depends_on = [
+    aws_grafana_workspace.this,
+    aws_grafana_workspace_service_account_token.terraform,
+  ]
+
+  # Chỉ replace khi workspace bị recreate. Các apply thông thường
+  # bỏ qua step này — tránh 1-2 phút workspace UPDATING mỗi lần plan.
+  # Khi cần force re-install (VD sau khi token rotate và nghi ngờ
+  # plugin bị corrupt), taint thủ công:
+  #   terraform taint 'module.amg.terraform_data.install_xray_plugin'
+  triggers_replace = [
+    aws_grafana_workspace.this.id,
+  ]
 
   provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      WORKSPACE_ID       = aws_grafana_workspace.this.id
+      WORKSPACE_ENDPOINT = aws_grafana_workspace.this.endpoint
+      GRAFANA_TOKEN      = aws_grafana_workspace_service_account_token.terraform.key
+      REGION             = var.aws_region
+      PLUGIN_ID          = "grafana-x-ray-datasource"
+    }
     command = <<-EOT
-      echo "Installing X-Ray plugin in AMG workspace ${aws_grafana_workspace.this.id}..."
-      # Enable plugin admin (nếu chưa)
+      set -euo pipefail
+
+      echo "[install_xray_plugin] 1/4: enabling pluginAdminEnabled on workspace $WORKSPACE_ID"
       aws grafana update-workspace-configuration \
-        --workspace-id "${aws_grafana_workspace.this.id}" \
-        --plugin-admin-enabled \
-        --region "${var.aws_region}" 2>/dev/null || true
-      # Đợi workspace ổn định
-      sleep 5
-      echo "X-Ray plugin install complete."
+        --workspace-id "$WORKSPACE_ID" \
+        --configuration '{"plugins":{"pluginAdminEnabled":true}}' \
+        --region "$REGION" > /dev/null
+
+      echo "[install_xray_plugin] 2/4: waiting for workspace ACTIVE (max 10 min)"
+      STATUS=""
+      for i in $(seq 1 60); do
+        STATUS=$(aws grafana describe-workspace \
+          --workspace-id "$WORKSPACE_ID" \
+          --region "$REGION" \
+          --query 'workspace.status' --output text)
+        if [ "$STATUS" = "ACTIVE" ]; then
+          break
+        fi
+        echo "  status=$STATUS (attempt $i/60) — sleeping 10s"
+        sleep 10
+      done
+      if [ "$STATUS" != "ACTIVE" ]; then
+        echo "ERROR: workspace did not become ACTIVE (last status: $STATUS)"
+        exit 1
+      fi
+
+      echo "[install_xray_plugin] 3/4: installing $PLUGIN_ID via Grafana HTTP API"
+      # Idempotent: nếu plugin đã install, endpoint trả HTTP 200/409.
+      HTTP_CODE=$(curl -sS -o /tmp/xray-install-resp.json -w "%%{http_code}" \
+        -X POST \
+        -H "Authorization: Bearer $GRAFANA_TOKEN" \
+        -H "Content-Type: application/json" \
+        "https://$WORKSPACE_ENDPOINT/api/plugins/$PLUGIN_ID/install" \
+        -d '{}')
+      case "$HTTP_CODE" in
+        200|201|409)
+          echo "  install accepted (HTTP $HTTP_CODE)"
+          ;;
+        *)
+          echo "ERROR: install failed (HTTP $HTTP_CODE):"
+          cat /tmp/xray-install-resp.json || true
+          exit 1
+          ;;
+      esac
+
+      echo "[install_xray_plugin] 4/4: verifying plugin signature=valid (max 30s)"
+      SIG=""
+      for i in $(seq 1 10); do
+        SIG=$(curl -sS \
+          -H "Authorization: Bearer $GRAFANA_TOKEN" \
+          "https://$WORKSPACE_ENDPOINT/api/plugins/$PLUGIN_ID/settings" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin).get('signature',''))" 2>/dev/null || echo "")
+        if [ "$SIG" = "valid" ]; then
+          break
+        fi
+        echo "  signature='$SIG' (attempt $i/10) — sleeping 3s"
+        sleep 3
+      done
+      if [ "$SIG" != "valid" ]; then
+        echo "ERROR: plugin signature never became valid (last: '$SIG')"
+        exit 1
+      fi
+
+      echo "[install_xray_plugin] done — $PLUGIN_ID installed & verified."
     EOT
   }
 }
@@ -306,6 +399,12 @@ resource "aws_ssm_parameter" "workspace_id" {
 }
 
 resource "aws_ssm_parameter" "endpoint" {
+  # depends_on: không để lab-grafana đọc được endpoint trước khi
+  # plugin X-Ray đã install và verify — xem note ở terraform_data
+  # .install_xray_plugin. Ordering này ngăn lần first apply tạo
+  # grafana_data_source.xray bị bind stub (typeLogoUrl generic).
+  depends_on = [terraform_data.install_xray_plugin]
+
   name  = "/${var.project_name}/${var.environment}/observability/amg_endpoint"
   type  = "String"
   value = aws_grafana_workspace.this.endpoint
@@ -313,6 +412,12 @@ resource "aws_ssm_parameter" "endpoint" {
 }
 
 resource "aws_ssm_parameter" "service_account_token" {
+  # depends_on: xem note tại aws_ssm_parameter.endpoint. Token là
+  # trục auth cho provider "grafana" ở lab-grafana — nếu SSM param
+  # xuất hiện trước khi plugin install, lab-grafana có thể apply
+  # song song và tạo datasource bị bind sai backend.
+  depends_on = [terraform_data.install_xray_plugin]
+
   name   = "/${var.project_name}/${var.environment}/observability/amg_service_account_token"
   type   = "SecureString"
   value  = aws_grafana_workspace_service_account_token.terraform.key
