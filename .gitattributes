@@ -1,0 +1,49 @@
+# .gitattributes — enforce line endings across Windows / Linux / macOS
+#
+# Purpose: các file có nội dung shell script (embedded qua heredoc trong
+# Terraform, hoặc file .sh trực tiếp) BUỘC dùng LF. Nếu Windows checkout
+# về CRLF, bash trên Linux sẽ thấy `\r` cuối mỗi dòng script và fail với
+# lỗi kiểu:
+#   bash: line 8: $'\r': command not found
+#   set: -: invalid option
+#
+# `text=auto eol=lf` áp cho toàn workspace, sau đó whitelist các loại
+# binary hoặc file bắt buộc CRLF (VD .bat, .cmd trên Windows).
+
+# ---- Mặc định: normalize về LF khi checkout ------------------------
+*                    text=auto eol=lf
+
+# ---- Ngôn ngữ code (bắt buộc LF, nhất là file có heredoc shell) ----
+*.tf                 text eol=lf
+*.tftpl              text eol=lf
+*.tfvars             text eol=lf
+*.hcl                text eol=lf
+*.sh                 text eol=lf
+*.bash               text eol=lf
+*.py                 text eol=lf
+*.rego               text eol=lf
+*.yaml               text eol=lf
+*.yml                text eol=lf
+*.json               text eol=lf
+*.md                 text eol=lf
+Dockerfile           text eol=lf
+Dockerfile.*         text eol=lf
+Makefile             text eol=lf
+*.sql                text eol=lf
+
+# ---- Windows-only files: giữ CRLF -----------------------------------
+*.bat                text eol=crlf
+*.cmd                text eol=crlf
+*.ps1                text eol=crlf
+
+# ---- Binary (không convert) ----------------------------------------
+*.png                binary
+*.jpg                binary
+*.jpeg               binary
+*.gif                binary
+*.ico                binary
+*.pdf                binary
+*.zip                binary
+*.tar                binary
+*.gz                 binary
+*.tgz                binary

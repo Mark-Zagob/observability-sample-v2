@@ -95,7 +95,12 @@ resource "null_resource" "run_migration" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    # BẮT BUỘC: script dùng `trap '...' ERR` — feature bash-only, dash
+    # (mặc định /bin/sh trên Ubuntu) không có → báo "trap: ERR: bad trap"
+    # và fail ngay dòng đầu tiên. interpreter buộc dùng bash để có ERR trap
+    # cùng với set -e semantics chuẩn.
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
       set -e
 
       # Safety net: any unhandled error (e.g. run-task API fail, network timeout)
