@@ -122,7 +122,13 @@ resource "terraform_data" "install_xray_plugin" {
       PLUGIN_ID          = "grafana-x-ray-datasource"
     }
     command = <<-EOT
-      set -euo pipefail
+      # KHÔNG dùng "set -euo pipefail" dạng gộp — một số bash version
+      # (BusyBox, POSIX-mode, bash 2.x) parse "pipefail" như tên option
+      # độc lập của `-o` → fail "invalid option name".
+      # Split riêng tránh lỗi, bỏ pipefail vì pipe duy nhất ở bước 4
+      # (curl | python3) đã có `2>/dev/null || echo ""` bảo vệ.
+      set -e
+      set -u
 
       echo "[install_xray_plugin] 1/4: enabling pluginAdminEnabled on workspace $WORKSPACE_ID"
       aws grafana update-workspace-configuration \

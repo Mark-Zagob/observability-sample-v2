@@ -21,10 +21,15 @@ resource "random_password" "app_user" {
 }
 
 resource "aws_secretsmanager_secret" "app_user" {
-  name                    = "${var.project_name}/${var.environment}/database/app-user"
-  description             = "DML-only application user for ${local.identifier}"
-  kms_key_id              = aws_kms_key.rds.arn
-  recovery_window_in_days = var.environment == "prod" ? 30 : 7
+  name        = "${var.project_name}/${var.environment}/database/app-user"
+  description = "DML-only application user for ${local.identifier}"
+  kms_key_id  = aws_kms_key.rds.arn
+  # Prod: 30 ngày recovery (chuẩn compliance).
+  # Non-prod: 0 = hard-delete ngay khi terraform destroy — tránh block
+  # apply lại trong vòng 7 ngày với lỗi "already scheduled for deletion".
+  # (Mặc định AWS là 7-30 ngày; 0 là giá trị đặc biệt rừ bắt buộc
+  # để hard-delete). Khớp với contract test cho db_master_password.
+  recovery_window_in_days = var.environment == "prod" ? 30 : 0
 
   tags = merge(var.common_tags, {
     Name      = "${local.identifier}-app-user-secret"
