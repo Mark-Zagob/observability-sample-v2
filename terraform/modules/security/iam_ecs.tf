@@ -233,8 +233,7 @@ resource "aws_iam_role_policy" "ecs_task_base" {
           "logs:DescribeLogStreams"
         ]
         Resource = [
-          "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*",
-          "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*:log-stream:*"
+          "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:/ecs/${var.project_name}/*"
         ]
       },
       {

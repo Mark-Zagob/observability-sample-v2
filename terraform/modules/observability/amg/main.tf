@@ -330,8 +330,8 @@ resource "aws_iam_role_policy" "cloudwatch_read" {
           "logs:FilterLogEvents"
         ]
         Resource = [
-            "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*",
-            "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*:*"
+          # Match MỌI log group bắt đầu bằng /ecs/${var.project_name}/ (kể cả .../otel và log-stream:*)
+          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*"
         ]
       },
       {

@@ -402,37 +402,41 @@
       },
       "targets": [
         {
+          "refId": "A",
           "queryMode": "Metrics",
           "namespace": "AWS/ECS",
           "metricName": "RunningTaskCount",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "label": "Order - Running"
         },
         {
+          "refId": "B",
           "queryMode": "Metrics",
           "namespace": "AWS/ECS",
           "metricName": "DesiredTaskCount",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "label": "Order - Desired"
         },
         {
+          "refId": "C",
           "queryMode": "Metrics",
           "namespace": "AWS/ECS",
           "metricName": "RunningTaskCount",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "label": "Payment - Running"
         },
         {
+          "refId": "D",
           "queryMode": "Metrics",
           "namespace": "AWS/ECS",
           "metricName": "DesiredTaskCount",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "label": "Payment - Desired"
@@ -478,10 +482,11 @@
         }
       },
       "targets": [{
+        "refId": "A",
         "queryMode": "Metrics",
         "namespace": "ObsLab/TelemetryPipeline",
         "metricName": "otelcol_processor_dropped_spans",
-        "dimensions": { "service_name": "order-service" },
+        "dimensions": { "service_name": ["order-service"] },
         "statistics": ["Sum"],
         "period": "60",
         "label": "Dropped Spans (real count)"
@@ -504,19 +509,21 @@
       },
       "targets": [
         {
+          "refId": "A",
           "queryMode": "Metrics",
           "namespace": "ObsLab/TelemetryPipeline",
           "metricName": "otelcol_exporter_send_failed_spans",
-          "dimensions": { "service_name": "order-service" },
+          "dimensions": { "service_name": ["order-service"] },
           "statistics": ["Sum"],
           "period": "60",
           "label": "Failed Spans"
         },
         {
+          "refId": "B",
           "queryMode": "Metrics",
           "namespace": "ObsLab/TelemetryPipeline",
           "metricName": "otelcol_exporter_send_failed_metric_points",
-          "dimensions": { "service_name": "order-service" },
+          "dimensions": { "service_name": ["order-service"] },
           "statistics": ["Sum"],
           "period": "60",
           "label": "Failed Metrics"
@@ -555,7 +562,7 @@
           "queryMode": "Metrics",
           "namespace": "ObsLab/TelemetryPipeline",
           "metricName": "otelcol_processor_dropped_spans",
-          "dimensions": {},
+          "dimensions": { "service_name": ["order-service"] },
           "statistics": ["Sum"],
           "period": "60",
           "refId": "dropped",
@@ -566,7 +573,7 @@
           "queryMode": "Metrics",
           "namespace": "ObsLab/TelemetryPipeline",
           "metricName": "otelcol_receiver_accepted_spans",
-          "dimensions": {},
+          "dimensions": { "service_name": ["order-service"] },
           "statistics": ["Sum"],
           "period": "60",
           "refId": "accepted",
@@ -641,7 +648,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuUtilized",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "cpu_used",
@@ -652,7 +659,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuReserved",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "cpu_reserved",
@@ -693,7 +700,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "MemoryUtilized",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "mem_used",
@@ -704,7 +711,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "MemoryReserved",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "order-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["order-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "mem_reserved",
@@ -735,7 +742,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuUtilized",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "cpu_used",
@@ -746,7 +753,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "CpuReserved",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "cpu_reserved",
@@ -787,7 +794,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "MemoryUtilized",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "mem_used",
@@ -798,7 +805,7 @@
           "queryMode": "Metrics",
           "namespace": "ECS/ContainerInsights",
           "metricName": "MemoryReserved",
-          "dimensions": { "ClusterName": "obs-cluster", "ServiceName": "payment-service" },
+          "dimensions": { "ClusterName": ["obs-cluster"], "ServiceName": ["payment-service"] },
           "statistics": ["Average"],
           "period": "60",
           "refId": "mem_reserved",
@@ -894,10 +901,10 @@
           "namespace": "AWS/Usage",
           "metricName": "ResourceCount",
           "dimensions": {
-            "Resource": "${amp_workspace_id}",
-            "Type": "ActiveSeries",
-            "Class": "None",
-            "Service": "Prometheus"
+            "Resource": ["${amp_workspace_id}"],
+            "Type": ["ActiveSeries"],
+            "Class": ["None"],
+            "Service": ["Prometheus"]
           },
           "statistics": ["Average"],
           "period": "60",
@@ -942,10 +949,10 @@
           "namespace": "AWS/Usage",
           "metricName": "ResourceCount",
           "dimensions": {
-            "Resource": "${amp_workspace_id}",
-            "Type": "ActiveSeries",
-            "Class": "None",
-            "Service": "Prometheus"
+            "Resource": ["${amp_workspace_id}"],
+            "Type": ["ActiveSeries"],
+            "Class": ["None"],
+            "Service": ["Prometheus"]
           },
           "statistics": ["Average"],
           "period": "60",
@@ -974,13 +981,13 @@
       "gridPos": { "h": 12, "w": 12, "x": 0, "y": 122 },
       "id": 601,
       "title": "📋 Live App Logs (CloudWatch Logs Insights)",
-      "description": "Structured JSON logs from Order + Payment services.\n\n• Auto-filter: chỉ hiện ERROR/CRITICAL/Exception\n• Click vào trace_id để jump sang X-Ray trace (cần setup data link)\n• Sort theo timestamp giảm dần (mới nhất ở trên)\n\nDùng để debug khi metrics cho thấy spike error nhưng không biết root cause.",
+      "description": "Structured JSON logs from Order + Payment services.\n\n• Auto-filter: chỉ hiện ERROR/CRITICAL/Exception\n• Click vào otelTraceID để jump sang X-Ray trace (cần setup data link)\n• Sort theo timestamp giảm dần (mới nhất ở trên)\n\nDùng để debug khi metrics cho thấy spike error nhưng không biết root cause.",
       "type": "logs",
       "fieldConfig": {
         "defaults": {},
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "trace_id" },
+            "matcher": { "id": "byName", "options": "otelTraceID" },
             "properties": [
               {
                 "id": "links",
@@ -1014,7 +1021,7 @@
             "/ecs/obs/order-service",
             "/ecs/obs/payment-service"
           ],
-          "query": "fields @timestamp, @message, service_name, level, trace_id\n| filter level like /$${log_level}/\n| sort @timestamp desc\n| limit 50",
+          "query": "fields @timestamp, @message, name, level, otelTraceID\n| filter level like /$${log_level}/\n| sort @timestamp desc\n| limit 50",
           "region": "default",
           "statsGroups": [],
           "refId": "A"
