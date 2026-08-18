@@ -316,23 +316,31 @@ resource "aws_iam_role_policy" "cloudwatch_read" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # 1. Actions that SUPPORT resource-level permissions — scoped to project log groups
       {
-        Sid    = "AllowCloudWatchLogsRead"
+        Sid    = "AllowCloudWatchLogsReadResourceLevel"
         Effect = "Allow"
         Action = [
           "logs:DescribeLogGroups",
           "logs:DescribeLogStreams",
           "logs:GetLogGroupFields",
-          "logs:StartQuery",
-          "logs:StopQuery",
-          "logs:GetQueryResults",
           "logs:GetLogEvents",
           "logs:FilterLogEvents"
         ]
         Resource = [
-          # Match MỌI log group bắt đầu bằng /ecs/${var.project_name}/ (kể cả .../otel và log-stream:*)
           "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/ecs/${var.project_name}/*"
         ]
+      },
+      # 2. Actions that DO NOT support resource-level permissions (must be "*")
+      {
+        Sid    = "AllowCloudWatchLogsQueryGlobal"
+        Effect = "Allow"
+        Action = [
+          "logs:StartQuery",
+          "logs:StopQuery",
+          "logs:GetQueryResults"
+        ]
+        Resource = ["*"]
       },
       {
         Sid    = "AllowCloudWatchMetricsRead"
@@ -382,7 +390,7 @@ resource "time_rotating" "grafana_token" {
 }
 
 resource "aws_grafana_workspace_service_account_token" "terraform" {
-  name               = "terraform-token"
+  name = "terraform-token"
   # ⚠️ .id trả về composite "workspace-id/sa-id" → fail pattern ^[a-zA-Z0-9]+$
   # Phải dùng .service_account_id (chỉ phần numeric ID).
   service_account_id = aws_grafana_workspace_service_account.terraform.service_account_id

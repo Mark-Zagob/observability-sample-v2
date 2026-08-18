@@ -27,8 +27,8 @@ resource "grafana_data_source" "prometheus" {
   basic_auth_enabled = false
 
   json_data_encoded = jsonencode({
-    httpMethod    = "POST"
-    sigV4Auth     = true
+    httpMethod = "POST"
+    sigV4Auth  = true
     # "default" = dùng IAM execution role của AMG workspace (không phải "workspace-iam-role" — đó là UI label)
     sigV4AuthType = "default"
     sigV4Region   = var.aws_region
@@ -56,9 +56,9 @@ resource "grafana_data_source" "xray" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    # ec2_iam_role = dùng workspace IAM role (CUSTOMER_MANAGED mode).
-    # "default" cũng hoạt động trên AMG nhưng ec2_iam_role explicit hơn.
-    authType      = "ec2_iam_role"
+    # "default" = AWS SDK DefaultCredentialsProviderChain.
+    # AMG injects workspace IAM role credentials via env vars — chain reads them automatically.
+    authType = "default"
   })
 }
 
@@ -73,8 +73,8 @@ resource "grafana_data_source" "cloudwatch" {
 
   json_data_encoded = jsonencode({
     defaultRegion = var.aws_region
-    # ec2_iam_role = dùng workspace IAM role (CUSTOMER_MANAGED mode).
-    authType      = "ec2_iam_role"
+    # "default" = AWS SDK DefaultCredentialsProviderChain (same as X-Ray above).
+    authType = "default"
   })
 }
 
