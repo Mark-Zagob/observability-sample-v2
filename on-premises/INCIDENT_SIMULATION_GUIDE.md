@@ -809,7 +809,7 @@ Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Inci
 
 ---
 
-🧪 Experiment 3: Kafka Consumer Lag & The Rebalance Trap (Manual Commit Edition)
+## 🧪 Experiment 3: Kafka Consumer Lag & The Rebalance Trap (Manual Commit Edition)
 
 📖 Runbook:[RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
 
