@@ -809,163 +809,48 @@ Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Inci
 
 ---
 
-## 🧪 Experiment 3: Kafka Consumer Lag & The Rebalance Trap (Manual Commit Edition)
+🧪 Experiment 3: Kafka Consumer Lag & The Rebalance Trap (Manual Commit Edition)
 
-📖 **Runbook:** [RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
+📖 Runbook:[RB-16 ConsumerLagHigh](INCIDENT_RUNBOOK.md#-rb-16-kafkaconsumerlaghigh-lag--100) • [RB-17 ConsumerLagCritical](INCIDENT_RUNBOOK.md#-rb-17-kafkaconsumerlagcritical-lag--1000) • [RB-18 ConsumerGroupDown](INCIDENT_RUNBOOK.md#-rb-18-kafkaconsumergroupdown)
 
-🎯 **Mục tiêu:**
+🎯 Mục tiêu:
 - Hiểu Consumer Lag là Leading Indicator quan trọng nhất của Event-Driven Architecture
-- Chứng kiến **The Rebalance Trap** — cơn ác mộng "Stop-the-World" khi worker bị đá khỏi Consumer Group
-- Quan sát Manual Commit failure khi worker không còn trong group → At-Least-Once delivery in action
-- Xác nhận Idempotency Table bảo vệ hệ thống khỏi duplicate processing
+- Chứng kiến The Rebalance Trap — cơn ác mộng "Stop-the-World" khi worker bị đá khỏi Consumer Group
+- Quan sát Manual Commit failure khi worker không còn trong group → At-Least-Once Delivery in action
+- Xác nhận Idempotency Table (`processed_events`) bảo vệ hệ thống khỏi duplicate processing
+- Hiểu cách SRE Architect thiết kế Guardrails qua Env Vars mà không cần sửa code Dev
 
----
+💡 SRE Deep-Dive: "The Three Timers & The Commit Contract" (Đọc trước khi làm)
 
-### 💡 SRE Deep-Dive: "The Three Timers" *(Đọc trước khi làm)*
-
-Trong Kafka Consumer, có 3 timers quan trọng quyết định hành vi khi worker gặp sự cố:
+**A. Ba timers quyết định hành vi Consumer khi gặp sự cố:**
 
 | Timer | Giá trị trong codebase | Ý nghĩa |
 |---|---|---|
-| `heartbeat.interval.ms` | 15000ms (notification-worker) | Mỗi 15s, worker gửi heartbeat tới Coordinator |
-| `session.timeout.ms` | 45000ms (env: `KAFKA_SESSION_TIMEOUT`) | Nếu 45s không nhận heartbeat → Coordinator tuyên bố worker "chết" |
-| `max.poll.interval.ms` | 300000ms (5 phút) | Nếu 5 phút không gọi `poll()` → worker bị kick (khác với session timeout) |
+| `heartbeat.interval.ms` | 15000ms (notification-worker) / 10000ms (inventory-worker) | Chu kỳ gửi heartbeat tới Group Coordinator |
+| `session.timeout.ms` | 45000ms (env: `KAFKA_SESSION_TIMEOUT`) | Nếu quá 45s không nhận heartbeat → Coordinator tuyên bố worker "chết" |
+| `max.poll.interval.ms` | 300000ms (5 phút) | Nếu quá 5 phút không gọi `poll()` → worker bị kick (khác cơ chế với session timeout) |
 
-> **Quy tắc vàng:** `heartbeat.interval.ms` PHẢI < 1/3 `session.timeout.ms`
-> → 15000 < 45000/3 = 15000 ✓ (đúng bằng 1/3, an toàn)
+Quy tắc vàng: `heartbeat.interval.ms` PHẢI ≤ 1/3 `session.timeout.ms`
+→ notification-worker: 15000 ≤ 45000/3 = 15000 ✓ (đúng bằng ngưỡng, an toàn tối thiểu)
+→ inventory-worker: 10000 < 45000/3 = 15000 ✓ (an toàn, có buffer)
 
-**Khi bạn chạy `docker pause`:**
-- Container KHÔNG bị stop (vẫn báo cáo `Up` trong `docker ps`)
-- Nhưng process Python bên trong bị đóng băng (`SIGSTOP`)
-- Heartbeat thread cũng freeze → Coordinator không nhận heartbeat
-- Sau 45s → Coordinator đá worker ra khỏi group → Rebalance triggered
-- Khi unpause → worker tỉnh dậy → cố commit offset → **BỊ TỪ CHỐI** vì không còn trong group
-- Message sẽ được re-deliver → Idempotency Table chặn duplicate
+**B. Manual Commit Contract (đã implement trong codebase):**
 
-Đây chính là **At-Least-Once Delivery Guarantee** — nền tảng của Event-Driven Architecture.
-
----
-
-### Phase 1: Baseline (Tạo steady state & Ghi nhận)
-
-Đảm bảo không có alert nào đang firing. Chạy traffic nhẹ để warm-up pipeline:
-
-```bash
-curl -X POST http://localhost:5003/start \
-  -H "Content-Type: application/json" \
-  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
-```
-
-Mở **Grafana → Kafka Overview Dashboard** (`/d/kafka-event-driven`), ghi nhận:
-
-| Panel trên Dashboard | Metric cần ghi | Giá trị Baseline |
-|---|---|---|
-| Kafka Cluster Overview → **Messages In (per second)** | order.events produce rate | ~2 msg/s |
-| Consumer Group Lag → **Consumer Group Lag** | notification-workers lag | 0–5 messages |
-| Consumer Group Lag → **Consumer Group Lag** | inventory-workers lag | 0–5 messages |
-| SRE Deep-Dive → **Consumer Group Members (The Rebalance Detector)** | notification-workers members | 1 (Active) |
-| SRE Deep-Dive → **Net Lag Growth Rate** | Net Lag Growth (msg/s) | ~0 (balanced) |
-| Notification Worker → **Events Consumed** | consume rate | ~2 msg/s |
-| Notification Worker → **Notification Processing Duration (P95)** | P95 | ~200ms |
-
-> ⚠️ **Quan trọng:** Ghi nhận panel **"Consumer Group Members"** = 1. Đây là panel quan trọng nhất cho experiment này.
-
----
-
-### Phase 2: Inject Failure (Sử dụng Chaos Orchestrator)
-
-Tạo file `scripts/inject_kafka_freeze.sh` trên Applications VM:
-
-```bash
-#!/bin/bash
-# ============================================================
-# Chaos Orchestrator: Kafka Consumer Freeze & Rebalance Trap
-# Simulates: VM freeze / Network partition / GC pause
-# ============================================================
-
-echo "🚀 [1/4] Starting Flash Sale Traffic (10 req/s) to fill the pipeline..."
-curl -s -X POST http://localhost:5003/start \
-  -H "Content-Type: application/json" \
-  -d '{"scenario": "flash_sale", "rate": 10, "duration": 420}' > /dev/null &
-
-echo "⏳ [2/4] Waiting 5s for traffic to stabilize & Kafka to flow..."
-sleep 5
-
-echo "🧊 [3/4] FREEZING Notification Worker (SIGSTOP) for 6 minutes..."
-echo "   💡 SRE Note: Watch 'Consumer Group Members' panel — it will drop to 0"
-echo "   💡 after session.timeout.ms (45s) expires!"
-docker pause notification-worker
-
-echo "✅ Injection complete. Worker is frozen."
-echo ""
-echo "📊 OBSERVATION CHECKLIST:"
-echo "   T+0s:   Lag bắt đầu tăng (worker không consume)"
-echo "   T+45s:  Consumer Group Members → 0 (session timeout!)"
-echo "   T+300s: KafkaConsumerLagHigh alert firing (for: 5m)"
-echo ""
-echo "⏱️  Run this to unfreeze after 6 minutes:"
-echo "   docker unpause notification-worker"
-```
-
-```bash
-chmod +x scripts/inject_kafka_freeze.sh && ./scripts/inject_kafka_freeze.sh
-```
-
----
-
-### Phase 3: Observe & Triage (The Hourglass Method)
-
-Đóng vai **On-call SRE**. Đi theo **Dashboard Reading Path** sau:
-
-| Thời điểm | Dashboard & Panel | Bạn sẽ thấy gì? | Ý nghĩa SRE (The "Why") |
-|---|---|---|---|
-| **T+10s** | Kafka Overview → **Consumer Group Lag** | Lag nhảy từ 0 → 100+ | **Leading Indicator.** Pipeline nghẽn. Alert chưa firing vì `for: 5m` chưa đủ. |
-| **T+10s** | Kafka Overview → **Net Lag Growth Rate** | ~0 → dương (màu đỏ) | Produce Rate > Consume Rate = hàng tồn kho đang tích tụ. |
-| **T+15s** | Kafka Overview → **Consumer Group Members** | Vẫn = 1 | Heartbeat interval = 15s. Worker mới miss 1 heartbeat. Coordinator chưa phản ứng. |
-| **T+45s** | Kafka Overview → **Consumer Group Members** | **Rớt từ 1 → 0** 🔴 | **THE REBALANCE TRAP!** `session.timeout.ms` (45s) hết. Coordinator thu hồi partitions. |
-| **T+45s** | Kafka Overview → **Net Lag Growth Rate** | Vẫn dương, tốc độ không đổi | Không ai consume → lag tiếp tục tăng tuyến tính. |
-| **T+60s** | App Performance → Notification Worker | Processing Rate = 0 | Worker bị đóng băng → không có span metrics mới gửi về OTel Collector. |
-| **T+300s** | Alerting Overview → **KafkaConsumerLagHigh** | 🔴 FIRING (warning) | Lag > 100 kéo dài 5 phút. Rule: `sum by(consumergroup, topic) (kafka_consumergroup_lag) > 100` với `for: 5m`. |
-| **T+300s** | Alerting Overview → **NotificationWorkerHighErrorRate** | 🔴 FIRING (warning) | `consumed == 0 AND lag > 0` kéo dài 5 phút. |
-| **T+360s** | Terminal | `docker unpause notification-worker` | Worker "tỉnh dậy" sau 6 phút bị đóng băng. |
-| **T+365s** | Worker Logs (Loki) / `docker logs notification-worker --tail 50` | `"Failed to commit offset. Message will be re-processed."` | **Manual Commit FAILURE!** Worker cố commit nhưng đã bị đá khỏi group ở T+45s. |
-| **T+365s** | Kafka Overview → **Consumer Group Members** | Nhảy từ 0 → 1 | Worker rejoin group thành công. |
-| **T+370s** | Kafka Overview → **Consumer Group Lag** | Lag bắt đầu giảm dốc đứng | Worker catch-up backlog (~600 messages trong 6 phút × 10 req/s). |
-| **T+380s** | Kafka Overview → **Net Lag Growth Rate** | Chuyển sang âm (màu xanh) | Consume Rate > Produce Rate = worker đang catch-up. |
-| **T+390s** | Kafka Overview → **Consumer Group Lag** | Lag = 0 | Catch-up hoàn tất. Hệ thống trở lại steady state. |
-| **T+390s** | Alerting Overview | Alerts chuyển RESOLVED | Lag giảm dưới threshold. |
-
-> 💡 **Lưu ý về timing thực tế:**
-> - `docker pause` gửi `SIGSTOP` → process freeze NGAY LẬP TỨC
-> - Nhưng Kafka Coordinator chỉ phát hiện sau `session.timeout.ms` = 45s
-> - Khoảng cách 45s này là **Detection Gap** — trong production, đây là lý do cần monitoring lag (phát hiện sớm hơn session timeout)
-
----
-
-### Phase 4: Root Cause Analysis (Bottom-Up Internals)
-
-Sau khi hệ thống tự phục hồi, mở code ra để hiểu **TẠI SAO** hành vi xảy ra như quan sát.
-
-**Bước 1: Mở `notification-worker/app.py` — Consumer Config**
+Codebase đã refactor sang `enable.auto.commit: False`. Offset chỉ được commit KHI VÀ CHỈ KHI DB transaction thành công:
 
 ```python
+# notification-worker/app.py — Consumer Config
 consumer = Consumer({
     "bootstrap.servers": KAFKA_BOOTSTRAP,
     "group.id": KAFKA_GROUP,                    # "notification-workers"
     "auto.offset.reset": "earliest",
-    # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU
-    "enable.auto.commit": False,                # ← QUAN TRỌNG: Manual Commit
-    # ⚙️ Tối ưu cho Manual Commit & Stability
-    "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),  # 45s
-    "heartbeat.interval.ms": 15000,             # 15s (< 1/3 session timeout ✓)
-    "max.poll.interval.ms": 300000,             # 5 phút
+    "enable.auto.commit": False,                # ← MANUAL COMMIT
+    "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
+    "heartbeat.interval.ms": 15000,
+    "max.poll.interval.ms": 300000,
     "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
 })
 ```
-
-> 💡 **The "Aha!" Moment #1 — Tại sao Manual Commit?**
->
-> Với `enable.auto.commit: False`, offset chỉ được commit **KHI VÀ CHỈ KHI** DB transaction thành công:
 
 ```python
 # Chỉ commit SAU KHI DB insert thành công
@@ -978,13 +863,147 @@ except KafkaException as commit_err:
     )
 ```
 
-> Khi worker bị đá khỏi group (T+45s) và tỉnh dậy (T+360s):
-> 1. Worker cố `consumer.commit(asynchronous=False)` → Kafka từ chối (không còn trong group)
-> 2. Code catch `KafkaException` → log error → **KHÔNG crash**
-> 3. Message sẽ được re-deliver khi worker rejoin group
-> 4. Idempotency Table (`processed_events`) chặn duplicate processing
->
-> Đây chính là **At-Least-Once Delivery Guarantee** — message có thể được giao nhiều lần, nhưng không bao giờ mất.
+**C. Chuyện gì xảy ra khi `docker pause` + Manual Commit?**
+
+```
+T+0s:   docker pause → SIGSTOP → process freeze (kể cả heartbeat thread)
+T+45s:  session.timeout.ms hết → Coordinator đá worker khỏi group → Rebalance
+T+360s: docker unpause → SIGCONT → process resume
+        → Worker cố consumer.commit(asynchronous=False)
+        → Kafka TỪ CHỐI (worker không còn trong group)
+        → Code catch KafkaException → log error → KHÔNG crash
+        → Worker rejoin group → message được RE-DELIVER
+        → Idempotency Table (processed_events) chặn duplicate
+```
+
+Đây chính là **At-Least-Once Delivery Guarantee** — message có thể được giao nhiều lần, nhưng KHÔNG BAO GIỜ mất.
+
+Phase 1: Baseline (Tạo steady state & Ghi nhận)
+
+Đảm bảo không có alert nào đang firing. Chạy traffic nhẹ để warm-up pipeline:
+
+```bash
+curl -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "normal", "rate": 2, "duration": 60}'
+```
+
+Mở Grafana → Kafka Overview Dashboard (`/d/kafka-event-driven`), ghi nhận:
+
+| Panel trên Dashboard (tên chính xác) | Row | Metric cần ghi | Giá trị Baseline |
+|---|---|---|---|
+| **Messages In (per second)** | 📊 Kafka Cluster Overview | order.events produce rate | ~2 msg/s |
+| **Consumer Group Lag** | 📈 Consumer Group Lag | notification-workers lag | 0–5 messages |
+| **Consumer Group Lag** | 📈 Consumer Group Lag | inventory-workers lag | 0–5 messages |
+| **Consumer Group Members (The Rebalance Detector)** | 🛡️ SRE Deep-Dive | notification-workers members | 1 (Active, màu xanh) |
+| **Net Lag Growth Rate (Tốc độ tích tụ hàng tồn kho)** | 🛡️ SRE Deep-Dive | Net Lag Growth (msg/s) | ~0 (balanced) |
+| **Events Consumed (Notification Worker)** | 🔔 Notification Worker | consume rate by event_type | ~2 msg/s |
+| **Notification Processing Duration (P95)** | 🔔 Notification Worker | P95 / P50 | P95 ~200ms |
+| **Producer vs Consumer Rate** | 📤 Kafka Producer | Produced vs Consumed (notification) | Gần bằng nhau |
+
+⚠️ Quan trọng: Ghi nhận panel **"Consumer Group Members (The Rebalance Detector)"** = 1 và màu XANH. Đây là panel quan trọng nhất cho experiment này. Panel có threshold cấu hình sẵn: `red < 1`, `green >= 1`.
+
+Phase 2: Inject Failure (Sử dụng Chaos Orchestrator)
+
+Tạo file `scripts/inject_kafka_freeze.sh` trên Applications VM:
+
+```bash
+#!/bin/bash
+# ============================================================
+# Chaos Orchestrator: Kafka Consumer Freeze & Rebalance Trap
+# Simulates: VM freeze / Network partition / GC pause > session.timeout
+# ============================================================
+
+echo "🚀 [1/4] Starting Flash Sale Traffic (10 req/s) to fill the pipeline..."
+curl -s -X POST http://localhost:5003/start \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "flash_sale", "rate": 10, "duration": 420}' > /dev/null &
+
+echo "⏳ [2/4] Waiting 5s for traffic to stabilize & Kafka to flow..."
+sleep 5
+
+echo "🧊 [3/4] FREEZING Notification Worker (SIGSTOP) for 6 minutes..."
+echo "   💡 SRE Note: Watch 'Consumer Group Members (The Rebalance Detector)'"
+echo "   💡 panel — it will drop to 0 after session.timeout.ms (45s)!"
+docker pause notification-worker
+
+echo "✅ Injection complete. Worker is frozen."
+echo ""
+echo "📊 OBSERVATION CHECKLIST:"
+echo "   T+10s:  Lag bắt đầu tăng (worker không consume)"
+echo "   T+15s:  Net Lag Growth Rate chuyển dương (màu đỏ)"
+echo "   T+45s:  Consumer Group Members → 0 (session timeout!)"
+echo "   T+300s: KafkaConsumerLagHigh alert firing (for: 5m)"
+echo "   T+345s: KafkaConsumerGroupDown alert firing (for: 5m)"
+echo ""
+echo "⏱️  Run this to unfreeze after 6 minutes:"
+echo "   docker unpause notification-worker"
+```
+
+```bash
+chmod +x scripts/inject_kafka_freeze.sh && ./scripts/inject_kafka_freeze.sh
+```
+
+Phase 3: Observe & Triage (The Hourglass Method)
+
+Đóng vai On-call SRE. Đi theo Dashboard Reading Path sau:
+
+| Thời điểm | Dashboard & Panel (tên chính xác) | Bạn sẽ thấy gì? | Ý nghĩa SRE (The "Why") |
+|---|---|---|---|
+| **T+10s** | Kafka Overview → 📈 **Consumer Group Lag** | Lag nhảy từ 0 → 100+ | **Leading Indicator.** Pipeline nghẽn. Alert chưa firing vì `for: 5m` chưa đủ. |
+| **T+10s** | Kafka Overview → 🛡️ **Net Lag Growth Rate** | Chuyển từ ~0 → dương (màu đỏ, > 1) | Produce Rate > Consume Rate = hàng tồn kho đang tích tụ. Panel threshold: `red >= 1`. |
+| **T+15s** | Kafka Overview → 🛡️ **Consumer Group Members** | Vẫn = 1 (xanh) | Heartbeat interval = 15s. Worker mới miss 1 heartbeat. Coordinator chưa phản ứng. |
+| **T+45s** | Kafka Overview → 🛡️ **Consumer Group Members** | **Rớt từ 1 → 0** 🔴 (chuyển màu đỏ) | **THE REBALANCE TRAP!** `session.timeout.ms` (45s) hết. Coordinator tuyên bố worker "chết" và thu hồi partitions. |
+| **T+45s** | Kafka Overview → 📈 **Consumer Group Lag by Partition** | Lag tăng đều trên cả 3 partitions | Không ai consume → lag tăng tuyến tính trên mọi partition. |
+| **T+60s** | App Performance → 🔔 Notification Worker section | Processing Rate = 0, no new spans | Worker bị đóng băng → không có span metrics mới gửi về OTel Collector. |
+| **T+60s** | Kafka Overview → 📤 **Producer vs Consumer Rate** | Produced = 10/s, Consumed (notification) = 0 | produce vẫn chạy, consume đã dừng → gap ngày càng lớn. |
+| **T+300s** | Alerting Overview → **KafkaConsumerLagHigh** | 🔴 FIRING (warning) | `sum by(consumergroup, topic) (kafka_consumergroup_lag) > 100` với `for: 5m`. Lag vượt 100 từ ~T+10s, cần thêm 5m liên tục. |
+| **T+345s** | Alerting Overview → **KafkaConsumerGroupDown** | 🔴 FIRING (critical) | `kafka_consumergroup_members == 0` với `for: 5m`. Members = 0 từ T+45s, cần thêm 5m → T+345s. |
+| **T+360s** | Terminal | `docker unpause notification-worker` | Worker "tỉnh dậy" sau 6 phút bị đóng băng. |
+| **T+365s** | Worker Logs (`docker logs notification-worker --tail 50`) | `"Failed to commit offset. Message will be re-processed."` | **Manual Commit FAILURE!** Worker cố commit nhưng đã bị đá khỏi group ở T+45s. Kafka từ chối vì worker không còn là member. |
+| **T+365s** | Kafka Overview → 🛡️ **Consumer Group Members** | Nhảy từ 0 → 1 (xanh trở lại) | Worker rejoin group thành công. |
+| **T+370s** | Kafka Overview → 📈 **Consumer Group Lag** | Lag bắt đầu giảm dốc đứng | Worker xử lý backlog với tốc độ tối đa (~600 messages tích tụ trong 6 phút × 10 msg/s). |
+| **T+375s** | Kafka Overview → 🛡️ **Net Lag Growth Rate** | Chuyển sang âm (màu xanh, < 1) | Consume Rate > Produce Rate = worker đang catch-up. |
+| **T+390s** | Kafka Overview → 📈 **Consumer Group Lag** | Lag = 0 | Catch-up hoàn tất. Hệ thống trở lại steady state. |
+| **T+390s** | Alerting Overview | KafkaConsumerLagHigh → RESOLVED | Lag giảm dưới threshold 100. |
+| **T+395s** | Alerting Overview → **NotificationWorkerHighErrorRate** | 🔴 FIRING (warning) hoặc sắp firing | Condition: `consumed == 0 AND lag > 0` với `for: 5m`. Rate window 5m cần thời gian để consumed drop về 0. |
+
+💡 **Lưu ý về timing thực tế:**
+- `docker pause` gửi `SIGSTOP` → process freeze NGAY LẬP TỨC
+- Nhưng Kafka Coordinator chỉ phát hiện sau `session.timeout.ms` = 45s
+- Khoảng cách 45s này là **Detection Gap** — trong production, đây là lý do cần monitoring lag (phát hiện sớm hơn session timeout)
+- `KafkaConsumerGroupDown` có `for: 5m` → firing ở T+345s (45s + 300s). Nếu giảm `for` xuống `1m` → phát hiện sớm hơn 4 phút
+
+Phase 4: Root Cause Analysis (Bottom-Up Internals)
+
+Sau khi hệ thống tự phục hồi, mở code ra để hiểu TẠI SAO hành vi xảy ra như quan sát.
+
+**Bước 1: Mở `notification-worker/app.py` — Consumer Config**
+
+```python
+consumer = Consumer({
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "group.id": KAFKA_GROUP,                    # "notification-workers"
+    "auto.offset.reset": "earliest",
+    # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU
+    "enable.auto.commit": False,                # ← QUAN TRỌNG: Manual Commit
+    # ⚙️ Tối ưu cho Manual Commit & Stability
+    "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),  # 45s
+    "heartbeat.interval.ms": 15000,             # 15s (≤ 1/3 session timeout ✓)
+    "max.poll.interval.ms": 300000,             # 5 phút
+    "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
+})
+```
+
+💡 **The "Aha!" Moment #1 — Tại sao Manual Commit?**
+
+Với `enable.auto.commit: False`, offset chỉ được commit KHI VÀ CHỈ KHI DB transaction thành công. Khi worker bị đá khỏi group (T+45s) và tỉnh dậy (T+360s):
+- Worker cố `consumer.commit(asynchronous=False)` → **Kafka từ chối** (không còn trong group)
+- Code catch `KafkaException` → log error → **KHÔNG crash**
+- Message sẽ được **re-deliver** khi worker rejoin group
+- Idempotency Table (`processed_events`) chặn duplicate processing
+
+Đây chính là **At-Least-Once Delivery Guarantee** — message có thể được giao nhiều lần, nhưng không bao giờ mất.
 
 **Bước 2: Mở `notification-worker/app.py` — Idempotency Check**
 
@@ -1002,17 +1021,37 @@ if is_event_processed(event_id):
     continue
 ```
 
-> 💡 **The "Aha!" Moment #2 — Idempotency là Safety Net**
->
-> Khi message bị re-deliver (do commit fail), worker sẽ:
-> 1. Nhận lại message từ Kafka
-> 2. Check `processed_events` table → thấy `event_id` đã tồn tại
-> 3. Skip processing, commit offset, continue
-> 4. Metric `notifications_skipped_total{reason="duplicate"}` tăng
->
-> → Không có duplicate notification nào được gửi tới customer!
+💡 **The "Aha!" Moment #2 — Idempotency là Safety Net**
 
-**Bước 3: Mở `kafka_alert_rules.yml` — Alert Thresholds**
+Khi message bị re-deliver (do commit fail), worker sẽ:
+1. Nhận lại message từ Kafka
+2. Check `processed_events` table → thấy `(event_id, processed_by)` đã tồn tại
+3. Skip processing, commit offset, continue
+4. Metric `notifications_skipped_total{reason="duplicate"}` tăng
+
+→ **Không có duplicate notification nào được gửi tới customer!**
+
+**Bước 3: Mở `notification-worker/app.py` — Poison Pill Handling**
+
+```python
+try:
+    event = json.loads(msg.value().decode("utf-8"))
+except (json.JSONDecodeError, UnicodeDecodeError) as decode_err:
+    logger.critical(
+        "Poison Pill detected: Invalid message format. Committing offset to skip.",
+        extra={"error": str(decode_err), "partition": msg.partition(),
+               "offset": msg.offset(), "raw_value": str(msg.value())[:100]}
+    )
+    try: consumer.commit(asynchronous=False)
+    except Exception: pass
+    continue
+```
+
+💡 **The "Aha!" Moment #3 — Poison Pill không block pipeline**
+
+Nếu không có handling này, 1 message hỏng format sẽ block partition mãi mãi (worker retry vô hạn). Code đã commit offset để skip → pipeline tiếp tục chảy.
+
+**Bước 4: Mở `kafka_alert_rules.yml` — Alert Thresholds**
 
 ```yaml
 - alert: KafkaConsumerLagHigh
@@ -1021,6 +1060,12 @@ if is_event_processed(event_id):
   labels:
     severity: warning
 
+- alert: KafkaConsumerLagCritical
+  expr: sum by(consumergroup, topic) (kafka_consumergroup_lag) > 1000
+  for: 3m
+  labels:
+    severity: critical
+
 - alert: KafkaConsumerGroupDown
   expr: kafka_consumergroup_members == 0
   for: 5m
@@ -1028,36 +1073,36 @@ if is_event_processed(event_id):
     severity: critical
 ```
 
-> 💡 **The "Aha!" Moment #3 — Alert Timing Analysis**
+💡 **The "Aha!" Moment #4 — Alert Timing Analysis**
 
-| Alert | Condition | `for` | Thực tế trong Exp 3 |
+| Alert | Condition | `for` | Firing thực tế trong Exp 3 |
 |---|---|---|---|
-| `KafkaConsumerLagHigh` | lag > 100 | 5m | Firing ở T+300s (lag vượt 100 từ T+10s, nhưng cần 5m liên tục) |
-| `KafkaConsumerGroupDown` | members == 0 | 5m | Firing ở T+345s (members = 0 từ T+45s, cần thêm 5m) |
-| `NotificationWorkerHighErrorRate` | consumed==0 AND lag>0 | 5m | Firing ở T+300s |
+| KafkaConsumerLagHigh | lag > 100 | 5m | T+300s (lag vượt 100 từ ~T+10s) |
+| KafkaConsumerGroupDown | members == 0 | 5m | T+345s (members = 0 từ T+45s) |
+| KafkaConsumerLagCritical | lag > 1000 | 3m | ~T+180s (nếu lag vượt 1000 trước T+300s) |
+| NotificationWorkerHighErrorRate | consumed==0 AND lag>0 | 5m | ~T+600s (rate window 5m cần thời gian) |
 
-> **Production Context:** 5 phút là quá dài cho Flash Sale. Khách chờ 5 phút không nhận Email xác nhận → gọi Call Center → tăng OPEX.
->
-> **Reliability PM Action:** Đề xuất tune alert:
-> - `KafkaConsumerLagHigh`: giữ `lag > 100` nhưng giảm `for: 5m` → `for: 2m`
-> - Thêm alert mới: `KafkaConsumerGroupDown` với `for: 1m` (vì members = 0 là critical)
+**Production Context:** 5 phút (`for: 5m`) là quá dài cho Flash Sale. Khách chờ 5 phút không nhận Email xác nhận → gọi Call Center → tăng OPEX.
 
-**Bước 4: Mở `kafka-overview.json` — Panel "Consumer Group Members"**
+**Reliability PM Action:** Đề xuất tune alert:
+- `KafkaConsumerGroupDown`: giảm `for: 5m` → `for: 1m` (members = 0 là critical, cần phát hiện nhanh)
+- Thêm alert mới dựa trên **Net Lag Growth Rate** để phát hiện sớm hơn lag threshold
+
+**Bước 5: Mở `kafka-overview.json` — Panel "Consumer Group Members"**
 
 Panel này có threshold được cấu hình sẵn:
-
 ```json
 "thresholds": {
   "steps": [
-    { "color": "red",   "value": null },   // < 1 = RED
-    { "color": "green", "value": 1    }    // >= 1 = GREEN
+    { "color": "red", "value": null },    // < 1 = RED
+    { "color": "green", "value": 1 }      // >= 1 = GREEN
   ]
 }
 ```
 
-> Khi members = 0, panel tự động chuyển **MÀU ĐỎ**. Đây là visual alert giúp SRE nhận biết rebalance ngay lập tức mà không cần chờ Prometheus alert.
+→ Khi members = 0, panel tự động chuyển MÀU ĐỎ. Đây là **visual alert** giúp SRE nhận biết rebalance ngay lập tức mà không cần chờ Prometheus alert.
 
-**Bước 5: Mở `docker-compose.yml` — Environment Variables**
+**Bước 6: Mở `docker-compose.yml` — Environment Variables**
 
 ```yaml
 notification-worker:
@@ -1066,78 +1111,58 @@ notification-worker:
     - KAFKA_ASSIGNMENT_STRATEGY=range # Eager Rebalancing (Hiệp 1)
 ```
 
-> **Lưu ý:** `KAFKA_AUTO_COMMIT=True` bị comment out trong compose. Code hardcode `enable.auto.commit: False`. Đây là intentional — comment cũ từ trước khi refactor.
+Lưu ý: `KAFKA_AUTO_COMMIT=True` bị **comment out** trong compose. Code hardcode `enable.auto.commit: False`. Đây là intentional — comment cũ từ trước khi refactor, cần dọn dẹp.
 
----
-
-### 🎯 Kỳ vọng & Câu hỏi kiểm tra *(Checklist cho Junior SRE)*
+🎯 Kỳ vọng & Câu hỏi kiểm tra (Checklist cho Junior SRE)
 
 Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Incident Log):
 
 **1. Leading vs Lagging Indicators**
-
-> Panel nào báo hiệu sự cố TRƯỚC KHI alert firing?
-
-✅ *Đáp án:* **Consumer Group Lag** (tăng từ T+10s) và **Net Lag Growth Rate** (chuyển dương từ T+10s). Alert chỉ firing ở T+300s.
-
----
+- Panel nào báo hiệu sự cố TRƯỚC KHI alert firing?
+- ✅ Đáp án: **Consumer Group Lag** (tăng từ T+10s) và **Net Lag Growth Rate** (chuyển dương từ T+10s). Alert chỉ firing ở T+300s.
 
 **2. Pause vs Stop — Tại sao chọn `docker pause`?**
-
-- `docker stop` gửi `SIGTERM` → worker nhận signal → gọi `consumer.close()` → gửi `LeaveGroupRequest` → Rebalance **GRACEFUL**
-- `docker pause` gửi `SIGSTOP` → process freeze → KHÔNG gửi `LeaveGroupRequest` → Coordinator phải CHỜ session timeout → Rebalance **VIOLENT**
-
-💬 *Gợi ý:* Trong production, VM freeze / network partition giống `docker pause` hơn `docker stop`.
-
----
+- `docker stop` gửi SIGTERM → worker nhận signal → `consumer_running = False` → gọi `consumer.close()` → gửi LeaveGroupRequest → Rebalance GRACEFUL
+- `docker pause` gửi SIGSTOP → process freeze → KHÔNG gửi LeaveGroupRequest → Coordinator phải CHỜ session timeout → Rebalance VIOLENT
+- 💬 Gợi ý: Trong production, VM freeze / network partition / GC pause > session.timeout giống `docker pause` hơn `docker stop`
 
 **3. Manual Commit Failure**
+- Khi worker tỉnh dậy sau unpause, tại sao commit fail?
+- ✅ Đáp án: Worker đã bị đá khỏi Consumer Group ở T+45s. Kafka từ chối commit từ member không tồn tại.
+- Message đó có bị mất không? → KHÔNG. Nó sẽ được re-deliver.
+- Có bị duplicate processing không? → KHÔNG. Idempotency Table (`processed_events`) chặn.
 
-> Khi worker tỉnh dậy sau unpause, tại sao commit fail?
-
-✅ *Đáp án:* Worker đã bị đá khỏi Consumer Group ở T+45s. Kafka từ chối commit từ member không tồn tại. Message đó có bị mất không? → **KHÔNG** — sẽ được re-deliver. Có bị duplicate processing không? → **KHÔNG** — Idempotency Table chặn.
-
----
-
-**4. Observability Gap**
-
-> Trong 45s đầu (T+0 đến T+45), có alert nào firing không?
-
-✅ *Đáp án:* **KHÔNG.** Đây là Detection Gap. Chỉ có Lag tăng (dashboard) nhưng chưa đủ `for: 5m`. Trong production, bạn đề xuất gì để giảm Detection Gap? (Gợi ý: giảm `for` duration, thêm alert dựa trên Net Lag Growth Rate)
-
----
+**4. Observability Gap (Detection Gap)**
+- Trong 45s đầu (T+0 đến T+45), có alert nào firing không?
+- ✅ Đáp án: KHÔNG. Đây là Detection Gap. Chỉ có Lag tăng (dashboard) nhưng chưa đủ `for: 5m`.
+- Trong production, bạn đề xuất gì để giảm Detection Gap? (Gợi ý: giảm `for` duration, thêm alert dựa trên Net Lag Growth Rate, hoặc alert khi members < expected)
 
 **5. Alert Tuning (Reliability PM Lens)**
-
-> Alert `KafkaConsumerLagHigh` có `for: 5m`. Trong Flash Sale (10 msg/s), 5 phút = 3000 messages tồn đọng. Chấp nhận được không? Nếu không, bạn đề xuất thay đổi gì? Trade-off là gì?
-
-💬 *Gợi ý:* Giảm `for` → nhiều false positive hơn khi traffic spike ngắn.
-
----
+- Alert `KafkaConsumerLagHigh` có `for: 5m`. Trong Flash Sale (10 msg/s), 5 phút = 3000 messages tồn đọng. Chấp nhận được không?
+- `KafkaConsumerGroupDown` cũng có `for: 5m`. Members = 0 là critical — có nên giảm xuống `for: 1m` không? Trade-off là gì?
+- 💬 Gợi ý: Giảm `for` → phát hiện nhanh hơn nhưng tăng false positive khi có brief network blip
 
 **6. SEV Assessment**
-
-> Lag = 3000 messages, kéo dài 5 phút, trong Flash Sale. Bạn phân SEV mấy?
-> - **Context A:** 3 AM, không có traffic thật → SEV mấy?
-> - **Context B:** Flash Sale, traffic cao, customer đang chờ email → SEV mấy?
->
-> Có cần page Engineering Manager không hay chỉ cần scale thêm worker?
-
----
+- Lag = 3000 messages, kéo dài 5 phút, trong Flash Sale. Bạn phân SEV mấy?
+- Context A: 3 AM, không có traffic thật → SEV mấy?
+- Context B: Flash Sale, traffic cao, customer đang chờ email → SEV mấy?
+- Có cần page Engineering Manager không hay chỉ cần scale thêm worker?
 
 **7. Code Review (SRE Architect Lens)**
+- Code đã dùng `enable.auto.commit: False` + Manual Sync Commit + Poison Pill Handling + Graceful Shutdown Commit. Đánh giá mức độ production-readiness?
+- Nếu một Dev junior đề xuất "bật lại auto-commit cho đơn giản", bạn sẽ giải thích rủi ro gì?
+- 💬 Gợi ý: Auto-commit + process crash = Data Loss. Manual commit + process crash = At-Least-Once (message re-delivered, idempotency bảo vệ).
 
-> Với tư cách là SRE Architect, bạn đánh giá gì về việc code đã dùng `enable.auto.commit: False` + Manual Sync Commit? Nếu một Dev junior đề xuất "bật lại auto-commit cho đơn giản", bạn sẽ giải thích rủi ro gì?
+**8. So sánh heartbeat.interval.ms giữa 2 workers**
+- notification-worker: 15000ms, inventory-worker: 10000ms. Cả hai đều có session.timeout.ms = 45000ms.
+- Worker nào có buffer an toàn hơn? Tại sao chọn khác nhau?
+- 💬 Gợi ý: inventory-worker dùng `SELECT FOR UPDATE` (pessimistic locking) → processing có thể chậm hơn → cần heartbeat frequent hơn để tránh bị kick nhầm
 
-💬 *Gợi ý:* Auto-commit + process crash = **Data Loss**. Manual commit + process crash = **At-Least-Once** (message re-delivered, idempotency bảo vệ).
+🥊 Hiệp 2: Bật "Cooperative Rebalancing" (Vũ khí bí mật của SRE Architect)
 
----
+Trong Production, để tránh hiện tượng "Stop-the-World" (toàn bộ consumer group bị khựng lại khi 1 worker chết/rejoin), các SRE Architect sẽ ép Dev bật chiến lược Cooperative Rebalancing (Incremental Rebalance).
 
-## 🥊 Hiệp 2: Bật "Cooperative Rebalancing" (Vũ khí bí mật của SRE Architect)
-
-Trong Production, để tránh hiện tượng "Stop-the-World" (toàn bộ consumer group bị khựng lại khi 1 worker chết/rejoin), các SRE Architect sẽ ép Dev bật chiến lược **Cooperative Rebalancing** (Incremental Rebalance).
-
-> **Tin tốt:** Codebase đã sẵn sàng! Code đã đọc env var `KAFKA_ASSIGNMENT_STRATEGY`. Bạn chỉ cần thay đổi 1 dòng trong `docker-compose.yml`.
+**Tin tốt:** Codebase đã sẵn sàng! Code đã đọc env var `KAFKA_ASSIGNMENT_STRATEGY`. Bạn chỉ cần thay đổi 1 dòng trong `docker-compose.yml`.
 
 **Bước 1: Sửa `docker-compose.yml`**
 
@@ -1147,7 +1172,7 @@ notification-worker:
     # ... các cấu hình cũ giữ nguyên ...
     # 🛡️ SRE GUARDRAILS INJECTION
     - KAFKA_SESSION_TIMEOUT=45000
-    - KAFKA_ASSIGNMENT_STRATEGY=cooperative-sticky  # ← ĐỔI TỪ "range"
+    - KAFKA_ASSIGNMENT_STRATEGY=cooperative-sticky  # ← ĐỔI TỪ "range" SANG "cooperative-sticky"
 ```
 
 **Bước 2: Rebuild & Rerun**
@@ -1165,23 +1190,20 @@ docker compose up -d notification-worker
 
 | Thời điểm | Hiệp 1 — Eager (`range`) | Hiệp 2 — Cooperative (`cooperative-sticky`) |
 |---|---|---|
-| **T+45s** (session timeout) | Members → 0. TẤT CẢ partitions bị thu hồi. | Members → 0. Partitions được giải phóng incremental. |
-| **T+365s** (unpause) | Worker rejoin → nhận lại TẤT CẢ partitions cùng lúc → brief processing halt | Worker rejoin → nhận lại partitions từ từ → không gây xáo trộn |
-| **Dashboard** | Consumer Group Members: 1 → 0 → 1 (spike) | Consumer Group Members: 1 → 0 → 1 (smoother) |
-| **Lag catch-up** | Có thể có brief spike thêm khi worker nhận lại tất cả partitions | Smoother, không có secondary spike |
+| T+45s (session timeout) | Members → 0. **TẤT CẢ partitions bị thu hồi cùng lúc.** | Members → 0. Partitions được **giải phóng incremental.** |
+| T+365s (unpause) | Worker rejoin → nhận lại **TẤT CẢ** partitions cùng lúc → brief processing halt | Worker rejoin → nhận lại partitions **từ từ** → không gây xáo trộn |
+| Dashboard **Consumer Group Members** | 1 → 0 → 1 (spike nhọn) | 1 → 0 → 1 (smoother transition) |
+| Lag catch-up | Có thể có brief spike thêm khi worker nhận lại tất cả partitions | Smoother, không có secondary spike |
 
-> 💡 **Bài học của SRE Architect:**
-> Bạn **KHÔNG** cần sửa code logic của Dev. Bạn chỉ cần thiết kế **Guardrails** (thông qua Env Vars trong Docker Compose / K8s ConfigMap) để ép hệ thống tuân theo Reliability Patterns chuẩn mực. Đây chính là **Platform Engineering mindset**.
+💡 **Bài học của SRE Architect:**
+Bạn KHÔNG cần sửa code logic của Dev. Bạn chỉ cần thiết kế **Guardrails** (thông qua Env Vars trong Docker Compose / K8s ConfigMap) để ép hệ thống tuân theo Reliability Patterns chuẩn mực. Đây chính là **Platform Engineering mindset**.
 
 **Câu hỏi phản biện cho Hiệp 2:**
+- Tại sao không bật `cooperative-sticky` ngay từ đầu? (Gợi ý: Easier to debug với `range` khi chỉ có 1 consumer. Cooperative có lợi khi ≥ 2 consumers.)
+- Nếu scale lên 2 notification-worker instances, `cooperative-sticky` giúp gì? (Gợi ý: Khi 1 instance chết, instance còn lại chỉ nhận thêm partitions của instance chết, không phải rebalance toàn bộ.)
+- Trong `docker-compose.yml`, comment `#- KAFKA_AUTO_COMMIT=True  # Giữ nguyên cho Hiệp 1` có còn đúng không? Code có đọc env var này không? (Gợi ý: KHÔNG. Code hardcode `enable.auto.commit: False`. Comment cần dọn dẹp.)
 
-1. Tại sao không bật `cooperative-sticky` ngay từ đầu? (Gợi ý: Easier to debug với `range` khi chỉ có 1 consumer. Cooperative có lợi khi ≥ 2 consumers.)
-2. Nếu scale lên 2 `notification-worker` instances, `cooperative-sticky` giúp gì? (Gợi ý: Khi 1 instance chết, instance còn lại chỉ nhận thêm partitions của instance chết, không phải rebalance toàn bộ.)
-
----
-
-### Rollback
-
+Rollback:
 ```bash
 docker unpause notification-worker
 # Chờ 1-2 phút để worker catch-up hết lag
@@ -1192,15 +1214,19 @@ docker unpause notification-worker
 # docker compose up -d notification-worker
 ```
 
----
+📌 Bài học cốt lõi:
 
-### 📌 Bài học cốt lõi
+1. **Consumer Lag là nhịp tim của Event-Driven Architecture.** Nếu lag tăng mà không có lý do rõ ràng → worker có vấn đề. Panel **Net Lag Growth Rate** cho biết hàng tồn kho đang tích tụ hay đang được giải quyết.
 
-- **Consumer Lag là nhịp tim của Event-Driven Architecture.** Nếu lag tăng mà không có lý do rõ ràng → worker có vấn đề.
-- **`docker pause` mô phỏng Network Partition/VM Freeze**, phơi bày các điểm yếu về Session Timeout và Rebalance mà `docker stop` che giấu. Production gặp scenario này nhiều hơn bạn nghĩ (AWS instance freeze, GC pause > session timeout, network blip).
-- **Manual Commit + Idempotency = At-Least-Once Delivery.** Message có thể được giao nhiều lần, nhưng KHÔNG BAO GIỜ mất. Đây là trade-off chấp nhận được trong hầu hết business cases (email notification gửi 2 lần vẫn tốt hơn không gửi).
-- **SRE không chỉ nhìn Dashboard — SRE phải đọc Code.** Hiểu `enable.auto.commit`, `session.timeout.ms`, `heartbeat.interval.ms` giúp bạn tune alert thresholds chính xác và giải thích root cause cho Dev team.
-- **Guardrails > Code Changes.** Thay đổi 1 env var trong `docker-compose.yml` (Hiệp 2) có impact lớn hơn sửa 10 dòng code. Đây là tư duy **Platform Engineering**.
+2. **`docker pause` mô phỏng Network Partition/VM Freeze**, phơi bày các điểm yếu về Session Timeout và Rebalance mà `docker stop` che giấu. Production gặp scenario này nhiều hơn bạn nghĩ (AWS instance freeze, GC pause > session timeout, network blip).
+
+3. **Manual Commit + Idempotency = At-Least-Once Delivery.** Message có thể được giao nhiều lần, nhưng KHÔNG BAO GIỜ mất. Đây là trade-off chấp nhận được trong hầu hết business cases (email notification gửi 2 lần vẫn tốt hơn không gửi).
+
+4. **SRE không chỉ nhìn Dashboard — SRE phải đọc Code.** Hiểu `enable.auto.commit`, `session.timeout.ms`, `heartbeat.interval.ms`, `max.poll.interval.ms` giúp bạn tune alert thresholds chính xác và giải thích root cause cho Dev team.
+
+5. **Guardrails > Code Changes.** Thay đổi 1 env var trong `docker-compose.yml` (Hiệp 2) có impact lớn hơn sửa 10 dòng code. Đây là tư duy Platform Engineering.
+
+6. **Detection Gap là kẻ thù thầm lặng.** 45s session timeout + 5m alert `for` = gần 6 phút blind spot. Trong production, cần kết hợp nhiều layer: dashboard (real-time) + alert (near-real-time) + synthetic probing (24/7).
 
 ---
 
