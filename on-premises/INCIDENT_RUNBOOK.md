@@ -570,6 +570,7 @@ docker ps -a | grep <worker>
 
 ## 🟡 RB-19/20: Worker High Error Rate
 **Severity:** warning | **Applies to:** notification-worker, inventory-worker
+ > **⚠️ Note cho Exp 3**: Alert NotificationWorkerHighErrorRate có thể firing KHI worker bị pause vì điều kiện: consumed == 0 AND lag > 0. Đây KHÔNG phải error thực sự — worker chỉ đang bị đóng băng. Sau khi unpause, alert sẽ tự resolve.  
 
 **Bước 1: Check error logs**
 ```bash

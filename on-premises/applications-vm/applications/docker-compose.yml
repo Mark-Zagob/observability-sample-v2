@@ -217,7 +217,8 @@ services:
       # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
       # 🛡️ SRE GUARDRAILS INJECTION
-      #- KAFKA_AUTO_COMMIT=True          # Giữ nguyên cho Hiệp 1 (The Bleeding Edge)
+      # 🛡️ NOTE: Code hardcode enable.auto.commit=False (Manual Commit).
+      # Env var KAFKA_AUTO_COMMIT không được đọc bởi application code.
       - KAFKA_SESSION_TIMEOUT=45000     # 45s - Tiêu chuẩn Production
       - KAFKA_ASSIGNMENT_STRATEGY=range # Giữ nguyên Eager cho Hiệp 1
     ports:
