@@ -878,7 +878,7 @@ T+360s: docker unpause → SIGCONT → process resume
 
 Đây chính là **At-Least-Once Delivery Guarantee** — message có thể được giao nhiều lần, nhưng KHÔNG BAO GIỜ mất.
 
-Phase 1: Baseline (Tạo steady state & Ghi nhận)
+### Phase 1: Baseline (Tạo steady state & Ghi nhận)
 
 Đảm bảo không có alert nào đang firing. Chạy traffic nhẹ để warm-up pipeline:
 
@@ -903,7 +903,7 @@ Mở Grafana → Kafka Overview Dashboard (`/d/kafka-event-driven`), ghi nhận:
 
 ⚠️ Quan trọng: Ghi nhận panel **"Consumer Group Members (The Rebalance Detector)"** = 1 và màu XANH. Đây là panel quan trọng nhất cho experiment này. Panel có threshold cấu hình sẵn: `red < 1`, `green >= 1`.
 
-Phase 2: Inject Failure (Sử dụng Chaos Orchestrator)
+### Phase 2: Inject Failure (Sử dụng Chaos Orchestrator)
 
 Tạo file `scripts/inject_kafka_freeze.sh` trên Applications VM:
 
@@ -944,7 +944,7 @@ echo "   docker unpause notification-worker"
 chmod +x scripts/inject_kafka_freeze.sh && ./scripts/inject_kafka_freeze.sh
 ```
 
-Phase 3: Observe & Triage (The Hourglass Method)
+### Phase 3: Observe & Triage (The Hourglass Method)
 
 Đóng vai On-call SRE. Đi theo Dashboard Reading Path sau:
 
@@ -974,7 +974,7 @@ Phase 3: Observe & Triage (The Hourglass Method)
 - Khoảng cách 45s này là **Detection Gap** — trong production, đây là lý do cần monitoring lag (phát hiện sớm hơn session timeout)
 - `KafkaConsumerGroupDown` có `for: 5m` → firing ở T+345s (45s + 300s). Nếu giảm `for` xuống `1m` → phát hiện sớm hơn 4 phút
 
-Phase 4: Root Cause Analysis (Bottom-Up Internals)
+### Phase 4: Root Cause Analysis (Bottom-Up Internals)
 
 Sau khi hệ thống tự phục hồi, mở code ra để hiểu TẠI SAO hành vi xảy ra như quan sát.
 
@@ -995,13 +995,13 @@ consumer = Consumer({
 })
 ```
 
-💡 **The "Aha!" Moment #1 — Tại sao Manual Commit?**
-
-Với `enable.auto.commit: False`, offset chỉ được commit KHI VÀ CHỈ KHI DB transaction thành công. Khi worker bị đá khỏi group (T+45s) và tỉnh dậy (T+360s):
-- Worker cố `consumer.commit(asynchronous=False)` → **Kafka từ chối** (không còn trong group)
-- Code catch `KafkaException` → log error → **KHÔNG crash**
-- Message sẽ được **re-deliver** khi worker rejoin group
-- Idempotency Table (`processed_events`) chặn duplicate processing
+> 💡 **The "Aha!" Moment #1 — Tại sao Manual Commit?**
+>
+> Với `enable.auto.commit: False`, offset chỉ được commit KHI VÀ CHỈ KHI DB transaction thành công. Khi worker bị đá khỏi group (T+45s) và tỉnh dậy (T+360s):
+> - Worker cố `consumer.commit(asynchronous=False)` → **Kafka từ chối** (không còn trong group)
+> - Code catch `KafkaException` → log error → **KHÔNG crash**
+> - Message sẽ được **re-deliver** khi worker rejoin group
+> - Idempotency Table (`processed_events`) chặn duplicate processing
 
 Đây chính là **At-Least-Once Delivery Guarantee** — message có thể được giao nhiều lần, nhưng không bao giờ mất.
 
@@ -1021,13 +1021,13 @@ if is_event_processed(event_id):
     continue
 ```
 
-💡 **The "Aha!" Moment #2 — Idempotency là Safety Net**
-
-Khi message bị re-deliver (do commit fail), worker sẽ:
-1. Nhận lại message từ Kafka
-2. Check `processed_events` table → thấy `(event_id, processed_by)` đã tồn tại
-3. Skip processing, commit offset, continue
-4. Metric `notifications_skipped_total{reason="duplicate"}` tăng
+> 💡 **The "Aha!" Moment #2 — Idempotency là Safety Net**
+>
+> Khi message bị re-deliver (do commit fail), worker sẽ:
+> 1. Nhận lại message từ Kafka
+> 2. Check `processed_events` table → thấy `(event_id, processed_by)` đã tồn tại
+> 3. Skip processing, commit offset, continue
+> 4. Metric `notifications_skipped_total{reason="duplicate"}` tăng
 
 → **Không có duplicate notification nào được gửi tới customer!**
 
@@ -1113,7 +1113,7 @@ notification-worker:
 
 Lưu ý: `KAFKA_AUTO_COMMIT=True` bị **comment out** trong compose. Code hardcode `enable.auto.commit: False`. Đây là intentional — comment cũ từ trước khi refactor, cần dọn dẹp.
 
-🎯 Kỳ vọng & Câu hỏi kiểm tra (Checklist cho Junior SRE)
+### 🎯 Kỳ vọng & Câu hỏi kiểm tra (Checklist cho Junior SRE)
 
 Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Incident Log):
 
@@ -1195,8 +1195,8 @@ docker compose up -d notification-worker
 | Dashboard **Consumer Group Members** | 1 → 0 → 1 (spike nhọn) | 1 → 0 → 1 (smoother transition) |
 | Lag catch-up | Có thể có brief spike thêm khi worker nhận lại tất cả partitions | Smoother, không có secondary spike |
 
-💡 **Bài học của SRE Architect:**
-Bạn KHÔNG cần sửa code logic của Dev. Bạn chỉ cần thiết kế **Guardrails** (thông qua Env Vars trong Docker Compose / K8s ConfigMap) để ép hệ thống tuân theo Reliability Patterns chuẩn mực. Đây chính là **Platform Engineering mindset**.
+> 💡 **Bài học của SRE Architect:**  
+> Bạn KHÔNG cần sửa code logic của Dev. Bạn chỉ cần thiết kế **Guardrails** (thông qua Env Vars trong Docker Compose / K8s ConfigMap) để ép hệ thống tuân theo Reliability Patterns chuẩn mực. Đây chính là **Platform Engineering mindset**.
 
 **Câu hỏi phản biện cho Hiệp 2:**
 - Tại sao không bật `cooperative-sticky` ngay từ đầu? (Gợi ý: Easier to debug với `range` khi chỉ có 1 consumer. Cooperative có lợi khi ≥ 2 consumers.)
