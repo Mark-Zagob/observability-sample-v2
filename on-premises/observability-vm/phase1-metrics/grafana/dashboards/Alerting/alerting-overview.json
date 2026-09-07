@@ -393,7 +393,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "ALERTS_FOR_STATE{alertstate=~\"firing|pending\"}",
+          "expr": "ALERTS{alertstate=~\"firing|pending\"}",
           "format": "table",
           "instant": true,
           "refId": "A"

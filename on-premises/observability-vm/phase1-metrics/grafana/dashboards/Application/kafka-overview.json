@@ -728,13 +728,18 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds",
+            "fixedColor": "red"
           },
           "custom": {
             "fillOpacity": 15,
-            "lineWidth": 2
+            "lineWidth": 2,
+            "gradientMode": "scheme",
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter"
           },
           "min": 0,
+          "max": 2,
           "unit": "short",
           "thresholds": {
             "mode": "absolute",
