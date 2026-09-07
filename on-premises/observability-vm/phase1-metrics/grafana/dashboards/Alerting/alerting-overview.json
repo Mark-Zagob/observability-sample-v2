@@ -405,18 +405,33 @@
           "options": {
             "excludeByName": {
               "__name__": true,
-              "Time": true
+              "Time": true,
+              "service": false,
+              "slo": false
             },
             "indexByName": {
               "alertname": 0,
               "severity": 1,
               "alertstate": 2,
-              "service": 3,
-              "slo": 4,
-              "Value": 5
+              "service_name": 3,
+              "service": 4,
+              "slo": 5,
+              "burn_window": 6,
+              "instance": 7,
+              "job": 8,
+              "Value": 9
             },
             "renameByName": {
-              "Value": "Firing Since (unix)"
+              "Value": "Firing Since (unix)",
+              "alertname": "Alert Name",
+              "severity": "Severity",
+              "alertstate": "State",
+              "service_name": "Service (Tracing)",
+              "service": "Service (Worker)",
+              "slo": "SLO",
+              "burn_window": "Burn Window",
+              "instance": "Instance",
+              "job": "Job"
             }
           }
         }
@@ -653,5 +668,5 @@
   "timezone": "browser",
   "title": "Alerting Overview",
   "uid": "alerting-overview",
-  "version": 1
+  "version": 2
 }
