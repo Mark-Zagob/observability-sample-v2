@@ -2,6 +2,19 @@
 # Phase 3: Tracing
 # Tempo + OTEL Collector + Sample App (3 microservices)
 # ============================================================
+# 🛡️ Week 1-2 Hardening:
+#   - Resource Limits (CPU/Memory)
+#   - Log Rotation (json-file, 10MB × 5 files)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   # ==========================================================
@@ -19,6 +32,15 @@ services:
     networks:
       - observability
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    logging: *default-logging
 
   # ==========================================================
   # OPENTELEMETRY COLLECTOR - Trace Processor
@@ -41,6 +63,15 @@ services:
     depends_on:
       - tempo
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging: *default-logging
 
 volumes:
   tempo_data:

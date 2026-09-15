@@ -4,10 +4,34 @@
 # Chạy trên VM: 192.168.100.57
 # OTLP traces/metrics → OTel Collector trên Observability VM
 # ============================================================
+# 🛡️ Week 1-2 Hardening:
+#   - Network Segmentation (frontend, backend, data)
+#   - Resource Limits (CPU/Memory) per ARCHITECTURE.md
+#   - Log Rotation (json-file, 10MB × 5 files)
+#   - Graceful Shutdown Contract (stop_grace_period: 30s)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-hardening: &app-hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
 
 services:
   # ==========================================================
-  # INFRASTRUCTURE — Database + Cache
+  # INFRASTRUCTURE — Database + Cache + Message Queue
   # ==========================================================
 
   postgres:
@@ -16,7 +40,8 @@ services:
     environment:
       POSTGRES_DB: orders
       POSTGRES_USER: app
-      POSTGRES_PASSWORD: app_secret
+      POSTGRES_PASSWORD: ***
+    # 🛡️ Production: Remove port exposure, access only via data network
     ports:
       - "5432:5432"
     volumes:
@@ -28,11 +53,22 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - observability
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging: *default-logging
+    stop_grace_period: 60s  # PostgreSQL needs longer graceful shutdown
 
   redis:
     image: redis:7-alpine
     container_name: redis
+    # 🛡️ Production: Remove port exposure, access only via data network
     ports:
       - "6379:6379"
     healthcheck:
@@ -41,7 +77,16 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - observability
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging: *default-logging
 
   # ==========================================================
   # MICROSERVICES (multi-stage build, security hardened)
@@ -60,16 +105,20 @@ services:
     depends_on:
       order-service:
         condition: service_started
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging: *default-logging
+    stop_grace_period: 30s  # Match gunicorn graceful_timeout (25s) + buffer
 
   order-service:
     build:
@@ -83,6 +132,7 @@ services:
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5001:5001"
     depends_on:
@@ -92,16 +142,20 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - backend
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging: *default-logging
+    stop_grace_period: 30s  # Match gunicorn graceful_timeout (25s) + buffer
 
   payment-service:
     build:
@@ -111,18 +165,23 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - REDIS_URL=redis://redis:6379/0
+    # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5002:5002"
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - backend
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging: *default-logging
+    stop_grace_period: 30s
 
   # ==========================================================
   # KAFKA — Event Streaming Platform (KRaft mode)
@@ -168,7 +227,17 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - observability
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging: *default-logging
+    stop_grace_period: 60s  # Kafka needs longer for partition leader election
 
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
@@ -184,7 +253,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - observability
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    logging: *default-logging
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -200,7 +278,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - observability
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging: *default-logging
 
   # ==========================================================
   # KAFKA EVENT WORKERS (security hardened)
@@ -221,6 +308,7 @@ services:
       # Env var KAFKA_AUTO_COMMIT không được đọc bởi application code.
       - KAFKA_SESSION_TIMEOUT=45000     # 45s - Tiêu chuẩn Production
       - KAFKA_ASSIGNMENT_STRATEGY=range # Giữ nguyên Eager cho Hiệp 1
+    # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5004:5004"
     depends_on:
@@ -229,16 +317,20 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - backend
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging: *default-logging
+    stop_grace_period: 30s  # Match graceful shutdown timeout
 
   inventory-worker:
     build:
@@ -250,6 +342,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+    # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5005:5005"
     depends_on:
@@ -258,16 +351,20 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - backend
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging: *default-logging
+    stop_grace_period: 30s  # Match graceful shutdown timeout
 
   # ==========================================================
   # TRAFFIC GENERATOR (security hardened)
@@ -282,16 +379,18 @@ services:
       api-gateway:
         condition: service_started
     restart: unless-stopped
-    # --- Security hardening ---
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *app-hardening
     networks:
-      - observability
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging: *default-logging
 
   # ==========================================================
   # WEB UI (nginx-unprivileged, security hardened)
@@ -315,16 +414,49 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - observability
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    logging: *default-logging
 
-# ==========================================================
+# ============================================================
 # VOLUMES + NETWORKS
-# ==========================================================
+# ============================================================
 
 volumes:
   postgres_data:
   kafka_data:
 
+# 🛡️ Week 1-2: Network Segmentation
+#
+# 3-tier network architecture:
+#   - frontend:  External-facing services (web-ui, api-gateway)
+#   - backend:   Internal business logic services
+#   - data:      Data stores (PostgreSQL, Redis, Kafka)
+#
+# Security benefits:
+#   - web-ui CANNOT reach postgres directly (not on data network)
+#   - api-gateway CANNOT access data layer (not on data network)
+#   - Blast radius reduction: compromise of frontend doesn't expose data
+#
+# Cross-network communication:
+#   - web-ui:       frontend + backend (reverse proxies to backend services)
+#   - api-gateway:  frontend + backend (receives from frontend, calls backend)
+#   - order-service: backend + data (receives from backend, connects to data)
+#   - payment-service: backend + data
+#   - workers:      backend + data
+#
 networks:
-  observability:
-    external: true
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+  data:
+    driver: bridge

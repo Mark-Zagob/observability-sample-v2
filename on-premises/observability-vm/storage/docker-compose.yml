@@ -7,6 +7,19 @@
 # MinIO Console: http://<VM_IP>:9001
 # S3 API:        http://<VM_IP>:9000
 # ============================================================
+# 🛡️ Week 1-2 Hardening:
+#   - Resource Limits (CPU/Memory)
+#   - Log Rotation (json-file, 10MB × 5 files)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   # ==========================================================
@@ -21,7 +34,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_PASSWORD: ***
     ports:
       - "9000:9000"        # S3 API endpoint
       - "9001:9001"        # MinIO Web Console
@@ -36,6 +49,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging: *default-logging
 
   # ==========================================================
   # MINIO INIT - Tạo buckets tự động khi khởi động
@@ -62,6 +84,12 @@ services:
     networks:
       - observability
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    logging: *default-logging
 
 volumes:
   minio_data:
