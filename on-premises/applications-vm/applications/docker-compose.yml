@@ -40,7 +40,7 @@ services:
     environment:
       POSTGRES_DB: orders
       POSTGRES_USER: app
-      POSTGRES_PASSWORD: ***
+      POSTGRES_PASSWORD: app_secret
     # 🛡️ Production: Remove port exposure, access only via data network
     ports:
       - "5432:5432"
