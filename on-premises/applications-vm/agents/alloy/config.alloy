@@ -5,7 +5,12 @@
 // Observability VM (192.168.100.55:3100)
 //
 // Pipeline:
-//   Source → Process (parse, extract, filter) → Push Loki
+//   Source → Multiline → Process (parse, extract, filter) → Push Loki
+//
+// v2.0: Fixed logfmt parse errors by:
+//   - Adding stage.multiline for stack traces
+//   - Making stage.logfmt conditional (only parse lines that look like logfmt)
+//   - Adding stage.regex to detect logfmt pattern before parsing
 // ============================================================
 
 // ============================================================
@@ -45,15 +50,63 @@ loki.source.docker "containers" {
 // ============================================================
 // LOG PROCESSING PIPELINE — Docker containers
 // ============================================================
+// Pipeline xử lý log trước khi push Loki:
+//   1. Drop health check noise
+//   2. Aggregate multiline logs (stack traces)
+//   3. Try JSON parsing (most app services)
+//   4. Detect logfmt pattern → conditionally parse logfmt
+//   5. Normalize log level
+//   6. Add static labels
+//   7. Drop debug noise
+// ============================================================
 
 loki.process "docker_pipeline" {
-  // Drop health check logs
+  // ---------------------------------------------------------
+  // Stage 1: Drop health check logs
+  // ---------------------------------------------------------
+  // Health checks create massive noise (every 5-10s per service)
+  // Drop BEFORE any parsing to save CPU
+  // ---------------------------------------------------------
   stage.drop {
-    expression = "(?i)(GET|HEAD)\\s+/(health|ready|healthz|livez|readyz)"
+    expression          = "(?i)(GET|HEAD)\\s+/(health|ready|healthz|livez|readyz)"
     drop_counter_reason = "health_check"
   }
 
-  // Parse JSON logs
+  // ---------------------------------------------------------
+  // Stage 2: Multiline aggregation
+  // ---------------------------------------------------------
+  // Python/Java/Node stack traces span multiple lines.
+  // Without this, each line becomes a separate Loki entry,
+  // making debugging impossible.
+  //
+  // firstline regex matches the START of a new log entry:
+  //   - ISO timestamp: 2026-09-16 03:21:56
+  //   - JSON start: {"level
+  //   - Logfmt start: level=
+  //   - Bracket timestamp: [2026-09-16
+  //   - Redis style: 1:M 16 Sep
+  //   - Postgres style: 2026-09-16 03:21:56 UTC
+  //
+  // If a line does NOT match firstline, it's appended to
+  // the previous entry (e.g., stack trace continuation).
+  // ---------------------------------------------------------
+  stage.multiline {
+    firstline     = "^(\\d{4}-\\d{2}-\\d{2}|{\"level|level=|\\[\\d{4}-|\\d+:\\w+ \\d+ \\w+ \\d{4})"
+    max_lines     = 128
+    max_wait_time = "3s"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 3: Try JSON parsing
+  // ---------------------------------------------------------
+  // Most application services (Order, Payment, Workers, Gateway)
+  // log in structured JSON via structlog:
+  //   {"level":"info","msg":"request handled","trace_id":"abc","caller":"app.py:42"}
+  //
+  // stage.json extracts fields as "extracted values" for
+  // downstream stages. If the line isn't valid JSON, this
+  // stage silently skips (no error logged).
+  // ---------------------------------------------------------
   stage.json {
     expressions = {
       level    = "level",
@@ -64,36 +117,94 @@ loki.process "docker_pipeline" {
     }
   }
 
-  // Parse logfmt (fallback)
-  stage.logfmt {
-    mapping = {
-      level  = "",
-      msg    = "",
-      caller = "",
-      ts     = "",
+  // ---------------------------------------------------------
+  // Stage 4: Detect logfmt pattern (regex guard)
+  // ---------------------------------------------------------
+  // FIX for "logfmt syntax error at pos 44: unexpected '\"'"
+  //
+  // Problem: stage.logfmt tries to parse EVERY line, including
+  // JSON, plain text, PostgreSQL logs, Redis logs, Kafka logs.
+  // Lines with unexpected quotes at certain positions cause errors.
+  //
+  // Solution: Use stage.regex to detect lines that LOOK like logfmt
+  // (contain key=value pairs), then only apply stage.logfmt to
+  // those lines via stage.match selector.
+  //
+  // Logfmt examples:
+  //   level=info msg="server started" caller=main.go:42
+  //   ts=2026-09-16T03:21:56Z level=error msg="connection refused"
+  //
+  // This regex matches lines with at least one key=value pair.
+  // ---------------------------------------------------------
+  stage.regex {
+    expression = "^(?P<_looks_like_logfmt>([a-zA-Z_][a-zA-Z0-9_]*=[^\\s]+\\s*)+)"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 5: Conditionally parse logfmt
+  // ---------------------------------------------------------
+  // Only applies stage.logfmt if the line matched the regex above.
+  // This prevents parse errors on:
+  //   - JSON lines (already handled by stage.json)
+  //   - Plain text logs (e.g., nginx access logs)
+  //   - PostgreSQL/Redis/Kafka native log formats
+  //   - Stack trace continuation lines
+  //
+  // SRE Concept: `Conditional Parsing` — only parse what you
+  // expect to parse. Prevents noise and errors in observability
+  // pipeline.
+  // ---------------------------------------------------------
+  stage.match {
+    selector = "{_looks_like_logfmt!=\"\"}"
+
+    stage.logfmt {
+      mapping = {
+        level  = "",
+        msg    = "",
+        caller = "",
+        ts     = "",
+      }
     }
   }
 
-  // Chuẩn hoá log level → lowercase
+  // ---------------------------------------------------------
+  // Stage 6: Normalize log level → lowercase
+  // ---------------------------------------------------------
+  // Different services use different conventions:
+  //   "INFO", "info", "WARNING", "warning", "WARN", "warn"
+  // → Normalize to lowercase for consistent querying
+  // ---------------------------------------------------------
   stage.template {
     source   = "level"
-    template = "{{ ToLower .Value }}"
+    template = "{{ if .Value }}{{ ToLower .Value }}{{ else }}info{{ end }}"
   }
 
+  // Map "warning" → "warn" for consistency
   stage.replace {
     expression = "warning"
     source     = "level"
     replace    = "warn"
   }
 
-  // Gán detected_level label
+  // ---------------------------------------------------------
+  // Stage 7: Assign detected_level label
+  // ---------------------------------------------------------
+  // Create label "detected_level" from extracted level.
+  // Enables queries like: {detected_level="error"}
+  //
+  // SRE Rule: Only use LOW-CARDINALITY fields as labels
+  // (debug/info/warn/error/fatal). NEVER put high-cardinality
+  // fields (user_id, request_id, trace_id) into labels.
+  // ---------------------------------------------------------
   stage.labels {
     values = {
       detected_level = "level",
     }
   }
 
-  // Static labels — đánh dấu VM nguồn
+  // ---------------------------------------------------------
+  // Stage 8: Static labels — mark source VM
+  // ---------------------------------------------------------
   stage.static_labels {
     values = {
       source = "docker",
@@ -101,11 +212,26 @@ loki.process "docker_pipeline" {
     }
   }
 
-  // Drop debug logs (comment out nếu cần debug)
+  // ---------------------------------------------------------
+  // Stage 9: Drop noisy debug logs
+  // ---------------------------------------------------------
+  // In lab/dev, debug logs have little value but consume
+  // storage. Drop to reduce cost.
+  // Comment out this stage if you need full debug visibility.
+  // ---------------------------------------------------------
   stage.drop {
     source              = "level"
     expression          = "debug"
     drop_counter_reason = "debug_level"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 10: Cleanup internal labels
+  // ---------------------------------------------------------
+  // Remove the _looks_like_logfmt helper label (not needed in Loki)
+  // ---------------------------------------------------------
+  stage.label_drop {
+    values = ["_looks_like_logfmt"]
   }
 
   forward_to = [loki.write.loki_endpoint.receiver]
