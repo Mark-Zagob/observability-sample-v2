@@ -7,10 +7,12 @@
 // Pipeline:
 //   Source → Multiline → Process (parse, extract, filter) → Push Loki
 //
-// v2.0: Fixed logfmt parse errors by:
-//   - Adding stage.multiline for stack traces
-//   - Making stage.logfmt conditional (only parse lines that look like logfmt)
-//   - Adding stage.regex to detect logfmt pattern before parsing
+// v3.0: Removed stage.logfmt entirely (pragmatic approach)
+//   - Most services log JSON (handled by stage.json)
+//   - PostgreSQL/Redis/Kafka logs kept as plain text (readable in Grafana)
+//   - Eliminates 100% of logfmt parse errors
+//   - If specific service needs logfmt parsing, add stage.logfmt
+//     with precise selector for that service only
 // ============================================================
 
 // ============================================================
@@ -118,54 +120,21 @@ loki.process "docker_pipeline" {
   }
 
   // ---------------------------------------------------------
-  // Stage 4: Detect logfmt pattern (regex guard)
+  // Stage 4: REMOVED — logfmt parsing
   // ---------------------------------------------------------
-  // FIX for "logfmt syntax error at pos 44: unexpected '\"'"
+  // Decision: Drop stage.logfmt entirely (v3.0)
   //
-  // Problem: stage.logfmt tries to parse EVERY line, including
-  // JSON, plain text, PostgreSQL logs, Redis logs, Kafka logs.
-  // Lines with unexpected quotes at certain positions cause errors.
+  // Reasoning:
+  //   1. Most application services log JSON (structlog) → handled by stage.json
+  //   2. Infrastructure services (PostgreSQL, Redis, Kafka) log in native formats
+  //      → Keep as plain text, still readable in Grafana Loki
+  //   3. Trying to detect & parse logfmt is error-prone (regex guard too broad)
+  //   4. Eliminates 100% of "logfmt syntax error" messages
   //
-  // Solution: Use stage.regex to detect lines that LOOK like logfmt
-  // (contain key=value pairs), then only apply stage.logfmt to
-  // those lines via stage.match selector.
-  //
-  // Logfmt examples:
-  //   level=info msg="server started" caller=main.go:42
-  //   ts=2026-09-16T03:21:56Z level=error msg="connection refused"
-  //
-  // This regex matches lines with at least one key=value pair.
+  // If a specific service needs logfmt parsing in the future:
+  //   - Add stage.logfmt with precise selector targeting that service
+  //   - Example: selector = "{compose_service=\"api-gateway\"}"
   // ---------------------------------------------------------
-  stage.regex {
-    expression = "^(?P<_looks_like_logfmt>([a-zA-Z_][a-zA-Z0-9_]*=[^\\s]+\\s*)+)"
-  }
-
-  // ---------------------------------------------------------
-  // Stage 5: Conditionally parse logfmt
-  // ---------------------------------------------------------
-  // Only applies stage.logfmt if the line matched the regex above.
-  // This prevents parse errors on:
-  //   - JSON lines (already handled by stage.json)
-  //   - Plain text logs (e.g., nginx access logs)
-  //   - PostgreSQL/Redis/Kafka native log formats
-  //   - Stack trace continuation lines
-  //
-  // SRE Concept: `Conditional Parsing` — only parse what you
-  // expect to parse. Prevents noise and errors in observability
-  // pipeline.
-  // ---------------------------------------------------------
-  stage.match {
-    selector = "{_looks_like_logfmt!=\"\"}"
-
-    stage.logfmt {
-      mapping = {
-        level  = "",
-        msg    = "",
-        caller = "",
-        ts     = "",
-      }
-    }
-  }
 
   // ---------------------------------------------------------
   // Stage 6: Normalize log level → lowercase
@@ -223,15 +192,6 @@ loki.process "docker_pipeline" {
     source              = "level"
     expression          = "debug"
     drop_counter_reason = "debug_level"
-  }
-
-  // ---------------------------------------------------------
-  // Stage 10: Cleanup internal labels
-  // ---------------------------------------------------------
-  // Remove the _looks_like_logfmt helper label (not needed in Loki)
-  // ---------------------------------------------------------
-  stage.label_drop {
-    values = ["_looks_like_logfmt"]
   }
 
   forward_to = [loki.write.loki_endpoint.receiver]
