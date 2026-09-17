@@ -8,6 +8,23 @@
 
 ---
 
+## [2.4.5] — 2026-09-17
+
+### 🐛 Fix: Grafana Text Panel Missing Markdown Content
+
+**Problem:** Panel "🔥 Open Profiling Dashboard" (id: 11) trong `unified-overview.json` hiển thị trống rỗng, chỉ thấy title và message mặc định `"For markdown syntax help: commonmark.org/help"`.
+
+**Root Cause:** Panel có `type: "text"` với `options.mode: "markdown"` nhưng **thiếu field `options.content`** chứa markdown text. Ngoài ra, panel thừa `datasource` (Prometheus) và `targets` — lỗi copy-paste từ panel `timeseries`.
+
+**Fix Applied:**
+- ✅ Thêm `options.content` với markdown text đầy đủ (quick link, when-to-use guide, profile types table)
+- ✅ Bỏ `datasource` và `targets` vì text panel không cần query
+
+**Files Changed:**
+- `grafana/dashboards/Application/unified-overview.json` — Panel id 11
+
+---
+
 ## [2.4.4] — 2026-09-17
 
 ### 🎨 Phase 4.6: Grafana Profiling Dashboard Integration

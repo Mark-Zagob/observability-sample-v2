@@ -914,10 +914,6 @@
       ]
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -928,13 +924,9 @@
       "title": "🔥 Open Profiling Dashboard",
       "type": "text",
       "options": {
-        "mode": "markdown"
+        "mode": "markdown",
+        "content": "## 🔥 Continuous Profiling\n\nView **CPU & Memory flame graphs** for all services.\n\n### 🔗 Quick Links\n\n[**📊 Open Profiling Dashboard →**](/d/profiling-overview)\n\n---\n\n### 💡 When to Use\n\n- **P95 latency spike** → Find hot functions\n- **Memory leak suspected** → Find allocation sites\n- **GIL contention** → Check multi-threaded Python services\n\n---\n\n### 📖 Profile Types Available\n\n| Type | Use Case |\n|------|----------|\n| `cpu` | CPU-bound hotspots |\n| `memory` | Memory leaks, high allocations |\n| `goroutines` | Goroutine leaks (Go) |\n| `mutex` | Lock contention |"
       },
-      "targets": [
-        {
-          "refId": "A"
-        }
-      ],
       "pluginVersion": "10.0.0"
     }
   ],
