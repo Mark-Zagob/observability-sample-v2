@@ -48,11 +48,12 @@ services:
       - PYROSCOPE_LOG_LEVEL=info
     volumes:
       - pyroscope_data:/var/lib/pyroscope
+      - ./pyroscope/config.yaml:/etc/pyroscope/config.yaml:ro
     command:
-      - '-config.file=/etc/pyroscope/server.yml'
-      - '-server.http-listen-port=4040'
-      - '-retention-period=168h'              # Keep profiles for 7 days
-      - '-ingestion.max-ingestion-rate=10000' # Max samples/sec
+      # Only the config file flag — all other settings are in config.yaml
+      # NOTE: -retention-period and -ingestion.max-ingestion-rate were REMOVED in v1.0
+      # Retention is now configured via limits.compactor_blocks_retention_period in config.yaml
+      - '-config.file=/etc/pyroscope/config.yaml'
     ports:
       - "4040:4040"  # Pyroscope UI + ingestion endpoint
     networks:

@@ -1,0 +1,93 @@
+# ============================================================
+# Pyroscope Server Configuration — v1.13.x (Production-Grade)
+# ============================================================
+# Architecture: Single-binary mode (target=all)
+# Storage: v1 (pyroscopedb) with local filesystem
+#
+# Reference: https://grafana.com/docs/pyroscope/latest/configure-server/reference-configuration-parameters/
+# ============================================================
+
+# ----------------------------------------------------------
+# Target — single-binary mode (all components in one process)
+# ----------------------------------------------------------
+# 'all' loads all core modules for a single-node deployment
+target: all
+
+# ----------------------------------------------------------
+# Server Block — HTTP/gRPC listener
+# ----------------------------------------------------------
+server:
+  http_listen_port: 4040
+  grpc_listen_port: 9095
+  # Graceful shutdown — allows in-flight requests to complete
+  graceful_shutdown_timeout: 30s
+  http_server_read_timeout: 30s
+  http_server_write_timeout: 30s
+
+# ----------------------------------------------------------
+# PyroscopeDB — v1 storage engine (local)
+# ----------------------------------------------------------
+pyroscopedb:
+  # Data directory — mounted as Docker volume
+  data_path: /var/lib/pyroscope
+  # Upper limit for block duration (profiles are compacted into blocks)
+  max_block_duration: 1h
+  # Retention policy enforcement — how often to clean up old data/disk
+  enforcement_interval: 5m
+  min_free_disk_gb: 5
+  min_disk_available_percentage: 0.05
+
+# ----------------------------------------------------------
+# Compactor — handles data compaction & block deletion
+# ----------------------------------------------------------
+compactor:
+  # How often the compactor scans for blocks to compact/delete
+  # CLI flag: -compactor.compaction-interval
+  compaction_interval: 15m
+  # Delay before deleting marked blocks (prevents query failures on recent data)
+  # CLI flag: -compactor.deletion-delay
+  deletion_delay: 12h
+
+# ----------------------------------------------------------
+# Limits — per-tenant & global limits
+# ----------------------------------------------------------
+limits:
+  # Time-based retention: profiles older than 168h (7 days) will be deleted
+  # This is the CORRECT way to set retention in Pyroscope 1.13+
+  # (NOT the old -retention-period flag which was removed in v1.0)
+  # CLI flag: -compactor.blocks-retention-period
+  compactor_blocks_retention_period: 168h
+
+  # Per-tenant ingestion rate limit (in MB/s) — prevents runaway ingestion
+  # CLI flag: -distributor.ingestion-rate-limit-mb
+  ingestion_rate_mb: 10
+
+  # Ingestion burst size (in MB) — allows short spikes above rate limit
+  # CLI flag: -distributor.ingestion-burst-size-mb
+  ingestion_burst_size_mb: 20
+
+  # Max active series per tenant across cluster (prevents cardinality explosion)
+  # CLI flag: -ingester.max-global-series-per-tenant
+  max_global_series_per_tenant: 100000
+
+# ----------------------------------------------------------
+# Self-Profiling — disable profiling the profiler
+# ----------------------------------------------------------
+self_profiling:
+  disable_push: true
+
+# ----------------------------------------------------------
+# Analytics — disable anonymous usage reporting
+# ----------------------------------------------------------
+analytics:
+  reporting_enabled: false
+
+# ----------------------------------------------------------
+# Multitenancy — disabled (single-tenant lab)
+# ----------------------------------------------------------
+multitenancy_enabled: false
+
+# ----------------------------------------------------------
+# Shutdown — graceful shutdown delay
+# ----------------------------------------------------------
+shutdown_delay: 10s

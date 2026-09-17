@@ -8,6 +8,58 @@
 
 ---
 
+## [2.4.1] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope Container Startup Failure
+
+#### ❌ Root Cause
+Pyroscope v1.13.0 container failed to start with:
+```
+flag provided but not defined: -retention-period
+```
+The `docker-compose.yml` used **deprecated CLI flags** from the pre-1.0 era (`pyroscope/pyroscope`), which were **removed** in the `grafana/pyroscope` 1.0+ rewrite [[15]].
+
+Specifically:
+- `-retention-period` — **removed in v1.0**, replaced by `limits.compactor_blocks_retention_period` in YAML config
+- `-ingestion.max-ingestion-rate` — **non-existent flag**, ingestion rate is controlled via `limits.ingestion_rate_mb`
+- `-config.file=/etc/pyroscope/server.yml` — referenced the **old config path** (`server.yml`), new path is `config.yaml` [[15]]
+- No config file was actually mounted into the container
+
+#### ✅ Fix Applied
+1. **Created** `pyroscope/config.yaml` — proper v1.13 configuration file with:
+   - `compactor_blocks_retention_period: 168h` (7-day retention)
+   - `ingestion_rate_mb: 10` / `ingestion_burst_size_mb: 20` (rate limiting)
+   - `max_global_series_per_tenant: 100000` (cardinality guard)
+   - `compactor.compaction_interval: 15m` + `deletion_delay: 12h`
+   - `pyroscopedb` disk retention settings (`enforcement_interval: 5m`)
+
+2. **Fixed** `docker-compose.yml`:
+   - Removed all invalid CLI flags
+   - Changed to: `-config.file=/etc/pyroscope/config.yaml`
+   - Added volume mount: `./pyroscope/config.yaml:/etc/pyroscope/config.yaml:ro`
+
+#### 📝 Files Changed
+- `observability-vm/phase4-profiling/docker-compose.yml` — command + volumes
+- `observability-vm/phase4-profiling/pyroscope/config.yaml` — **new file**
+
+#### 🔄 Rollback Plan
+If issues arise, revert to the old compose (but it will fail to start):
+```bash
+cd observability-vm/phase4-profiling
+# The old config had invalid flags — there is no safe rollback state
+# Simply keep the fixed version
+```
+
+#### 🎓 SRE Lesson
+| Concept | Application |
+|---------|-------------|
+| `Breaking Changes in Major Versions` | Pyroscope 1.0 removed many CLI flags — always check upgrade guides |
+| `Configuration as Code` | YAML config file > CLI flags (version-controlled, auditable, testable) |
+| `Look Before You Leap` | Read the official upgrade guide before bumping image versions |
+| `Minimal Viable Change` | Fixed by moving config to file instead of guessing new flag names |
+
+---
+
 ## [2.4.0] — 2026-09-17
 
 ### 🛡️ Week 1-2: Production-Grade Infrastructure Hardening
