@@ -48,6 +48,13 @@
       "type": "link",
       "icon": "bolt",
       "tooltip": "Active alerts"
+    },
+    {
+      "title": "🔥 Profiling",
+      "url": "/d/profiling-overview",
+      "type": "link",
+      "icon": "fire",
+      "tooltip": "Continuous Profiling — Flame Graphs (Pyroscope)"
     }
   ],
   "panels": [

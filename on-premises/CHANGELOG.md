@@ -8,6 +8,93 @@
 
 ---
 
+## [2.4.4] — 2026-09-17
+
+### 🎨 Phase 4.6: Grafana Profiling Dashboard Integration
+
+#### 🎯 Motivation
+
+After Phase 4.5 successfully integrated Pyroscope SDK into all 6 services, the next question was: **"How should we visualize profiling data in production-grade manner?"**
+
+A naive approach would be to just point users to the Pyroscope UI at `http://192.168.100.55:4040`. But this breaks the **Single Pane of Glass** principle — SREs would have to context-switch between Grafana (metrics/logs/traces) and Pyroscope UI (profiles).
+
+#### 🏗️ 3-Tier Dashboard Strategy (Production-Grade Approach)
+
+| Tier | Purpose | Implementation |
+|------|---------|----------------|
+| **Tier 1 — Dedicated Profiling Dashboard** | Deep-dive investigation with flame graphs, top functions, cross-signal correlation | `dashboards/Profiling/profiling-overview.json` |
+| **Tier 2 — Cross-Signal Integration** | Surface profiling signals in existing dashboards for workflow continuity | Added profiling row to `unified-overview.json` + links in `app-performance.json` |
+| **Tier 3 — Exemplar Drill-Down** | Click metric data point → jump to profile → jump to trace | Already configured in `pyroscope.yml` datasource via `exemplarTraceIdDestinations` |
+
+#### 📊 New Dashboard: `profiling-overview`
+
+**Folder:** `dashboards/Profiling/` (auto-created by Grafana provisioner via `foldersFromFilesStructure: true`)
+
+**4 Sections:**
+
+1. **🩺 Profiling Health (SDK Telemetry)**
+   - CPU samples ingestion rate per service
+   - Memory samples ingestion rate per service
+   - Failed samples (error rate)
+   - **SRE Insight:** These are "meta-metrics" — measuring the profiling system itself. If ingestion rate = 0, profiling is broken even if app looks healthy.
+
+2. **🔥 CPU Profiling**
+   - CPU Flame Graph (interactive)
+   - Top 10 CPU-consuming functions (table)
+   - **SRE Insight:** When P95 latency spikes, use flame graph to find the "hot" function.
+
+3. **💾 Memory Profiling**
+   - Memory Allocation Flame Graph
+   - Top 10 memory-allocating functions
+   - **SRE Insight:** When RSS grows continuously (memory leak), find the "allocation site" via flame graph.
+
+4. **🔗 Cross-Signal Correlation**
+   - Service P95 latency (Prometheus) — trigger signal
+   - Service error rate (Prometheus) — correlate with memory profiles
+   - **SRE Workflow:** P95 spike → click flame graph → find bottleneck → optimize.
+
+**Variable:** `$service` dropdown (api-gateway, order-service, payment-service, notification-worker, inventory-worker, traffic-gen)
+
+#### 🔗 Dashboard Links Added
+
+| Dashboard | Added Link |
+|-----------|------------|
+| `unified-overview.json` | "🔥 Profiling" link + profiling samples ingestion panel |
+| `app-performance.json` | "🔥 Profiling" link in dashboard links |
+
+#### 📝 Files Changed
+
+| File | Action |
+|------|--------|
+| `grafana/dashboards/Profiling/profiling-overview.json` | **NEW** — Dedicated profiling dashboard |
+| `grafana/dashboards/Application/unified-overview.json` | **MODIFIED** — Added profiling row + link |
+| `grafana/dashboards/Application/app-performance.json` | **MODIFIED** — Added profiling link |
+
+#### 🎓 SRE Concepts Applied
+
+| Concept | Application |
+|---------|-------------|
+| **Single Pane of Glass** | All 4 observability signals (metrics, logs, traces, profiles) accessible from Grafana |
+| **Dashboard as Code** | JSON files version-controlled, reproducible, reviewable |
+| **Cross-Signal Correlation** | P95 latency panel next to flame graph → natural investigation workflow |
+| **Meta-Metrics** | Monitoring the monitoring system (profiling SDK health) |
+| **Progressive Disclosure** | Simple overview → drill-down to flame graphs only when needed |
+
+#### 🚀 Deployment
+
+```bash
+# Restart Grafana to reload provisioned dashboards
+cd observability-sample-v2/on-premises/observability-vm/phase1-metrics
+docker compose restart grafana
+```
+
+**Verification:**
+1. Open Grafana → Dashboards → **Profiling** folder → `Profiling — Continuous Profiling (Pyroscope)`
+2. Select service from `$service` dropdown → flame graph should load
+3. Verify links in Unified Overview and App Performance dashboards
+
+---
+
 ## [2.4.3] — 2026-09-17
 
 ### 🐛 Phase 4.5: Fix Pyroscope Storage Permission Denied

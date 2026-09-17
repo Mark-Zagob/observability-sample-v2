@@ -51,6 +51,13 @@
       "icon": "search"
     },
     {
+      "title": "🔥 Profiling",
+      "url": "/d/profiling-overview",
+      "type": "link",
+      "icon": "fire",
+      "tooltip": "Continuous Profiling — Flame Graphs (Pyroscope)"
+    },
+    {
       "title": "Infrastructure",
       "url": "/d/node-exporter-host",
       "type": "link",
@@ -862,6 +869,73 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "id": 104,
+      "title": "🔥 Profiling (Continuous Profiling — Pyroscope)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "🩺 Profiling SDK Health — Tỷ lệ samples được gửi tới Pyroscope mỗi giây.\n\n💡 SRE Insight:\n• Value > 0: SDK hoạt động bình thường\n• Value = 0: SDK bị tắt hoặc Pyroscope down\n• Click 'Open Profiling Dashboard' để xem flame graph chi tiết\n\n🎯 Workflow: P95 spike → Check profiling samples → Click dashboard để xem flame graph.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "cps",
+          "min": 0,
+          "custom": {"fillOpacity": 15, "lineWidth": 2}
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 53
+      },
+      "id": 10,
+      "title": "🔥 Profiling Samples Ingestion Rate (CPU + Memory)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(pyroscope_profiling_ingested_samples_total[5m])) by (service_name, profile)",
+          "legendFormat": "{{ service_name }} — {{ profile }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 53
+      },
+      "id": 11,
+      "title": "🔥 Open Profiling Dashboard",
+      "type": "text",
+      "options": {
+        "mode": "markdown"
+      },
+      "targets": [
+        {
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "10.0.0"
     }
   ],
   "schemaVersion": 39,
