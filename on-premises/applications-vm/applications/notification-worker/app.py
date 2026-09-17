@@ -50,6 +50,11 @@ from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
 # ----------------------------------------------------------
 logger = setup_logging("notification-worker")
 tracer, meter = init_otel("notification-worker", "1.0.0")
+
+# Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
+from shared.profiling_setup import init_profiling
+init_profiling("notification-worker", "1.0.0")
+
 Psycopg2Instrumentor().instrument()
 
 # ============================================================

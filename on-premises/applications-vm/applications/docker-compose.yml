@@ -100,6 +100,10 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - ORDER_SERVICE_URL=http://order-service:5001
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     ports:
       - "5000:5000"
     depends_on:
@@ -132,6 +136,10 @@ services:
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5001:5001"
@@ -165,6 +173,10 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - REDIS_URL=redis://redis:6379/0
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5002:5002"
@@ -308,6 +320,10 @@ services:
       # Env var KAFKA_AUTO_COMMIT không được đọc bởi application code.
       - KAFKA_SESSION_TIMEOUT=45000     # 45s - Tiêu chuẩn Production
       - KAFKA_ASSIGNMENT_STRATEGY=range # Giữ nguyên Eager cho Hiệp 1
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5004:5004"
@@ -342,6 +358,10 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       # secretlint-disable-next-line
       - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     # 🛡️ Production: Remove port exposure, access only via backend network
     ports:
       - "5005:5005"
@@ -371,8 +391,15 @@ services:
   # ==========================================================
 
   traffic-gen:
-    build: ./traffic-gen
+    build:
+      context: .
+      dockerfile: traffic-gen/Dockerfile
     container_name: traffic-gen
+    environment:
+      # Phase 4.5: Continuous Profiling
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_URL=http://192.168.100.55:4040
+      - PYROSCOPE_SAMPLE_RATE=100
     ports:
       - "5003:5003"
     depends_on:

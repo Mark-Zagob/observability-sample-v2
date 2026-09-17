@@ -37,6 +37,10 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 logger = setup_logging("payment-service")
 tracer, meter = init_otel("payment-service", "2.0.0")
 
+# Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
+from shared.profiling_setup import init_profiling
+init_profiling("payment-service", "2.0.0")
+
 # Auto-instrument outgoing HTTP requests (Fix Bom #4)
 RequestsInstrumentor().instrument()
 

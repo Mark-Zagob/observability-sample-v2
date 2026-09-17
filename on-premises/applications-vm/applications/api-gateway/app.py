@@ -40,6 +40,10 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 logger = setup_logging("api-gateway")
 tracer, meter = init_otel("api-gateway", "3.0.0")
 
+# Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
+from shared.profiling_setup import init_profiling
+init_profiling("api-gateway", "3.0.0")
+
 # ============================================================
 # Custom Metrics
 # ============================================================
