@@ -20,12 +20,12 @@
 | Field | Value |
 |-------|-------|
 | **Document Status** | ✅ Reviewed & Approved |
-| **Last Updated** | 2026-07-10 |
-| **Version** | 2.3 (Phase 5 guardrails enhancement) |
+| **Last Updated** | 2026-09-17 |
+| **Version** | 2.4 (Week 1-2 Production Hardening) |
 | **Owner** | Platform Engineering Team |
 | **Author(s)** | dungtt, [Co-author if any] |
 | **Reviewers** | [Principal Architect], [SRE Lead], [Security Team] |
-| **Next Review** | 2026-08-28 (quarterly) |
+| **Next Review** | 2026-12-17 (quarterly) |
 | **Approval Date** | 2026-05-28 |
 
 ### Document History
@@ -37,6 +37,7 @@
 | 2.1 | 2026-05-28 | dungtt | Enhanced Mermaid diagrams, added metadata, cross-references |
 | 2.2 | 2026-07-10 | dungtt | Phase 5 patterns: Circuit Breaker, IdempotencyGuard, Graceful Shutdown Manager, Auto-migration, HTTP Semantic Mapping, OTel Watchdog. Added ENABLE_REDIS/ENABLE_KAFKA feature flags |
 | 2.3 | 2026-07-10 | dungtt | Added Production Guardrails: DB Driver Resilience, Page Visibility API, OTel Custom Buckets, Kafka Natural Batching, Traffic Source Tagging, Redis Idempotency State Machine details, Graceful Degradation pattern. Updated Gunicorn config details, Nginx DNS re-resolution. Added ADR-011, ADR-012, ADR-013 |
+| 2.4 | 2026-09-17 | dungtt | **Week 1-2 Production Hardening:** Network Segmentation (3-tier frontend/backend/data), Resource Limits (all services), Log Rotation (10MB×5), Graceful Shutdown Contract (30s/60s). Added Observability Stack Capacity Planning table. Updated Current State security table. Added Graceful Shutdown Contract dedicated section. Marked Network Segmentation/Resource Limits/Log Rotation as DONE in Planned Improvements. See [CHANGELOG.md](CHANGELOG.md) & [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) |
 
 ### Related Architecture Decision Records (ADRs)
 
@@ -264,13 +265,48 @@ graph LR
 
 ### Network Segmentation
 
-Hiện tại sử dụng **single Docker bridge network** (`observability`) cho tất cả services.
+**Current state (Week 1-2 applied):** 3-tier Docker bridge network trên Applications VM + external network cho Observability VM. Đây là ứng dụng thực tế của `Zero Trust Architecture` — không tin bất kỳ service nào mặc định, mọi giao tiếp phải được authorize qua network boundary.
 
-> **Production note:** Khi mở rộng (xem [EXPANSION_PLAN.md](EXPANSION_PLAN.md)), cần tách thành 4 networks:
-> - `frontend` — Web UI, nginx
-> - `backend` — API Gateway, services  
-> - `data` — PostgreSQL, Redis, Kafka, OpenSearch
-> - `observability` — OTel, Prometheus, Grafana (external)
+| Network | Services on it | Purpose | Security Boundary |
+|---------|---------------|---------|-------------------|
+| `frontend` | web-ui, api-gateway | External-facing traffic | Internet → App entry point |
+| `backend` | api-gateway, order-service, payment-service, traffic-gen, workers | Internal business logic | No direct DB access |
+| `data` | postgres, redis, kafka, kafka-exporter, kafka-ui, order-service, workers | Data layer | Only apps that NEED data can reach it |
+| `observability` (external) | OTel, Prometheus, Grafana, Loki, Tempo, MinIO, alloy, cadvisor, node-exporter | Cross-VM telemetry | VM-to-VM monitoring traffic |
+
+#### Network Connectivity Matrix
+
+| Service | frontend | backend | data | Can reach |
+|---------|:--------:|:-------:|:----:|-----------|
+| **web-ui** | ✅ | ✅ | ❌ | api-gateway, traffic-gen, workers (reverse proxy) |
+| **api-gateway** | ✅ | ✅ | ❌ | web-ui, order-service, payment-service, traffic-gen |
+| **order-service** | ❌ | ✅ | ✅ | api-gateway, payment-service, postgres, redis, kafka |
+| **payment-service** | ❌ | ✅ | ✅ | order-service, redis |
+| **notification-worker** | ❌ | ✅ | ✅ | postgres, kafka |
+| **inventory-worker** | ❌ | ✅ | ✅ | postgres, kafka |
+| **traffic-gen** | ❌ | ✅ | ❌ | api-gateway, workers |
+| **postgres** | ❌ | ❌ | ✅ | (receive only) |
+| **redis** | ❌ | ❌ | ✅ | (receive only) |
+| **kafka** | ❌ | ❌ | ✅ | (receive only) |
+
+#### Cross-Network Bridge Services
+
+Một số services cần thuộc nhiều networks để làm vai trò bridge:
+
+- **`web-ui`**: `frontend` + `backend` — reverse proxy tới các backend services
+- **`api-gateway`**: `frontend` + `backend` — nhận request từ frontend, gọi các backend services
+- **`order-service`**, **`payment-service`**, **workers**: `backend` + `data` — nhận request từ backend, kết nối tới data layer
+
+#### Security Benefits (Blast Radius Reduction)
+
+| Attack Scenario | Before (single network) | After (3-tier) |
+|----------------|-------------------------|----------------|
+| `web-ui` bị compromise | Attacker scan toàn bộ network, tìm PostgreSQL | Attacker chỉ thấy frontend + backend, KHÔNG thấy PostgreSQL |
+| `api-gateway` bị compromise | Attacker connect thẳng tới Redis/Kafka | Attacker KHÔNG thể access data layer |
+| 1 worker bị compromise | Attacker lateral move sang tất cả services | Attacker chỉ thấy backend + data, không thể ra frontend |
+| Ransomware trong 1 container | Toàn bộ data layer bị encrypt | Chỉ data layer của services cùng network bị ảnh hưởng |
+
+> **Production note:** Khi mở rộng lên 10 services (xem [EXPANSION_PLAN.md](EXPANSION_PLAN.md)), network segmentation này giúp dễ dàng thêm service mới vào đúng tier mà không làm phức tạp hóa security model. OpenSearch (khi thêm ở Phase 3) sẽ vào `data` network, Auth Service sẽ vào `backend` + `data`.
 
 ### Port Exposure Strategy
 
@@ -505,6 +541,33 @@ erDiagram
 | Redis | 1.0 | 1GB | — | Cache only, TTL 60s |
 | Kafka | 2.0 | 4GB | — | KRaft mode, 3 partitions |
 | OpenSearch (planned) | 2.0 | 3GB | — | JVM heap 1GB + OS overhead |
+
+#### Observability Stack Resource Allocation (Week 1-2 Applied)
+
+| Service | CPU Limit | Memory Limit | Reservations | Rationale |
+|---------|-----------|--------------|--------------|-----------|
+| Prometheus | 1.0 | 2G | 0.25 / 512M | TSDB + recording rules + alerts |
+| Grafana | 1.0 | 1G | 0.25 / 256M | Dashboard rendering |
+| Loki | 1.0 | 2G | 0.25 / 512M | Log ingestion + LogQL queries |
+| Tempo | 1.0 | 2G | 0.25 / 512M | Trace ingestion + storage |
+| OTel Collector | 1.0 | 1G | 0.25 / 256M | Telemetry pipeline + spanmetrics |
+| MinIO | 1.0 | 1G | 0.25 / 256M | S3 backend for Loki/Tempo |
+| Alertmanager | 0.5 | 256M | 0.1 / 64M | Alert routing |
+| Blackbox Exporter | 0.25 | 128M | 0.05 / 32M | HTTP probes (lightweight) |
+| Alloy (App VM) | 0.5 | 512M | 0.1 / 128M | Log collection agent |
+| cAdvisor (both VMs) | 0.5 | 256M | 0.1 / 64M | Container metrics |
+| Node Exporter (both VMs) | 0.25 | 128M | 0.05 / 32M | Host metrics (lightweight) |
+| Webhook Receiver | 0.25 | 128M | 0.05 / 32M | Alert webhook handling |
+
+**Total observability overhead:** ~6.5 CPU, ~10.75 GB RAM (Observability VM 32GB — comfortable headroom for growth)
+
+**SRE Rationale:**
+
+- **Prometheus 2G**: TSDB memory usage scales linearly với active series. 5K series hiện tại → ~500MB, nhưng cần buffer cho recording rules + future expansion
+- **Loki/Tempo 2G**: Chunk processing + query buffer. Không có memory limit sẽ OOM khi LogQL query lớn
+- **OTel Collector 1G**: Spanmetrics connector + tail sampling buffer. Pipeline bottleneck khi downstream slow
+- **MinIO 1G**: S3-compatible object storage, light workload cho lab
+- **Agents (Alloy/cAdvisor/Node Exporter)**: Lightweight, chỉ collect & forward, không process
 
 #### Gunicorn Configuration Deep-Dive
 
@@ -1376,19 +1439,121 @@ def redis_health_check():
 | Strict (raise) | 503 → ECS kills task → restart loop → all payments fail | ❌ Cascading failure |
 | Graceful (return True) | Warning log → payments process without idempotency | ✅ Degraded but functional |
 ---
+## Graceful Shutdown Contract
+
+Một **contract (hợp đồng)** giữa Orchestrator (Docker Compose) và Application Code để đảm bảo không mất data, không drop in-flight requests khi container restart/stop. Đây là `Orchestrator-Application Contract` — một trong những nguyên tắc cốt lõi của production-grade deployments.
+
+### Contract Table
+
+| Service Type | `stop_grace_period` (Docker) | Code `graceful_timeout` | Buffer | Rationale |
+|--------------|------------------------------|-------------------------|--------|-----------|
+| Python services (Flask/Gunicorn) | 30s | 25s | 5s | 5s cho OS cleanup + network teardown |
+| PostgreSQL | 60s | N/A (built-in) | — | PostgreSQL cần flush WAL + close connections |
+| Kafka | 60s | N/A | — | Kafka cần partition leader election + offset commit |
+| Observability stack (Prometheus/Loki/Tempo) | 30s | varies | — | Prometheus flush TSDB, Loki flush chunks, Tempo flush traces |
+| Stateless infra (Redis, exporters) | Default (10s) | N/A | — | Stateless, fast shutdown acceptable |
+
+### Shutdown Sequence — Order Service Example
+
+```text
+[Time 0s]  Docker Compose sends SIGTERM
+[Time 0-25s]  Gunicorn graceful_timeout
+             ├── Workers finish in-flight requests
+             ├── Kafka Producer flush buffer (10s timeout)
+             ├── PostgreSQL pool close connections (5s timeout)
+             ├── Redis client close (5s timeout)
+             └── Kafka Consumer commit final offsets
+[Time 25-30s]  OS cleanup buffer
+             ├── File descriptors close
+             ├── Network sockets TIME_WAIT
+             └── Temp files cleanup
+[Time 30s]  If still running → Docker sends SIGKILL (exit code 137)
+            If finished → exit code 0 (clean exit)
+```
+
+### Why Critical (Failure Scenarios)
+
+| Scenario | Without Contract | With Contract |
+|----------|-----------------|---------------|
+| Kill consumer mid-processing | Duplicate processing on restart (Kafka offset not committed) | Consumer commits offset → no duplicate |
+| PostgreSQL SIGKILL | `max_connections` exhaustion after rolling updates, possible WAL corruption | Clean connection close, WAL flushed |
+| Kafka broker SIGKILL | Uncommitted offsets → message loss, leader election delay | Partition leader election completes, offsets committed |
+| Apps killed before gunicorn `graceful_timeout` | In-flight requests 502 → user sees error | Requests complete normally |
+| Saga orchestrator mid-compensation | Saga stuck in PENDING state, manual intervention required | Saga state persisted, compensation continues on restart |
+
+### Verification Commands
+
+```bash
+# 1. Stop a service and measure time
+time docker compose stop order-service
+# Expected: ~25-30s (NOT 10s default, NOT instant)
+
+# 2. Check exit code (should be 0, NOT 137 = SIGKILL)
+docker inspect order-service --format '{{.State.ExitCode}}'
+# Expected: 0
+
+# 3. Check logs for graceful shutdown messages
+docker compose logs --tail=20 order-service | grep -i "shutdown\|graceful\|SIGTERM"
+# Expected: "🛑 Received SIGINT/SIGTERM, finishing current request gracefully..."
+# Expected: "👋 Service shut down cleanly."
+
+# 4. Verify in-flight requests complete
+# In one terminal: send a slow request
+curl -X POST http://localhost:5000/order -H "Content-Type: application/json" \
+  -d '{"product_id":1,"quantity":1}' &
+
+# In another terminal: stop the service
+docker compose stop order-service
+
+# Expected: curl completes successfully (200/402/409), NOT connection refused
+```
+
+### Configuration in docker-compose.yml
+
+```yaml
+services:
+  order-service:
+    stop_grace_period: 30s  # Match gunicorn graceful_timeout (25s) + 5s buffer
+    # ... other config ...
+
+  postgres:
+    stop_grace_period: 60s  # Allow WAL flush + connection close
+    # ... other config ...
+
+  kafka:
+    stop_grace_period: 60s  # Allow partition leader election + log flush
+    # ... other config ...
+```
+
+### Common Anti-Patterns to Avoid
+
+| Anti-Pattern | Problem | Fix |
+|--------------|---------|-----|
+| `stop_grace_period: 10s` (default) cho Python apps | SIGKILL before gunicorn finishes → duplicate processing | Set to 30s (or match `graceful_timeout + buffer`) |
+| `graceful_timeout >= stop_grace_period` | SIGKILL arrives before code cleanup → same as default | `graceful_timeout < stop_grace_period - 5s` |
+| Not committing Kafka offsets on shutdown | Messages reprocessed → duplicate notifications/inventory updates | `consumer.close()` trong shutdown hook |
+| Hard `os.exit()` trong application code | Bypass cleanup entirely → data loss | Use `sys.exit(0)` hoặc raise `SystemExit` |
+
+> **Production Tip:** Trong Kubernetes/ECS Fargate, `stop_grace_period` tương đương `terminationGracePeriodSeconds`. Same contract, different orchestrator. Design code để portable across orchestrators.
+
+---
 ## Security Architecture
 
-### Current State (Lab Environment)
+### Current State (Lab Environment — Week 1-2 Hardened)
 
-> ⚠️ **Lab-only configuration** — không áp dụng cho production
+> ⚠️ **Lab-only configuration** — một số aspect chưa đạt production-grade (xem Planned Security Improvements)
 
 | Aspect | Current Implementation |
 |--------|------------------------|
-| Authentication | ❌ None (all APIs public) |
-| Authorization | ❌ None |
-| Encryption | ❌ HTTP only (no TLS) |
-| Secrets | ⚠️ Environment variables in `docker-compose.yml` |
-| Network | ⚠️ Single bridge network (no segmentation) |
+| Authentication | ❌ None (all APIs public) — Planned Week 11-12 |
+| Authorization | ❌ None — Planned Week 11-12 |
+| Encryption | ❌ HTTP only (no TLS) — Planned Week 11-12 |
+| Secrets | ⚠️ Environment variables in `docker-compose.yml` — Planned Week 11-12 |
+| Network | ✅ 3-tier segmentation (frontend, backend, data) + external observability |
+| Resource Limits | ✅ CPU/Memory limits + reservations cho TẤT CẢ containers (App VM + Obs VM) |
+| Log Rotation | ✅ `json-file` driver, max-size 10MB, max-file 5 (50MB/container max) |
+| Graceful Shutdown | ✅ `stop_grace_period`: 30s (apps), 60s (PostgreSQL/Kafka) |
+| Container Hardening | ✅ `read_only: true`, `cap_drop: ALL`, `no-new-privileges:true`, non-root user |
 
 ### Container Hardening (Applied)
 
@@ -1410,17 +1575,18 @@ user: appuser                      # Non-root user (UID 1000)
 
 ### Planned Security Improvements (Production)
 
-Xem chi tiết trong [EXPANSION_PLAN.md](EXPANSION_PLAN.md):
+Xem chi tiết trong [EXPANSION_PLAN.md](EXPANSION_PLAN.md) và [ROADMAP_PRODUCTION_GRADE.md](ROADMAP_PRODUCTION_GRADE.md):
 
-| Improvement | Implementation | Priority |
-|-------------|---------------|----------|
-| TLS termination | nginx + self-signed certs (lab) / ACM (AWS) | P0 |
-| JWT authentication | Auth Service + local public key verification | P0 |
-| RBAC | User roles: customer, admin, service | P1 |
-| Secrets management | Docker secrets + `.env` files (not in git) | P0 |
-| Network segmentation | 4 Docker networks (frontend, backend, data, observability) | P1 |
-| Resource limits | CPU/memory limits per container | P1 |
-| Log rotation | `json-file` driver, max-size 10MB, max-file 3 | P1 |
+| Improvement | Implementation | Priority | Status |
+|-------------|---------------|----------|--------|
+| ~~Network segmentation~~ | ~~4 Docker networks (frontend, backend, data, observability)~~ | P1 | ✅ DONE Week 1-2 (3-tier) |
+| ~~Resource limits~~ | ~~CPU/memory limits per container~~ | P1 | ✅ DONE Week 1-2 |
+| ~~Log rotation~~ | ~~`json-file` driver, max-size 10MB~~ | P1 | ✅ DONE Week 1-2 (10MB × 5) |
+| TLS termination | nginx + self-signed certs (lab) / ACM (AWS) | P0 | 📅 Planned Week 11-12 |
+| JWT authentication | Auth Service + local public key verification | P0 | 📅 Planned Q2 |
+| RBAC | User roles: customer, admin, service | P1 | 📅 Planned Q2 |
+| Secrets management | Docker secrets + `.env` files (not in git) | P0 | 📅 Planned Week 11-12 |
+| mTLS between services | Certificate-based service-to-service auth | P2 (Enterprise) | 📅 Planned Q5 |
 
 ### Secrets Management Strategy
 
@@ -1697,7 +1863,7 @@ curl -X POST http://localhost:9090/api/v1/admin/tsdb/snapshot
 |-----------|---------|-----------|-----------|
 | Application logs | Loki (MinIO) | 7 days | Debug window, storage cost |
 | Host logs | Loki (MinIO) | 7 days | Security audit |
-| Docker logs | `json-file` driver | 10MB × 3 files | Prevent disk fill |
+| Docker logs | `json-file` driver | 10MB × 5 files (50MB/container) | Prevent disk fill — Week 1-2 hardening |
 | Prometheus metrics | TSDB local | 15 days | Short-term analysis |
 | Traces | Tempo (MinIO) | 7 days | Debug window |
 | Grafana dashboards | Git | Forever | Version control |

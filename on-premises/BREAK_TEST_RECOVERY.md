@@ -4,6 +4,15 @@
 Hiểu sâu internals của từng infrastructure component bằng cách **phá → kiểm tra bên trong → khôi phục**. Khác với Incident Simulation (luyện đọc dashboard + triage), B/T/R tập trung vào **CLI/query inspection** — bạn sẽ biết component hoạt động thế nào dưới "nắp ca-pô".
 
 **Prerequisite:** Đã hoàn thành ít nhất Experiment 1-4 trong `INCIDENT_SIMULATION_GUIDE.md`.
+
+> ⏱️ **Week 1-2 Production Hardening Note:** Sau khi áp dụng Graceful Shutdown Contract, `docker stop` / `docker restart` sẽ mất thời gian lâu hơn so với mặc định:
+> - **App containers** (order-service, payment-service, etc.): `stop_grace_period: 30s` → container có 30s để flush in-flight requests trước khi bị kill
+> - **PostgreSQL / Kafka**: `stop_grace_period: 60s` → có thời gian flush WAL, commit offsets, close connections
+> 
+> Khi chạy các exercises liên quan đến stop/restart (PG-1, KF-3, KF-4, AM-1...), **hãy tính thêm thời gian này vào timeline**. Ví dụ: "Restart Kafka" ở KF-3 sẽ mất ~60s thay vì ~10s như trước.
+>
+> Các commands `docker kill` (SIGKILL) vẫn hoạt động ngay lập tức vì bỏ qua graceful period.
+
 ---
 
 ## Khi nào dùng BTR vs Incident Simulation?
@@ -53,6 +62,8 @@ Mỗi exercise theo 3 pha:
 | **Recovery** | Khôi phục + verify | Component trở lại trạng thái bình thường |
 
 > 💡 **Khác IS:** IS hỏi "dashboard nào cho thấy vấn đề?". B/T/R hỏi "CLI nào cho thấy **bên trong** component?"
+
+> ⏱️ **Timing note:** Với Week 1-2 hardening (`stop_grace_period` 30-60s + read_only filesystem), container stop/start sẽ mất thêm thời gian. Dùng `docker stop` nếu muốn observe graceful shutdown behavior (recommended cho learning), dùng `docker kill` nếu cần test instant failure. Khi chạy exercises liên quan đến `docker stop`, hãy cộng thêm 30s (apps) hoặc 60s (DB/Kafka) vào expected timing.
 
 ---
 
@@ -803,7 +814,8 @@ docker exec kafka kafka-configs.sh \
 # Xem memory hiện tại
 docker exec redis redis-cli INFO memory | grep -E "used_memory_human|maxmemory_human|maxmemory_policy"
 
-# Set maxmemory rất thấp
+# Set maxmemory rất thấp (Redis-level, khác với container-level memory limit 512M)
+# Lưu ý: Đây là Redis internal limit, KHÔNG phải container memory limit từ docker-compose
 docker exec redis redis-cli CONFIG SET maxmemory 1mb
 
 # Fill memory với dummy keys
@@ -848,9 +860,10 @@ docker exec redis redis-cli --scan --pattern "dummy:*" | xargs docker exec -i re
 # Hoặc FLUSHALL (xóa tất cả)
 docker exec redis redis-cli FLUSHALL
 
-# Restore maxmemory
+# Restore maxmemory về default (Redis-level unlimited)
+# Lưu ý: Container-level memory limit vẫn là 512M (Week 1-2 hardening)
 docker exec redis redis-cli CONFIG SET maxmemory 0
-# 0 = unlimited (dùng hết RAM available)
+# 0 = unlimited (Redis dùng hết RAM available trong container limit)
 
 # Verify
 docker exec redis redis-cli INFO memory | grep -E "used_memory_human|evicted_keys"

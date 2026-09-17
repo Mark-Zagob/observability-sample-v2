@@ -49,23 +49,38 @@ Dự án này bao gồm **hai môi trường** — cùng hệ thống microservi
 
 ### On-Premises — 2 VMs, Docker Compose
 
+> 🛡️ **Week 1-2 Hardening Applied:** 3-tier Network Segmentation (Zero Trust), Resource Limits (all containers), Graceful Shutdown Contract (30s/60s), Log Rotation (10MB×5), Container Hardening.
+
 ```text
 ┌───────────────────────────────────────────────────────────────────┐
-│                      Applications VM                              │
+│                   Applications VM (Week 1-2 Hardened)              │
 │                                                                   │
-│  [Web UI] ──► [API Gateway] ──► [Order Service] ──► [Payment Svc] │
-│   (Nginx)       (BFF / JWT)      (Postgres/Redis)   (Simulated)   │
-│                                      │                            │
-│                                      ▼                            │
-│                  ┌──────────── Kafka (KRaft) ──────────────┐      │
-│                  │                                         │      │
-│                  ▼                                         ▼      │
-│         [Inventory Worker]                       [Notification]   │
-│         (Pessimistic Lock)                       (Idempotency)    │
+│  ╔═════════════════════════ NETWORK: frontend ════════════════╗    │
+│  ║  [Web UI] ──► [API Gateway]                                ║    │
+│  ║   (Nginx)       (BFF / JWT)                                ║    │
+│  ╚════════════════════════════════════════════════════════════╝    │
+│                    │ (bridge frontend ↔ backend)                  │
+│  ╔════════════════▼════════ NETWORK: backend ════════════════╗    │
+│  ║  [API Gateway] ──► [Order Service] ──► [Payment Service]  ║    │
+│  ║                         │                   (Simulated)    ║    │
+│  ║                         ▼                                 ║    │
+│  ║        ┌──────── Kafka (KRaft) ──────────┐                ║    │
+│  ║        │                                 │                ║    │
+│  ║        ▼                                 ▼                ║    │
+│  ║  [Inventory Worker]             [Notification Worker]     ║    │
+│  ║  (Pessimistic Lock)             (Idempotency)             ║    │
+│  ║                                                             ║    │
+│  ║  [Traffic Generator] ──► (Load Testing / Chaos)             ║    │
+│  ╚════════════════════════════════════════════════════════════╝    │
+│                    │ (bridge backend ↔ data)                      │
+│  ╔════════════════▼════════ NETWORK: data ═══════════════════╗    │
+│  ║  [PostgreSQL 16]  [Redis 7]  [Kafka 3.7 KRaft]  [Kafka UI] ║    │
+│  ╚════════════════════════════════════════════════════════════╝    │
 │                                                                   │
-│  [Traffic Generator] ──► (Load Testing / Chaos Scenarios)         │
+│  🛡️ Blast Radius: web-ui KHÔNG thể reach postgres (Zero Trust)   │
 └──────────────────────────────┬────────────────────────────────────┘
                                │ OTLP (gRPC :4317) / Metrics / Logs
+                               │ (via observability external network)
 ┌──────────────────────────────▼────────────────────────────────────┐
 │                     Observability VM                               │
 │                                                                   │
@@ -100,11 +115,15 @@ observability-sample-v2/
 │
 ├── on-premises/                            # ✅ Docker Compose — Production-Grade Lab
 │   ├── README.md                          # Getting started, learning roadmap, navigation guide
-│   ├── ARCHITECTURE.md                    # Kiến trúc, data flows, DB schema, design patterns
-│   ├── EXPANSION_PLAN.md                  # Roadmap 6 → 10 services (Saga, CQRS, Circuit Breaker)
+│   ├── ARCHITECTURE.md                    # Kiến trúc, data flows, DB schema, design patterns (v2.4)
+│   ├── EXPANSION_PLAN.md                  # Roadmap 6 → 10 services (Saga, CQRS, Circuit Breaker) (v2.2)
 │   ├── INCIDENT_SIMULATION_GUIDE.md       # 12 chaos experiments — DB lock, Kafka lag, phantom alerts
 │   ├── INCIDENT_RUNBOOK.md                # 24 alert runbooks — SEV matrix, escalation, recovery
 │   ├── BREAK_TEST_RECOVERY.md             # 28 drills — phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus
+│   ├── CHANGELOG.md                       # 🆕 Lịch sử thay đổi (Keep a Changelog + SemVer)
+│   ├── WEEK1-2_CHANGES.md                 # 🆕 Chi tiết Week 1-2 Production Hardening
+│   ├── ROADMAP_PRODUCTION_GRADE.md        # Execution plan 1 năm (Q1-Q5)
+│   ├── DEPLOYMENT_GUIDE.md                # Hướng dẫn deploy lên Linux VMs
 │   ├── devops-question.md                 # DevOps interview — junior/mid (45 câu)
 │   ├── devops-question-senior.md          # DevOps interview — senior/staff (31 câu)
 │   │
@@ -223,14 +242,15 @@ observability-sample-v2/
 
 ### Lộ Trình Thực Hành
 
-| Giai đoạn | Tài liệu | Kỹ năng trọng tâm | Độ khó |
+| Giai đoạn | Tài liệu | Kỹ năng trọng tâm | Status |
 |-----------|----------|-------------------|--------|
-| **Phase 1-3** | `observability-vm/phase{1,2,3}/` | Deploy stack, cấu hình OTel pipeline, dashboard cơ bản | ⭐ |
-| **Phase 4-5** | `applications-vm/` + `ARCHITECTURE.md` | Microservices communication, DB/Kafka internals, caching | ⭐⭐ |
-| **Incident Drill** | `INCIDENT_SIMULATION_GUIDE.md` + `INCIDENT_RUNBOOK.md` | Triage, SEV assessment, Escalation, Dashboard reading | ⭐⭐⭐ |
-| **Deep Internals** | `BREAK_TEST_RECOVERY.md` | Phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus | ⭐⭐⭐ |
-| **Post-Mortem** | `post-mortems/` | Viết Blameless RCA, 5 Whys, Action Items trackable | ⭐⭐ |
-| **Scale & Evolution** | `EXPANSION_PLAN.md` | Saga, CQRS, Circuit Breaker, TLS, Network Segmentation | ⭐⭐⭐⭐ |
+| **Week 1-2: Hardening** | [`WEEK1-2_CHANGES.md`](on-premises/WEEK1-2_CHANGES.md) + [`CHANGELOG.md`](on-premises/CHANGELOG.md) | Network Segmentation, Resource Limits, Log Rotation, Graceful Shutdown Contract, Container Hardening | ✅ DONE |
+| **Week 3-4: Observability** | `observability-vm/phase{1,2,3}/` | Prometheus alerts, Grafana dashboards, retention policies | 📅 NEXT |
+| **Week 5-6: Reliability** | `applications-vm/` + `ARCHITECTURE.md` | Circuit Breaker (pybreaker), Health Checks, Error Budgets | ⏳ |
+| **Week 7-8: Chaos** | `INCIDENT_SIMULATION_GUIDE.md` + `INCIDENT_RUNBOOK.md` | Triage, SEV assessment, Dashboard reading, Break/Test/Recovery | ⏳ |
+| **Deep Internals** | `BREAK_TEST_RECOVERY.md` | Phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus internals | ⏳ |
+| **Post-Mortem** | `post-mortems/` | Viết Blameless RCA, 5 Whys, Action Items trackable | ⏳ |
+| **Scale & Evolution** | `EXPANSION_PLAN.md` | Saga, CQRS, Circuit Breaker, TLS, Secrets Management | 📅 Q2+ |
 
 ---
 
@@ -269,14 +289,14 @@ Terraform plans được validate tự động bằng **14 OPA policies**:
 
 | Aspect | On-Prem (Docker Compose) | AWS (Terraform) |
 |--------|--------------------------|----------------|
-| Network | Single bridge network | VPC + Subnets + NAT + SGs + NACLs |
-| Compute | `docker compose up` | ECS/EKS + ASG + Capacity Providers |
-| Database | PostgreSQL container | RDS Multi-AZ + RDS Proxy |
+| Network | 3-tier Docker networks (frontend/backend/data) + external observability | VPC + Subnets + NAT + SGs + NACLs |
+| Compute | `docker compose up` + resource limits | ECS/EKS + ASG + Capacity Providers |
+| Database | PostgreSQL container (single) | RDS Multi-AZ + RDS Proxy |
 | Cache | Redis container | ElastiCache Replication Group |
 | Streaming | Kafka KRaft single broker | MSK Cluster (Multi-AZ) |
 | Secrets | `.env` files | Secrets Manager + KMS |
 | CI/CD Auth | N/A | OIDC + IAM Roles |
-| Chaos | `docker stop <container>` | AWS FIS (AZ failure, network partition) |
+| Chaos | `docker stop <container>` + chaos scripts | AWS FIS (AZ failure, network partition) |
 | DR | Backup files | Cross-region RDS replica + Route53 failover |
 | Cost | Fixed (hardware) | Variable ($/hour) — FinOps critical |
 
@@ -379,8 +399,11 @@ terraform init && terraform apply
 
 | File | Nội dung |
 |------|---------|
-| [`ARCHITECTURE.md`](on-premises/ARCHITECTURE.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns |
-| [`EXPANSION_PLAN.md`](on-premises/EXPANSION_PLAN.md) | Roadmap mở rộng 6 → 10 services — Saga, CQRS, Circuit Breaking, TLS |
+| [`ARCHITECTURE.md`](on-premises/ARCHITECTURE.md) | Kiến trúc chi tiết — services, data flow, DB schema, design patterns (v2.4) |
+| [`EXPANSION_PLAN.md`](on-premises/EXPANSION_PLAN.md) | Roadmap mở rộng 6 → 10 services — Saga, CQRS, Circuit Breaking, TLS (v2.2) |
+| [`CHANGELOG.md`](on-premises/CHANGELOG.md) | 🆕 Lịch sử thay đổi — Keep a Changelog + SemVer |
+| [`WEEK1-2_CHANGES.md`](on-premises/WEEK1-2_CHANGES.md) | 🆕 Chi tiết Week 1-2 Production Hardening — Networks, Resource Limits, Log Rotation, Graceful Shutdown |
+| [`ROADMAP_PRODUCTION_GRADE.md`](on-premises/ROADMAP_PRODUCTION_GRADE.md) | Execution plan 1 năm (Q1-Q5) — Observability → Reliability → Chaos → Security |
 | [`INCIDENT_SIMULATION_GUIDE.md`](on-premises/INCIDENT_SIMULATION_GUIDE.md) | 12 chaos experiments — DB lock, Kafka lag, phantom alerts, cascading failure |
 | [`INCIDENT_RUNBOOK.md`](on-premises/INCIDENT_RUNBOOK.md) | 24 incident runbooks — SEV matrix, escalation, recovery procedures |
 | [`BREAK_TEST_RECOVERY.md`](on-premises/BREAK_TEST_RECOVERY.md) | 28 break/test/recovery drills — PostgreSQL, Kafka, Redis, Prometheus internals |
