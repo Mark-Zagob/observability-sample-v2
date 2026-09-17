@@ -73,6 +73,10 @@ restart_phase() {
       dir="$BASE_DIR/../phase3-tracing"
       phase="phase3-tracing"
       ;;
+    phase4|profiling)
+      dir="$BASE_DIR/../phase4-profiling"
+      phase="phase4-profiling"
+      ;;
     storage|minio)
       dir="$BASE_DIR/../storage"
       phase="storage"
@@ -82,11 +86,12 @@ restart_phase() {
       restart_phase phase1
       restart_phase phase2
       restart_phase phase3
+      restart_phase phase4
       return
       ;;
     *)
       echo "Unknown phase: $phase"
-      echo "Usage: $0 {phase1|phase2|phase3|storage|all} [message]"
+      echo "Usage: $0 {phase1|phase2|phase3|phase4|storage|all} [message]"
       exit 1
       ;;
   esac
