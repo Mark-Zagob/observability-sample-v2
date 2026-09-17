@@ -1478,12 +1478,15 @@ docker exec postgres psql -U app -d orders -c "UPDATE products SET stock = 100;"
 ## 🧪 Experiment 7: Memory Pressure (Container Resource Limit)
 📖 **Runbook:** [RB-03 HighMemoryUsage](INCIDENT_RUNBOOK.md#-rb-03-highmemoryusage) • [RB-06 MemoryWillExhaust](INCIDENT_RUNBOOK.md#-rb-06-memorywillexhaustin2hours) • [RB-22 HighLatencyP95](INCIDENT_RUNBOOK.md#-rb-22-highlatencyp95)
 
-**Giả thuyết:** Khi container bị giới hạn memory, latency tăng → eventually OOMKilled.
+> 💡 **Week 1-2 Note:** Sau khi áp dụng Production Hardening, `order-service` đã có baseline `memory.limit: 512M` (cùng với các containers khác). Lệnh `docker update --memory=64m` sẽ **override tạm thời** limit từ compose file. Sau khi test xong, **BẮT BUỘC** restore về baseline limit để tránh ảnh hưởng các experiments khác.
+
+**Giả thuyết:** Khi container bị giới hạn memory thấp hơn baseline, latency tăng (do GC pauses) → eventually OOMKilled.
 
 **Inject:**
 ```bash
+# Step 1: Override compose limit (512M) xuống 64M tạm thời
 docker update --memory=64m --memory-swap=64m order-service
-# Chạy load test nặng
+# Step 2: Chạy load test nặng (xem chi tiết bên dưới)
 ```
 
 **Dashboard reading path:**
@@ -1504,9 +1507,11 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ → bạn tăng memory limit hay investigate memory leak? Cách quyết định?
 - [ ] **SEV Assessment:** Container bị giới hạn memory, GC pauses → User thấy slow nhưng không error → SEV mấy? Predictive alert có cần page không?
 
-**Rollback:**
+**Rollback (Restore Week 1-2 Baseline Limit):**
 ```bash
-docker update --memory=0 order-service  # remove limit
+# Restore về baseline limit (512M) — KHÔNG dùng --memory=0 vì sẽ xóa luôn limit
+docker update --memory=512m --memory-swap=512m order-service
+# Hoặc restart để reload từ docker-compose.yml
 docker restart order-service
 ```
 

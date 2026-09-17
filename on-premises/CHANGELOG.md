@@ -46,6 +46,10 @@
 - ✅ Bổ sung "Observability Stack Capacity Planning" table
 - ✅ Đánh dấu hoàn thành các Planned Security Improvements: Network Segmentation, Resource Limits, Log Rotation
 - ✅ Khởi tạo `CHANGELOG.md` (file này)
+- ✅ Cập nhật `README.md` (root) — Architecture diagram thể hiện 3-tier networks, Lộ trình thực hành với Status column, So sánh On-Prem vs AWS table
+- ✅ Cập nhật `EXPANSION_PLAN.md` v2.1 → v2.2 — Đánh dấu Phase 0 Infrastructure Level từ "CẦN TRIỂN KHAI" sang "ĐÃ HOÀN THÀNH"
+- ✅ Cập nhật `BREAK_TEST_RECOVERY.md` — Thêm Week 1-2 Note về `stop_grace_period` timing (30s/60s)
+- ✅ Cập nhật `INCIDENT_SIMULATION_GUIDE.md` — Thêm Week 1-2 Note cho Experiment 7 (Memory Pressure) về baseline memory limits
 
 #### 🎓 SRE Concepts Learned
 | Concept | Application |

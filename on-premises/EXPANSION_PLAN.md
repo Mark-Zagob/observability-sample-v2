@@ -7,8 +7,8 @@
 | Field | Value |
 |---|---|
 | Document Status | 🔄 In Progress (Syncing with Codebase) |
-| Last Updated | 2026-07-10 |
-| Version | 2.1 (Phase 0 Reality Check & Guardrails Update) |
+| Last Updated | 2026-09-17 |
+| Version | 2.2 (Week 1-2 Infrastructure Hardening Completed) |
 | Owner | dungtt (Platform Engineering) |
 
 ## Document History
@@ -17,6 +17,7 @@
 | 1.0 | 2026-05-20 | dungtt | Initial expansion roadmap (6 → 10 services) |
 | 2.0 | 2026-06-15 | dungtt | Added Saga Orchestration, CQRS, PgBouncer strategy |
 | 2.1 | 2026-07-10 | dungtt | **Reality Check:** Marked Phase 0 App-level as COMPLETED (Codebase over-delivered). Added new Production Guardrails to "Patterns đã có". Updated PgBouncer Risk Assessment based on new DB Driver Resilience. Adjusted Phase 4 SLO math to leverage existing Traffic Source Tagging. |
+| 2.2 | 2026-09-17 | dungtt | **Week 1-2 Infrastructure Hardening Completed:** Network Segmentation (3-tier: frontend/backend/data), Resource Limits (all containers), Log Rotation (10MB×5), Graceful Shutdown Contract (30s/60s). Updated Phase 0 Infrastructure Level from "CẦN TRIỂN KHAI" to "HOÀN THÀNH". See [CHANGELOG.md](CHANGELOG.md#240---2026-09-17) and [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) for details. |
 ---
 
 ## Mục Tiêu
@@ -72,10 +73,11 @@ Web UI → API Gateway → Order Service → Payment Service
 - ❌ Rate limiting
 - ❌ TLS termination (HTTPS)
 - ❌ Secrets management (JWT keys, DB passwords)
-- ❌ Network segmentation (Docker networks per tier)
-- ❌ Resource limits (CPU/memory per container)
+- ✅ **Network segmentation** (Docker networks per tier) — **DONE Week 1-2** (3-tier: `frontend`, `backend`, `data`)
+- ✅ **Resource limits** (CPU/memory per container) — **DONE Week 1-2** (all 12+ services)
 - ❌ Backup/Restore procedures
-- ❌ Log rotation & retention
+- ✅ **Log rotation & retention** — **DONE Week 1-2** (`json-file`, `max-size: 10m`, `max-file: 5`)
+- ✅ **Graceful Shutdown Contract** (`stop_grace_period`) — **DONE Week 1-2** (30s apps, 60s DB/Kafka)
 - ❌ CI pipeline (lint, test, build)
 - ❌ Horizontal scaling (multiple instances + load balancing)
 
@@ -1739,10 +1741,10 @@ Với 10 services, các failure scenarios phức tạp hơn đáng kể:
 
 ## Design Patterns Comparison
 
-### Trước mở rộng (6 services)
+### Trước mở rộng (6 services — Baseline hiện tại)
 
 ```
-Patterns:
+Application Patterns (Code-level):
   ✅ Sync HTTP (request-response)
   ✅ Async Pub/Sub (Kafka)
   ✅ Cache-Aside (Redis)
@@ -1750,12 +1752,20 @@ Patterns:
   ✅ Idempotent Processing
   ✅ Pessimistic Locking
   ✅ Trace Propagation (W3C)
+  ✅ Graceful Shutdown (shared/shutdown_handler.py)
+
+Infrastructure Patterns (Week 1-2 Hardening):
+  ✅ Network Segmentation — 3-tier Zero Trust (frontend/backend/data)
+  ✅ Bulkhead Pattern — Resource limits (CPU/Memory) cho 12+ containers
+  ✅ Disk Pressure Management — Log rotation (10MB × 5 files/container)
+  ✅ Graceful Shutdown Contract — stop_grace_period (30s/60s) match code
+  ✅ Container Hardening — read_only, cap_drop, no-new-privileges
 ```
 
 ### Sau mở rộng (10 services)
 
 ```
-Tất cả patterns cũ +
+Tất cả patterns cũ (Application + Infrastructure) +
   🆕 Saga Orchestration (distributed transactions + crash recovery)
   🆕 Compensation (rollback when downstream fails)
   🆕 Circuit Breaker (failure isolation + observability)
@@ -1768,12 +1778,12 @@ Tất cả patterns cũ +
   🆕 Retry with Exponential Backoff
   🆕 TLS Termination (HTTPS)
   🆕 Secrets Management (Docker secrets + .env)
-  🆕 Network Segmentation (Docker networks per tier)
-  🆕 Resource Limits (CPU/memory per container)
-  🆕 Graceful Shutdown (SIGTERM handling)
   🆕 Backup/Restore (per-database + DR drill)
   🆕 Index Aliasing (zero-downtime reindex)
   🆕 CI Pipeline (lint + test + build)
+  🆕 Rate Limiting (Redis sliding window)
+
+Note: Network Segmentation, Resource Limits, Graceful Shutdown đã implement ở Week 1-2
 ```
 
 ---
@@ -1929,29 +1939,36 @@ secrets:
 
 ### Network Segmentation
 
-Tách Docker networks theo tier:
+> ✅ **ĐÃ ÁP DỤNG Week 1-2** — Xem [ARCHITECTURE.md](ARCHITECTURE.md) (Version 2.4) để biết chi tiết implementation và Network Connectivity Matrix.
+
+Tách Docker networks theo **Zero Trust model**:
 
 ```yaml
 networks:
-  frontend:    # Web UI, nginx
-  backend:     # API Gateway, services
-  data:        # PostgreSQL, Redis, Kafka, OpenSearch
-  observability:  # OTel, Prometheus, Grafana (external)
+  frontend:    # Web UI, API Gateway (external-facing traffic)
+  backend:     # API Gateway, business services, traffic-gen (internal logic)
+  data:        # PostgreSQL, Redis, Kafka (only apps that NEED data access)
+  observability:  # OTel, Prometheus, Grafana (external — cross-VM telemetry)
 
 services:
   web-ui:
-    networks: [frontend]
+    networks: [frontend]                   # chỉ nhận traffic từ bên ngoài
   api-gateway:
-    networks: [frontend, backend]   # bridge frontend → backend
+    networks: [frontend, backend]          # bridge: nhận từ frontend, gọi backend
   order-service:
-    networks: [backend, data]       # access DB/cache
+    networks: [backend, data]              # nhận từ backend, truy cập DB/cache
   postgres:
-    networks: [data]                # chỉ data tier access được
+    networks: [data]                       # chỉ data tier access được
 ```
 
-**Tại sao:** Web UI không nên connect trực tiếp tới PostgreSQL. Network segmentation enforce tại infrastructure level.
+**Tại sao (Blast Radius Reduction):**
+- Web UI KHÔNG thể reach PostgreSQL trực tiếp (Zero Trust)
+- Compromise của frontend tier KHÔNG expose data layer
+- Mỗi network là một **failure domain** riêng biệt → Blast Radius reduction
 
 ### Resource Limits
+
+> ✅ **ĐÃ ÁP DỤNG Week 1-2** — Xem [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) để biết chi tiết implementation cho toàn bộ 12+ services.
 
 ```yaml
 services:
@@ -1964,7 +1981,7 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-  opensearch:
+  opensearch:   # Planned cho Phase 3
     deploy:
       resources:
         limits:
@@ -1973,7 +1990,10 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
 ```
 
-**Tại sao:** Without limits, 1 service có thể eat toàn bộ RAM của VM → OOM killer random containers.
+**Tại sao (Noisy Neighbor Prevention & Bulkhead Pattern):**
+- Without limits, 1 service có thể ăn toàn bộ RAM của VM → OOM killer random containers
+- Mỗi container được cấp một "bulkhead" (vách ngăn) riêng → không ảnh hưởng lẫn nhau
+- Reservations đảm bảo mỗi service có đủ tài nguyên tối thiểu khi VM đầy
 
 ### Backup & Restore
 
@@ -1997,18 +2017,20 @@ pg_restore --list backup/app_db_20250519.sql  # dry-run, no actual restore
 
 ### Log Rotation
 
+> ✅ **ĐÃ ÁP DỤNG Week 1-2** — Xem [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) để biết chi tiết implementation.
+
 ```yaml
-# docker-compose.yml — apply cho tất cả services
+# docker-compose.yml — apply cho tất cả services (thực tế đã triển khai)
 services:
   order-service:
     logging:
       driver: json-file
       options:
         max-size: "10m"
-        max-file: "3"
+        max-file: "5"    # 50MB/container max — balance giữa debug và disk usage
 ```
 
-**Tại sao:** Without log rotation, Docker logs grow unbounded → disk full → entire VM down.
+**Tại sao:** Without log rotation, Docker logs grow unbounded → disk full → entire VM down. Đây là **Disk Pressure Management** pattern — một trong những nguyên tắc sống còn của Production SRE.
 
 ### CI Pipeline (GitHub Actions)
 
@@ -2174,11 +2196,30 @@ jobs:
 - [✅] HTTP Semantic Mapping (Chống bẫy HTTP 200 Trap)
 - [✅] Idempotency State Machine (Redis Lua Script)
 
-#### 🟡 Infrastructure Level (CẦN TRIỂN KHAI)
-1. **Network segmentation:** Tách Docker networks (`frontend`, `backend`, `data`, `observability`). Hiện tại đang dùng single bridge `observability` (Rủi ro bảo mật: Web UI có thể ping thẳng PostgreSQL).
-2. **Resource limits:** Thêm `deploy.resources.limits` (CPU/RAM) cho TẤT CẢ containers trong `docker-compose.yml` để chống OOM Killer.
-3. **Log rotation:** Thêm `logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }` cho tất cả services.
-4. **stop_grace_period:** Set `stop_grace_period: 30s` cho Kafka Workers trong `docker-compose.yml` để khớp với `GracefulShutdown` timeout.
+#### 🟢 Infrastructure Level (ĐÃ HOÀN THÀNH — Week 1-2)
+> Chi tiết implementation xem [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) và [ARCHITECTURE.md](ARCHITECTURE.md) (Version 2.4).
+
+1. ✅ **Network segmentation:** Tách Docker networks theo 3-tier Zero Trust model:
+   - `frontend`: Web UI + API Gateway (external-facing)
+   - `backend`: API Gateway + business services + traffic-gen (internal logic)
+   - `data`: PostgreSQL + Redis + Kafka + services cần DB access
+   - `observability`: external network (cross-VM telemetry)
+   - **Blast Radius Reduction**: Web UI KHÔNG thể reach PostgreSQL trực tiếp.
+
+2. ✅ **Resource limits:** Áp dụng `deploy.resources.limits` (CPU/RAM) cho TẤT CẢ 12+ containers trong `docker-compose.yml` để chống **Noisy Neighbor Problem** và OOM Killer.
+   - Python services: 512M memory limit
+   - PostgreSQL/Kafka: 2-4G memory limit
+   - Observability stack: 512M-2G tùy service
+
+3. ✅ **Log rotation:** Áp dụng `logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }` cho tất cả services.
+   - **Disk Pressure Management**: tối đa 50MB/container, bảo vệ VM disk space.
+
+4. ✅ **Graceful Shutdown Contract:** Set `stop_grace_period` phù hợp cho từng service type:
+   - **Apps** (Flask/Gunicorn): `stop_grace_period: 30s` — khớp với `graceful_timeout` của gunicorn (25s) + 5s buffer
+   - **PostgreSQL/Kafka**: `stop_grace_period: 60s` — flush WAL, commit offsets, close connections
+   - **Observability stack**: `stop_grace_period: 30s`
+
+5. ✅ **Container Hardening:** Áp dụng `x-app-hardening` anchor (read_only filesystem + cap_drop: ALL + security_opt: no-new-privileges) cho toàn bộ app containers.
 
 #### 🔵 CI/CD Level
 5. **Setup GitHub Actions:** Pipeline `lint (flake8)` → `pytest` → `docker build` → `smoke test`.
@@ -2570,7 +2611,7 @@ on-premises/
 | Database systems | 2 (PostgreSQL, Redis) | 3 (+OpenSearch) |
 | Databases | 1 (shared) | 3 (app_db, auth_db, shipping_db) + OpenSearch |
 | DB strategy | Shared DB | Hybrid (1 instance, multiple DBs) |
-| Infrastructure ops | Basic | Network segmentation, resource limits, log rotation, backup/restore |
+| **Infrastructure ops** | **Basic** → **Week 1-2: Network Segmentation + Resource Limits + Log Rotation + Graceful Shutdown Contract + Container Hardening** | + Backup/Restore, mTLS, Certificate Management |
 | CI/CD | None | GitHub Actions (lint → test → build) |
 | Observability | Metrics + Logs + Traces | + SLI/SLO dashboards + per-service metrics + CB/rate limit metrics |
 | Grafana dashboards | Existing | +4 (Auth, Saga, Search, Cross-Service) |
