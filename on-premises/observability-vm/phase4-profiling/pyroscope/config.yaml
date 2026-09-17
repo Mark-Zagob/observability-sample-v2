@@ -29,12 +29,19 @@ server:
 # ----------------------------------------------------------
 pyroscopedb:
   # Data directory — mounted as Docker volume
-  data_path: /var/lib/pyroscope
+  # MUST use /data (NOT /var/lib/pyroscope) because:
+  #   1. The grafana/pyroscope image declares VOLUME /data with correct ownership (UID 10001)
+  #   2. Named volumes mounted at /data inherit the image's 10001:10001 ownership via Docker copy-up
+  #   3. /var/lib/pyroscope does NOT exist in the image, so named volume gets root:root ownership
+  #   4. Pyroscope runs as non-root UID 10001 → cannot write to root-owned dirs
+  data_path: /data
   # Upper limit for block duration (profiles are compacted into blocks)
   max_block_duration: 1h
   # Retention policy enforcement — how often to clean up old data/disk
   enforcement_interval: 5m
-  min_free_disk_gb: 5
+  # Disk safety threshold — lowered from 5GB to 1GB for lab environments with smaller disks
+  # Production: keep at 5-10GB to prevent data loss on disk-full scenarios
+  min_free_disk_gb: 1
   min_disk_available_percentage: 0.05
 
 # ----------------------------------------------------------

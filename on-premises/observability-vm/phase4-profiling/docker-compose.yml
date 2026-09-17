@@ -47,7 +47,11 @@ services:
       - PYROSCOPE_DISABLE_TELEMETRY=true         # Disable anonymous telemetry
       - PYROSCOPE_LOG_LEVEL=info
     volumes:
-      - pyroscope_data:/var/lib/pyroscope
+      # CRITICAL: Mount to /data (NOT /var/lib/pyroscope)
+      # The grafana/pyroscope image pre-creates /data with UID 10001:10001 ownership
+      # Named volumes inherit this ownership via Docker copy-up semantics
+      # Mounting to /var/lib/pyroscope → root:root ownership → permission denied
+      - pyroscope_data:/data
       - ./pyroscope/config.yaml:/etc/pyroscope/config.yaml:ro
     command:
       # Only the config file flag — all other settings are in config.yaml

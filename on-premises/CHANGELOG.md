@@ -8,6 +8,88 @@
 
 ---
 
+## [2.4.3] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope Storage Permission Denied
+
+#### ❌ Root Cause
+The Pyroscope container crashed with `permission denied` when trying to write profiling data:
+
+```
+mkdir /var/lib/pyroscope/anonymous/local: mkdir /var/lib/pyroscope/anonymous: permission denied
+```
+
+**Root Cause:** The `grafana/pyroscope:1.13.0` Docker image runs as non-root user `pyroscope` (UID 10001, GID 10001). The image's Dockerfile:
+
+1. **Pre-creates `/data` with correct ownership** (10001:10001) via `COPY --chown=pyroscope:pyroscope`
+2. **Declares `VOLUME /data`** — Docker copy-up semantics preserve the 10001:10001 ownership
+3. **Does NOT pre-create `/var/lib/pyroscope`** — this path doesn't exist in the image
+
+When we mounted the named volume `pyroscope_data` to `/var/lib/pyroscope`, Docker created the volume with **root:root ownership** (default). Pyroscope (running as UID 10001) could not write to the root-owned directory.
+
+**Positive Signal:** The logs showed `User-Agent: pyroscope-rs/pyspy/1.2.3` — confirming that the SDK integration from Phase 4.5 (gunicorn fork-safety, memory profiling) was working correctly. The apps were sending data to Pyroscope, but Pyroscope couldn't persist it.
+
+#### ✅ Fix Applied (Minimal Viable Change)
+
+**Changed storage path from `/var/lib/pyroscope` to `/data`:**
+
+1. **`pyroscope/config.yaml`:**
+   ```yaml
+   pyroscopedb:
+     data_path: /data  # ← Changed from /var/lib/pyroscope
+     min_free_disk_gb: 1  # ← Lowered from 5GB for lab safety
+   ```
+
+2. **`docker-compose.yml`:**
+   ```yaml
+   volumes:
+     - pyroscope_data:/data  # ← Changed from /var/lib/pyroscope
+   ```
+
+**Why this works:**
+- Named volumes mounted at `/data` inherit the image's pre-configured 10001:10001 ownership
+- Pyroscope (UID 10001) can write to the volume
+- No init container or `user: root` workaround needed
+
+#### 🔄 Rollback Plan
+
+If this fix causes issues, revert to the original configuration and use an init container:
+
+```yaml
+services:
+  pyroscope-init:
+    image: alpine:3.20
+    user: root
+    volumes:
+      - pyroscope_data:/var/lib/pyroscope
+    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/pyroscope"]
+    restart: "no"
+
+  pyroscope:
+    user: "10001:10001"
+    depends_on:
+      pyroscope-init:
+        condition: service_completed_successfully
+```
+
+#### 🎓 SRE Concepts Applied
+
+| Concept | Application |
+|---------|-------------|
+| **Docker Named Volume Copy-Up** | Volumes inherit content + ownership from the image's mountpoint at creation time |
+| **Least Privilege Principle** | Run containers as non-root (UID 10001), not `user: root` |
+| **Blast Radius = 0** | Fix only affects Pyroscope storage path, no impact on app tier or DB |
+| **Silent Failure Detection** | Logs showed `permission denied` + `User-Agent: pyroscope-rs` — SDK working, storage broken |
+
+#### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `observability-vm/phase4-profiling/pyroscope/config.yaml` | `data_path: /var/lib/pyroscope` → `/data`, `min_free_disk_gb: 5` → `1` |
+| `observability-vm/phase4-profiling/docker-compose.yml` | Volume mount: `/var/lib/pyroscope` → `/data` |
+
+---
+
 ## [2.4.2] — 2026-09-17
 
 ### 🐛 Phase 4.5: Fix Pyroscope SDK Integration Bugs
