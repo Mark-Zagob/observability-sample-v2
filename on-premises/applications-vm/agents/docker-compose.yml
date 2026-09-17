@@ -10,6 +10,19 @@
 #   - cAdvisor: metrics từng container (CPU, RAM, network)
 #   - Alloy: thu thập Docker logs + host logs → push về Loki
 # ============================================================
+# 🛡️ Week 1-2 Hardening:
+#   - Resource Limits (CPU/Memory)
+#   - Log Rotation (json-file, 10MB × 5 files)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   # ==========================================================
@@ -33,6 +46,15 @@ services:
       - observability
     restart: unless-stopped
     pid: host
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    logging: *default-logging
 
   # ==========================================================
   # cADVISOR — Container Metrics
@@ -58,6 +80,15 @@ services:
     privileged: true
     devices:
       - /dev/kmsg:/dev/kmsg
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging: *default-logging
 
   # ==========================================================
   # GRAFANA ALLOY — Log Collector
@@ -85,6 +116,15 @@ services:
     networks:
       - observability
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging: *default-logging
 
 volumes:
   alloy_data:

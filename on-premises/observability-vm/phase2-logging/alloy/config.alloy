@@ -8,6 +8,13 @@
 //
 // Pipeline:
 //   Source → Process (parse, extract, filter) → Push Loki
+//
+// v3.0: Removed stage.logfmt entirely (pragmatic approach)
+//   - Most services log JSON (handled by stage.json)
+//   - PostgreSQL/Redis/Kafka logs kept as plain text (readable in Grafana)
+//   - Eliminates 100% of logfmt parse errors
+//   - If specific service needs logfmt parsing, add stage.logfmt
+//     with precise selector for that service only
 // ============================================================
 
 // ============================================================
@@ -64,12 +71,32 @@ loki.process "docker_pipeline" {
   // Drop trước khi parse để tiết kiệm CPU.
   // ---------------------------------------------------------
   stage.drop {
-    expression = "(?i)(GET|HEAD)\\s+/(health|ready|healthz|livez|readyz)"
+    expression          = "(?i)(GET|HEAD)\\s+/(health|ready|healthz|livez|readyz)"
     drop_counter_reason = "health_check"
   }
 
   // ---------------------------------------------------------
-  // Stage 2: Parse JSON logs
+  // Stage 2: Multiline aggregation
+  // ---------------------------------------------------------
+  // Stack traces (Python, Java, Node) span multiple lines.
+  // Without this, each line becomes a separate Loki entry,
+  // making debugging impossible.
+  //
+  // firstline regex matches the START of a new log entry:
+  //   - ISO timestamp: 2026-09-16 03:21:56
+  //   - JSON start: {"level
+  //   - Logfmt start: level=
+  //   - Bracket timestamp: [2026-09-16
+  //   - Redis style: 1:M 16 Sep
+  // ---------------------------------------------------------
+  stage.multiline {
+    firstline     = "^(\\d{4}-\\d{2}-\\d{2}|{\"level|level=|\\[\\d{4}-|\\d+:\\w+ \\d+ \\w+ \\d{4})"
+    max_lines     = 128
+    max_wait_time = "3s"
+  }
+
+  // ---------------------------------------------------------
+  // Stage 3: Parse JSON logs
   // ---------------------------------------------------------
   // Hầu hết application hiện đại log theo structured JSON:
   //   {"level":"info","msg":"request handled","trace_id":"abc"}
@@ -90,25 +117,24 @@ loki.process "docker_pipeline" {
   }
 
   // ---------------------------------------------------------
-  // Stage 3: Parse logfmt (fallback)
+  // Stage 4: REMOVED — logfmt parsing
   // ---------------------------------------------------------
-  // Một số service (ví dụ Prometheus, Loki) log dạng logfmt:
-  //   level=info msg="server started" caller=main.go:42
+  // Decision: Drop stage.logfmt entirely (v3.0)
   //
-  // Nếu stage.json đã extract thành công → giá trị giữ nguyên.
-  // Nếu chưa → stage.logfmt sẽ extract.
+  // Reasoning:
+  //   1. Most application services log JSON (structlog) → handled by stage.json
+  //   2. Infrastructure services (PostgreSQL, Redis, Kafka) log in native formats
+  //      → Keep as plain text, still readable in Grafana Loki
+  //   3. Trying to detect & parse logfmt is error-prone (regex guard too broad)
+  //   4. Eliminates 100% of "logfmt syntax error" messages
+  //
+  // If a specific service needs logfmt parsing in the future:
+  //   - Add stage.logfmt with precise selector targeting that service
+  //   - Example: selector = "{compose_service=\"api-gateway\"}"
   // ---------------------------------------------------------
-  stage.logfmt {
-    mapping = {
-      level  = "",
-      msg    = "",
-      caller = "",
-      ts     = "",
-    }
-  }
 
   // ---------------------------------------------------------
-  // Stage 4: Chuẩn hoá log level
+  // Stage 6: Chuẩn hoá log level
   // ---------------------------------------------------------
   // Các service khác nhau dùng format level khác nhau:
   //   "INFO", "info", "warning", "warn", "WARN"
@@ -116,7 +142,7 @@ loki.process "docker_pipeline" {
   // ---------------------------------------------------------
   stage.template {
     source   = "level"
-    template = "{{ ToLower .Value }}"
+    template = "{{ if .Value }}{{ ToLower .Value }}{{ else }}info{{ end }}"
   }
 
   // Map "warning" → "warn" cho nhất quán
@@ -127,7 +153,7 @@ loki.process "docker_pipeline" {
   }
 
   // ---------------------------------------------------------
-  // Stage 5: Gán detected_level label
+  // Stage 7: Gán detected_level label
   // ---------------------------------------------------------
   // Tạo label "detected_level" từ extracted level.
   // → Cho phép query: {detected_level="error"}
@@ -143,7 +169,7 @@ loki.process "docker_pipeline" {
   }
 
   // ---------------------------------------------------------
-  // Stage 6: Gán static label source
+  // Stage 8: Gán static label source
   // ---------------------------------------------------------
   stage.static_labels {
     values = {
@@ -153,15 +179,15 @@ loki.process "docker_pipeline" {
   }
 
   // ---------------------------------------------------------
-  // Stage 7: Drop noisy debug logs
+  // Stage 9: Drop noisy debug logs
   // ---------------------------------------------------------
   // Trong lab/dev, debug logs ít giá trị nhưng chiếm nhiều
   // dung lượng. Drop để giảm storage cost.
   // Comment out stage này nếu cần debug chi tiết.
   // ---------------------------------------------------------
   stage.drop {
-    source           = "level"
-    expression       = "debug"
+    source              = "level"
+    expression          = "debug"
     drop_counter_reason = "debug_level"
   }
 

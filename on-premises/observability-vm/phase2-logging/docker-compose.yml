@@ -5,6 +5,19 @@
 # Mục tiêu: Thu thập và tập trung logs từ Docker containers
 # Join cùng external network "observability" với Phase 1
 # ============================================================
+# 🛡️ Week 1-2 Hardening:
+#   - Resource Limits (CPU/Memory)
+#   - Log Rotation (json-file, 10MB × 5 files)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   # ==========================================================
@@ -32,6 +45,15 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s          # Cho Loki 30s để khởi tạo ring trước khi bắt đầu check
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    logging: *default-logging
 
   # ==========================================================
   # GRAFANA ALLOY - Log Collector (thay thế Promtail)
@@ -64,13 +86,22 @@ services:
       loki:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging: *default-logging
 
 volumes:
   loki_data:
 
-# ==========================================================
+# ============================================================
 # External Network - cùng network với Phase 1
-# ==========================================================
+# ============================================================
 networks:
   observability:
     external: true
