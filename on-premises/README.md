@@ -50,6 +50,7 @@ Dự án không chỉ là "deploy code lên Docker", mà là nơi thực hành c
 | **Reliability (SRE)** | SLI/SLO & Error Budgets, MWMBR Alerting (14.4x / 3x), Traffic Guards, Active Probing (Blackbox) | Chống phantom alerts khi traffic = 0. Burn rate giúp phát hiện SLO breach sớm hơn threshold tĩnh. |
 | **Observability** | 3 Pillars + Correlation (TraceID injected vào Logs/Metrics), Spanmetrics Connector, OTel Collector pipelines | Không correlation = blind debugging. Spanmetrics auto-generate RED metrics mà không cần instrument code. |
 | **Incident Mgmt** | SEV Matrix, Runbook-driven response, Blameless Post-Mortem, 5 Whys, Error Budget Policy | Giảm MTTR nhờ runbook chuẩn hóa. Post-mortem tập trung vào systemic gap, không đổ lỗi cá nhân. |
+| **Infrastructure Hardening** | Network Segmentation (3-tier), Resource Limits (Bulkhead), Log Rotation, Graceful Shutdown Contract | `Blast Radius Reduction`, `Noisy Neighbor` prevention, `Disk Pressure Management`. Production killer #1 là disk full — log rotation ngăn chặn. Contract giữa orchestrator và app tránh data loss khi restart. |
 
 ---
 ## 📊 Observability Stack & Correlation Strategy
@@ -74,17 +75,23 @@ Hệ thống gồm **2 VMs** giao tiếp qua Docker external network, tách bi�
 ┌───────────────────────────────────────────────────────────────────┐
 │                      Applications VM (60GB RAM)                   │
 │                                                                   │
-│  [Web UI] ──► [API Gateway] ──► [Order Service] ──► [Payment Svc] │
-│   (Nginx)       (BFF / JWT)      (Postgres/Redis)   (Simulated)   │
-│                                      │                            │
-│                                      ▼                            │
-│                  ┌──────────── Kafka (KRaft) ──────────────┐      │
-│                  │                                         │      │
-│                  ▼                                         ▼      │
-│         [Inventory Worker]                       [Notification]   │
-│         (Pessimistic Lock)                       (Idempotency)    │
+│  ╔═══════════════════════════╗  ╔══════════════════════════════╗  │
+│  ║    FRONTEND Network       ║  ║     DATA Network             ║  │
+│  ║  [Web UI] (Nginx)         ║  ║  [PostgreSQL] [Redis]        ║  │
+│  ╚════════════╤══════════════╝  ║  [Kafka KRaft]               ║  │
+│               │                  ╚════════════════╤═════════════╝  │
+│               │                                  │                │
+│  ╔════════════▼══════════════════════════════════▼═════════════╗  │
+│  ║                    BACKEND Network                          ║  │
+│  ║  [API Gateway] ──► [Order Service] ──► [Payment Service]   ║  │
+│  ║                      │        │                              ║  │
+│  ║                      ▼        ▼                              ║  │
+│  ║             [Inventory Wkr] [Notification Wkr]              ║  │
+│  ║             [Traffic Generator] (Load Testing / Chaos)      ║  │
+│  ╚═════════════════════════════════════════════════════════════╝  │
 │                                                                   │
-│  [Traffic Generator] ──► (Load Testing / Chaos Scenarios)         │
+│  🛡️ 3-Tier Segmentation: web-ui KHÔNG thể reach PostgreSQL       │
+│     (Zero Trust — Blast Radius Reduction)                         │
 └──────────────────────────────┬────────────────────────────────────┘
                                │ OTLP (gRPC :4317) / Metrics / Logs
 ┌──────────────────────────────▼────────────────────────────────────┐
@@ -128,8 +135,11 @@ Một hệ thống production-grade không chỉ dừng lại ở hiện tại. 
 ### 1. Tạo external network
 
 ```bash
+# External network cho cross-VM observability traffic (phải tạo thủ công)
 docker network create observability
 ```
+
+> 📌 **Note:** Các networks `frontend`, `backend`, `data` trong Applications VM sẽ được **tạo tự động** bởi docker-compose khi khởi động applications. Đây là một phần của Week 1-2 Network Segmentation hardening (xem [ARCHITECTURE.md - Network Segmentation](ARCHITECTURE.md#network-segmentation) và [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md)).
 
 ### 2. Khởi động Storage Layer (MinIO)
 
@@ -187,17 +197,21 @@ docker compose up -d
 ## 🗺️ Lộ trình thực hành & Điều hướng tài liệu
 Repository được thiết kế theo lộ trình tăng dần về độ phức tạp và tư duy vận hành:
 
-| Giai đoạn | Tài liệu chính | Kỹ năng trọng tâm | Độ khó |
-|-----------|----------------|-------------------|--------|
-| **Phase 1-3** | `observability-vm/phase{1,2,3}/README.md` | Deploy stack, cấu hình OTel pipeline, dashboard cơ bản | ⭐ |
-| **Phase 4-5** | `applications-vm/` + `ARCHITECTURE.md` | Microservices communication, DB/Kafka internals, caching strategy | ⭐⭐ |
-| **Incident Drill** | `INCIDENT_SIMULATION_GUIDE.md` + `INCIDENT_RUNBOOK.md` | Đọc dashboard theo Incident Flow, Triage, SEV assessment, Escalation | ⭐⭐⭐ |
-| **Deep Internals** | `BREAK_TEST_RECOVERY.md` | Phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus qua CLI/Query | ⭐⭐⭐ |
-| **Post-Mortem** | `post-mortems/00-TEMPLATE.md` + `01-GOLDEN-EXAMPLE-*.md` | Viết Blameless RCA, 5 Whys, Action Items trackable | ⭐⭐ |
-| **Scale & Evolution** | `EXPANSION_PLAN.md` | Saga, CQRS, Circuit Breaker, TLS, Network Segmentation, SLO redesign | ⭐⭐⭐⭐ |
-| **Interview Prep** | `devops-question.md` & `devops-question-senior.md` | Trade-offs, System Design, SRE mindset, Production debugging | ⭐⭐⭐ |
+| Giai đoạn | Tài liệu chính | Kỹ năng trọng tâm | Độ khó | Status |
+|-----------|----------------|-------------------|--------|--------|
+| **Week 1-2: Hardening** | `CHANGELOG.md` + `WEEK1-2_CHANGES.md` | Network Segmentation, Resource Limits, Log Rotation, Graceful Shutdown | ⭐⭐ | ✅ DONE |
+| **Week 3-4: Observability** | `ROADMAP_PRODUCTION_GRADE.md` | Prometheus alerts, Grafana dashboards, retention policies | ⭐⭐ | 📅 NEXT |
+| **Phase 1-3** | `observability-vm/phase{1,2,3}/README.md` | Deploy stack, cấu hình OTel pipeline, dashboard cơ bản | ⭐ | ✅ DONE |
+| **Phase 4-5** | `applications-vm/` + `ARCHITECTURE.md` | Microservices communication, DB/Kafka internals, caching strategy | ⭐⭐ | ✅ DONE |
+| **Incident Drill** | `INCIDENT_SIMULATION_GUIDE.md` + `INCIDENT_RUNBOOK.md` | Đọc dashboard theo Incident Flow, Triage, SEV assessment, Escalation | ⭐⭐⭐ | ⏳ |
+| **Deep Internals** | `BREAK_TEST_RECOVERY.md` | Phá & khôi phục PostgreSQL, Kafka, Redis, Prometheus qua CLI/Query | ⭐⭐⭐ | ⏳ |
+| **Post-Mortem** | `post-mortems/00-TEMPLATE.md` + `01-GOLDEN-EXAMPLE-*.md` | Viết Blameless RCA, 5 Whys, Action Items trackable | ⭐⭐ | ⏳ |
+| **Scale & Evolution** | `EXPANSION_PLAN.md` | Saga, CQRS, Circuit Breaker, TLS, SLO redesign | ⭐⭐⭐⭐ | 📅 Q2+ |
+| **Interview Prep** | `devops-question.md` & `devops-question-senior.md` | Trade-offs, System Design, SRE mindset, Production debugging | ⭐⭐⭐ | ⏳ |
 
 > 💡 **Reliability PM Note:** Đừng đợi code hoàn thiện mới nghĩ đến monitoring. Hãy đọc `EXPANSION_PLAN.md` để định nghĩa SLI/SLO và thiết kế Runbook cho các failure domain mới (Saga compensation, CQRS sync lag, circuit breaker open).
+
+> 🛡️ **SRE Mentor Note (Week 1-2 completed):** Trước khi thực hành Chaos Engineering (Week 7-8), hạ tầng phải được **hardening** trước: Network Segmentation (Zero Trust), Resource Limits (Bulkhead), Log Rotation (Disk Pressure), Graceful Shutdown Contract. Các changes này đã được apply — xem [CHANGELOG.md](CHANGELOG.md) và [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md). Không có baseline hạ tầng chuẩn, mọi chaos experiment sẽ cho kết quả misleading.
 
 ---
 
@@ -218,9 +232,13 @@ Repository được thiết kế theo lộ trình tăng dần về độ phức 
 
 ```text
 on-premises/
-├── README.md                          ← File này
-├── ARCHITECTURE.md                    ← Kiến trúc, Data Flows, DB Schema
+├── README.md                          ← File này (Project overview + Quick Start)
+├── CHANGELOG.md                       ← 🆕 Tuần tự hóa toàn bộ changes theo thời gian
+├── ARCHITECTURE.md                    ← Kiến trúc, Data Flows, DB Schema (v2.4)
 ├── EXPANSION_PLAN.md                  ← Kế hoạch scale lên 10 services (Saga, CQRS)
+├── ROADMAP_PRODUCTION_GRADE.md        ← Execution plan 1 năm (Q1-Q5)
+├── WEEK1-2_CHANGES.md                 ← 🆕 Chi tiết Week 1-2 hardening (Network/Limits/Logs)
+├── DEPLOYMENT_GUIDE.md                ← Hướng dẫn deploy lên Linux VMs
 ├── INCIDENT_SIMULATION_GUIDE.md       ← 12 Chaos Experiments
 ├── INCIDENT_RUNBOOK.md                ← 24 Alert Runbooks
 ├── BREAK_TEST_RECOVERY.md             ← Component Deep-dive Drills
@@ -236,6 +254,7 @@ on-premises/
 │   │   ├── notification-worker/       # Kafka Consumer, Idempotency
 │   │   ├── traffic-gen/               # API-controlled Load Testing
 │   │   ├── web-ui/                    # Nginx SPA
+│   │   ├── docker-compose.yml         # 🆕 3-tier networks + resource limits
 │   │   └── shared/                    # OTel setup, DB pools, Health checks
 │   └── agents/                        # Grafana Alloy (Log collection)
 │
