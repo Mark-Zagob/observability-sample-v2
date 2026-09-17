@@ -6,7 +6,8 @@ Shared across all Python services to enable continuous profiling.
 
 Features:
   - CPU profiling (hot functions, flame graphs)
-  - Memory allocation profiling
+  - Memory allocation profiling (memory leak detection)
+  - GIL contention detection
   - Feature flag support (ENABLE_PROFILING env var)
   - Graceful degradation if Pyroscope is unavailable
   - Production guardrails (sampling rate control)
@@ -21,12 +22,17 @@ Environment Variables:
     PYROSCOPE_URL          - Pyroscope server URL (default: http://pyroscope:4040)
     PYROSCOPE_SAMPLE_RATE  - Sampling frequency in Hz (default: 100)
     ENABLE_PROFILING       - Feature flag: true/false (default: true)
+    ENABLE_MEMORY_PROFILING - Enable memory profiling (default: true)
 
 Learning Value:
     - Understand flame graphs and hot path analysis
     - Detect CPU bottlenecks, memory leaks, GIL contention
     - Correlate profiling with traces and metrics (4th pillar)
     - Optimize code with data-driven decisions
+
+Reference:
+    - Official API: https://grafana.com/docs/pyroscope/latest/configure-client/language-sdks/python/
+    - PyPI package: pyroscope-io
 ============================================================
 """
 
@@ -41,6 +47,9 @@ import sys
 #
 # This is a production-grade pattern: observability should never
 # block application startup or cause runtime errors.
+#
+# Note: The PyPI package name is `pyroscope-io` (not grafana-pyroscope).
+# It provides the `pyroscope` module namespace [[1]].
 # ============================================================
 try:
     import pyroscope
@@ -67,12 +76,6 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
     # ============================================================
     # Feature Flag Check
     # ============================================================
-    # Allow disabling profiling via environment variable.
-    # Useful for:
-    #   - Development environments (reduce overhead)
-    #   - Incident response (disable if profiling causes issues)
-    #   - A/B testing (compare with/without profiling)
-    # ============================================================
     enable_profiling = os.getenv("ENABLE_PROFILING", "true").lower() == "true"
 
     if not enable_profiling:
@@ -84,7 +87,7 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
     # ============================================================
     if not PYROSCOPE_AVAILABLE:
         print(f"⚠️  Pyroscope SDK not installed. Profiling disabled.")
-        print(f"   Install with: pip install grafana-pyroscope")
+        print(f"   Install with: pip install pyroscope-io")
         return None
 
     # ============================================================
@@ -92,19 +95,24 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
     # ============================================================
     pyroscope_url = os.getenv("PYROSCOPE_URL", "http://pyroscope:4040")
     sample_rate = int(os.getenv("PYROSCOPE_SAMPLE_RATE", "100"))
+    enable_memory = os.getenv("ENABLE_MEMORY_PROFILING", "true").lower() == "true"
 
     # ============================================================
     # Initialize Pyroscope
     # ============================================================
-    # Configuration parameters:
-    #   app_name         - Service name (appears in Pyroscope UI)
-    #   server_address   - Pyroscope server endpoint
-    #   sample_rate      - Sampling frequency (Hz). 100 = 100 samples/sec
-    #                      Lower = less overhead, less detail
-    #                      Higher = more overhead, more detail
-    #                      Production: 100 Hz is typical (~1-2% CPU overhead)
-    #   detect_subthread_spans - Capture threads created by main thread
-    #   tags             - Metadata tags for filtering/grouping
+    # Official API parameters [[1]]:
+    #   application_name  - Service name (appears in Pyroscope UI)
+    #                       NOTE: Must be `application_name`, NOT `app_name`
+    #   server_address    - Pyroscope server endpoint
+    #   sample_rate       - Sampling frequency (Hz). 100 = 100 samples/sec
+    #                       Production: 100 Hz is typical (~1-2% CPU overhead)
+    #   cpu_enabled       - Enable CPU profiling (default: True)
+    #   mem_enabled       - Enable memory profiling (default: False)
+    #                       Enable this to detect memory leaks!
+    #   gil_only          - Only profile threads holding GIL (default: True)
+    #                       Important for detecting GIL contention
+    #   enable_logging    - Enable debug logging (default: False)
+    #   tags              - Metadata tags for filtering/grouping
     #
     # Production Guardrails:
     #   - Sample rate 100 Hz = ~1-2% CPU overhead (acceptable)
@@ -113,22 +121,30 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
     # ============================================================
     try:
         pyroscope.configure(
-            app_name=service_name,
+            application_name=service_name,
             server_address=pyroscope_url,
             sample_rate=sample_rate,
-            detect_subthread_spans=True,
+            # CPU profiling — always enabled
+            cpu_enabled=True,
+            # Memory profiling — detect memory leaks
+            mem_enabled=enable_memory,
+            # GIL contention detection — critical for multi-threaded Python
+            gil_only=True,
+            # Enable logging for debugging connection issues
+            enable_logging=False,
+            # Tags for filtering in Pyroscope UI
             tags={
-                "environment": "lab",
+                "environment": os.getenv("DEPLOYMENT_ENV", "lab"),
                 "service": service_name,
                 "version": service_version,
-                # Add deployment.environment for consistency with OTel
-                "deployment.environment": os.getenv("DEPLOYMENT_ENV", "lab"),
             }
         )
         print(f"✅ Profiling enabled for {service_name}")
         print(f"   Pyroscope URL: {pyroscope_url}")
         print(f"   Sample Rate: {sample_rate} Hz")
-        print(f"   View profiles: http://localhost:4040")
+        print(f"   CPU Profiling: enabled")
+        print(f"   Memory Profiling: {'enabled' if enable_memory else 'disabled'}")
+        print(f"   GIL-only: True (detect GIL contention)")
         return pyroscope
 
     except Exception as e:
@@ -152,11 +168,11 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
 
 def profile_function(pyroscope_instance, profile_name: str):
     """
-    Decorator to profile a specific function.
+    Decorator to profile a specific function with custom tags.
 
     Usage:
         profiler = init_profiling("my-service")
-        
+
         @profile_function(profiler, "complex_calculation")
         def expensive_operation():
             # Your code here
@@ -189,7 +205,7 @@ def tag_profiling_context(pyroscope_instance, **tags):
 
     Usage:
         profiler = init_profiling("my-service")
-        
+
         with tag_profiling_context(profiler, user_id="user-123", endpoint="/order"):
             # Code to profile with custom tags
             process_order()
@@ -207,3 +223,27 @@ def tag_profiling_context(pyroscope_instance, **tags):
         return nullcontext()
 
     return pyroscope_instance.tag_wrapper(tags)
+
+
+# ============================================================
+# Gunicorn Integration Helper
+# ============================================================
+
+def init_profiling_for_gunicorn():
+    """
+    Initialize profiling in gunicorn post_worker_init hook.
+
+    This is the recommended approach for gunicorn because:
+    1. gunicorn forks workers from master process
+    2. Pyroscope starts background threads on configure()
+    3. Background threads are NOT inherited after fork
+    4. Must initialize AFTER fork, per-worker [[1]]
+
+    Usage in gunicorn.conf.py:
+        def post_worker_init(worker):
+            from shared.profiling_setup import init_profiling_for_gunicorn
+            init_profiling_for_gunicorn()
+    """
+    service_name = os.getenv("SERVICE_NAME", "unknown-service")
+    service_version = os.getenv("SERVICE_VERSION", "1.0.0")
+    return init_profiling(service_name, service_version)

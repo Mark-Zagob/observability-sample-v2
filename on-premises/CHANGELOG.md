@@ -8,6 +8,90 @@
 
 ---
 
+## [2.4.2] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope SDK Integration Bugs
+
+#### ❌ Root Cause
+The `profiling_setup.py` shared module contained **incorrect API parameter names** that caused `pyroscope.configure()` to fail silently with a `TypeError`. The service continued running but **no profiling data was collected** — a classic Silent Failure anti-pattern.
+
+**Specific bugs:**
+1. `app_name=service_name` — **WRONG parameter name**. The official Pyroscope Python SDK requires `application_name`, not `app_name` [[1]].
+2. `detect_subthread_spans=True` — **INVALID parameter**. This parameter doesn't exist in the `pyroscope-io` SDK API [[1]].
+3. Memory profiling was **disabled by default** (`mem_enabled` defaults to `False`), preventing memory leak detection — one of the primary use cases for continuous profiling.
+4. Gunicorn fork-safety was not addressed: Pyroscope SDK starts background threads on `configure()`, which are **NOT inherited after fork** [[1]].
+
+#### ✅ Fix Applied
+
+**1. Fixed `profiling_setup.py` (shared module):**
+- Changed `app_name` → `application_name` (correct official API) [[1]]
+- Removed invalid `detect_subthread_spans` parameter
+- Added `mem_enabled=True` for memory allocation profiling
+- Added `gil_only=True` for GIL contention detection
+- Added `cpu_enabled=True` explicitly
+- Added `ENABLE_MEMORY_PROFILING` env var for feature flag control
+- Added `init_profiling_for_gunicorn()` helper for fork-safe initialization
+
+**2. Created gunicorn.conf.py for all services:**
+- `api-gateway/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- `notification-worker/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- `inventory-worker/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- Updated `order-service/gunicorn.conf.py` — added `post_worker_init` profiling
+- Updated `payment-service/gunicorn.conf.py` — added `post_worker_init` profiling
+
+**3. Updated all app.py files:**
+- Added `if 'gunicorn' not in sys.modules:` guard to module-level profiling init
+- Production path: profiling initialized in `post_worker_init` (fork-safe) [[1]]
+- Development path: profiling initialized at module import (python app.py)
+
+**4. Updated all Dockerfiles:**
+- Changed hardcoded gunicorn CLI args → `-c gunicorn.conf.py` for consistency
+- Added `COPY gunicorn.conf.py .` to each Dockerfile
+
+**5. Provisioned Grafana datasource:**
+- Copied `pyroscope.yml` to `phase1-metrics/grafana/provisioning/datasources/`
+- Grafana will auto-load Pyroscope datasource on next restart
+
+#### 📝 Files Changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `applications/shared/profiling_setup.py` | MODIFIED | Fix API params, enable memory profiling |
+| `applications/api-gateway/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/notification-worker/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/inventory-worker/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/order-service/gunicorn.conf.py` | MODIFIED | Add `post_worker_init` profiling |
+| `applications/payment-service/gunicorn.conf.py` | MODIFIED | Add `post_worker_init` profiling |
+| `applications/*/app.py` (6 files) | MODIFIED | Add gunicorn guard for dev/prod split |
+| `applications/*/Dockerfile` (4 files) | MODIFIED | Use `-c gunicorn.conf.py` |
+| `observability-vm/phase1-metrics/grafana/provisioning/datasources/pyroscope.yml` | **NEW** | Grafana datasource auto-provisioning |
+
+#### 🔄 Rollback Plan
+```bash
+cd applications-vm/applications
+# Revert profiling_setup.py
+git checkout HEAD -- shared/profiling_setup.py
+# Remove new gunicorn configs (they didn't exist before)
+rm api-gateway/gunicorn.conf.py
+rm notification-worker/gunicorn.conf.py
+rm inventory-worker/gunicorn.conf.py
+# Revert modified files
+git checkout HEAD -- order-service/gunicorn.conf.py payment-service/gunicorn.conf.py
+git checkout HEAD -- */app.py */Dockerfile
+```
+
+#### 🎓 SRE Concepts Applied
+| Concept | Application |
+|---------|-------------|
+| `Silent Failure Detection` | SDK misconfiguration caused no data — not a crash. Only discovered by code review. |
+| `Fork Safety` | Pyroscope starts background threads — must initialize AFTER gunicorn fork [[1]] |
+| `Production-Grade Defaults` | Enable memory profiling (detect leaks) and GIL contention detection |
+| `Configuration as Code` | gunicorn.conf.py > CLI args (version-controlled, testable, consistent) |
+| `Feature Flag Pattern` | `ENABLE_MEMORY_PROFILING` env var for gradual rollout |
+| `Development/Production Parity` | Same code path for `python app.py` and `gunicorn app:app` |
+
+---
+
 ## [2.4.1] — 2026-09-17
 
 ### 🐛 Phase 4.5: Fix Pyroscope Container Startup Failure
