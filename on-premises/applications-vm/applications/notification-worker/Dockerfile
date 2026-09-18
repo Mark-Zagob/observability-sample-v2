@@ -30,6 +30,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY shared/ ./shared/
 COPY notification-worker/app.py .
+COPY notification-worker/gunicorn.conf.py .
 
 # Health check
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
@@ -38,6 +39,5 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
 USER appuser
 
 EXPOSE 5004
-CMD ["gunicorn", "--workers", "1", "--bind", "0.0.0.0:5004", \
-     "--access-logfile", "-", "--timeout", "30", \
-     "--worker-tmp-dir", "/dev/shm", "app:app"]
+# 🌟 Use config file for consistency and maintainability
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "--bind", "0.0.0.0:5004", "--worker-tmp-dir", "/dev/shm", "app:app"]

@@ -1,0 +1,99 @@
+# ============================================================
+# Phase 4.5: Continuous Profiling with Pyroscope
+# ============================================================
+# Pyroscope server — Grafana Labs' continuous profiling platform
+# Receives profiling data from Python services → store → visualize
+# ============================================================
+# 🛡️ Production Guardrails:
+#   - Resource Limits (CPU/Memory)
+#   - Log Rotation (json-file, 10MB × 5 files)
+#   - Graceful Shutdown (30s)
+#   - External network (isolated from app tier)
+# ============================================================
+
+# ============================================================
+# Common configurations (YAML anchors)
+# ============================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # ==========================================================
+  # PYROSCOPE - Continuous Profiling Server
+  # ==========================================================
+  # Pyroscope collects, stores, and visualizes profiling data:
+  #   - CPU profiles (hot functions, flame graphs)
+  #   - Memory allocation profiles
+  #   - Lock contention / GIL contention
+  #
+  # Architecture:
+  #   Python Apps → Pyroscope SDK → Pyroscope Server → Grafana
+  #
+  # Learning Value:
+  #   - 4th pillar of observability (Metrics + Logs + Traces + Profiles)
+  #   - Debug performance bottlenecks at code-level
+  #   - Optimize hot paths with flame graph analysis
+  #   - Detect memory leaks, GIL contention, lock contention
+  # ==========================================================
+  pyroscope:
+    image: grafana/pyroscope:1.13.0
+    container_name: pyroscope
+    environment:
+      # Pyroscope server configuration
+      - PYROSCOPE_SELF_PROFILING_ENABLED=false  # Don't profile the profiler
+      - PYROSCOPE_DISABLE_TELEMETRY=true         # Disable anonymous telemetry
+      - PYROSCOPE_LOG_LEVEL=info
+    volumes:
+      # CRITICAL: Mount to /data (NOT /var/lib/pyroscope)
+      # The grafana/pyroscope image pre-creates /data with UID 10001:10001 ownership
+      # Named volumes inherit this ownership via Docker copy-up semantics
+      # Mounting to /var/lib/pyroscope → root:root ownership → permission denied
+      - pyroscope_data:/data
+      - ./pyroscope/config.yaml:/etc/pyroscope/config.yaml:ro
+    command:
+      # Only the config file flag — all other settings are in config.yaml
+      # NOTE: -retention-period and -ingestion.max-ingestion-rate were REMOVED in v1.0
+      # Retention is now configured via limits.compactor_blocks_retention_period in config.yaml
+      - '-config.file=/etc/pyroscope/config.yaml'
+    ports:
+      - "4040:4040"  # Pyroscope UI + ingestion endpoint
+    networks:
+      - observability
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    logging: *default-logging
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:4040/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pyroscope_data:
+
+# ============================================================
+# External Network
+# ============================================================
+# Must be same network as Grafana (phase1), Prometheus (phase1)
+# so that:
+#   1. Grafana can query Pyroscope as datasource
+#   2. Apps can send profiling data to Pyroscope
+#
+# Tạo network trước khi chạy (nếu chưa có):
+#   docker network create observability
+# ============================================================
+networks:
+  observability:
+    external: true

@@ -4,7 +4,7 @@
 FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /build
-COPY requirements.txt .
+COPY traffic-gen/requirements.txt .
 RUN pip install --no-cache-dir --no-compile \
     --prefix=/install -r requirements.txt
 
@@ -27,8 +27,9 @@ WORKDIR /app
 # Copy ONLY installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application code
-COPY app.py .
+# Copy application code (shared/ needed for profiling_setup.py in Phase 4.5)
+COPY shared/ ./shared/
+COPY traffic-gen/app.py .
 
 # Health check
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=5s \

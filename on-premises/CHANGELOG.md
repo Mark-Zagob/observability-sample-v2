@@ -8,6 +8,328 @@
 
 ---
 
+## [2.4.5] — 2026-09-17
+
+### 🐛 Fix: Grafana Text Panel Missing Markdown Content
+
+**Problem:** Panel "🔥 Open Profiling Dashboard" (id: 11) trong `unified-overview.json` hiển thị trống rỗng, chỉ thấy title và message mặc định `"For markdown syntax help: commonmark.org/help"`.
+
+**Root Cause:** Panel có `type: "text"` với `options.mode: "markdown"` nhưng **thiếu field `options.content`** chứa markdown text. Ngoài ra, panel thừa `datasource` (Prometheus) và `targets` — lỗi copy-paste từ panel `timeseries`.
+
+**Fix Applied:**
+- ✅ Thêm `options.content` với markdown text đầy đủ (quick link, when-to-use guide, profile types table)
+- ✅ Bỏ `datasource` và `targets` vì text panel không cần query
+
+**Files Changed:**
+- `grafana/dashboards/Application/unified-overview.json` — Panel id 11
+
+---
+
+## [2.4.4] — 2026-09-17
+
+### 🎨 Phase 4.6: Grafana Profiling Dashboard Integration
+
+#### 🎯 Motivation
+
+After Phase 4.5 successfully integrated Pyroscope SDK into all 6 services, the next question was: **"How should we visualize profiling data in production-grade manner?"**
+
+A naive approach would be to just point users to the Pyroscope UI at `http://192.168.100.55:4040`. But this breaks the **Single Pane of Glass** principle — SREs would have to context-switch between Grafana (metrics/logs/traces) and Pyroscope UI (profiles).
+
+#### 🏗️ 3-Tier Dashboard Strategy (Production-Grade Approach)
+
+| Tier | Purpose | Implementation |
+|------|---------|----------------|
+| **Tier 1 — Dedicated Profiling Dashboard** | Deep-dive investigation with flame graphs, top functions, cross-signal correlation | `dashboards/Profiling/profiling-overview.json` |
+| **Tier 2 — Cross-Signal Integration** | Surface profiling signals in existing dashboards for workflow continuity | Added profiling row to `unified-overview.json` + links in `app-performance.json` |
+| **Tier 3 — Exemplar Drill-Down** | Click metric data point → jump to profile → jump to trace | Already configured in `pyroscope.yml` datasource via `exemplarTraceIdDestinations` |
+
+#### 📊 New Dashboard: `profiling-overview`
+
+**Folder:** `dashboards/Profiling/` (auto-created by Grafana provisioner via `foldersFromFilesStructure: true`)
+
+**4 Sections:**
+
+1. **🩺 Profiling Health (SDK Telemetry)**
+   - CPU samples ingestion rate per service
+   - Memory samples ingestion rate per service
+   - Failed samples (error rate)
+   - **SRE Insight:** These are "meta-metrics" — measuring the profiling system itself. If ingestion rate = 0, profiling is broken even if app looks healthy.
+
+2. **🔥 CPU Profiling**
+   - CPU Flame Graph (interactive)
+   - Top 10 CPU-consuming functions (table)
+   - **SRE Insight:** When P95 latency spikes, use flame graph to find the "hot" function.
+
+3. **💾 Memory Profiling**
+   - Memory Allocation Flame Graph
+   - Top 10 memory-allocating functions
+   - **SRE Insight:** When RSS grows continuously (memory leak), find the "allocation site" via flame graph.
+
+4. **🔗 Cross-Signal Correlation**
+   - Service P95 latency (Prometheus) — trigger signal
+   - Service error rate (Prometheus) — correlate with memory profiles
+   - **SRE Workflow:** P95 spike → click flame graph → find bottleneck → optimize.
+
+**Variable:** `$service` dropdown (api-gateway, order-service, payment-service, notification-worker, inventory-worker, traffic-gen)
+
+#### 🔗 Dashboard Links Added
+
+| Dashboard | Added Link |
+|-----------|------------|
+| `unified-overview.json` | "🔥 Profiling" link + profiling samples ingestion panel |
+| `app-performance.json` | "🔥 Profiling" link in dashboard links |
+
+#### 📝 Files Changed
+
+| File | Action |
+|------|--------|
+| `grafana/dashboards/Profiling/profiling-overview.json` | **NEW** — Dedicated profiling dashboard |
+| `grafana/dashboards/Application/unified-overview.json` | **MODIFIED** — Added profiling row + link |
+| `grafana/dashboards/Application/app-performance.json` | **MODIFIED** — Added profiling link |
+
+#### 🎓 SRE Concepts Applied
+
+| Concept | Application |
+|---------|-------------|
+| **Single Pane of Glass** | All 4 observability signals (metrics, logs, traces, profiles) accessible from Grafana |
+| **Dashboard as Code** | JSON files version-controlled, reproducible, reviewable |
+| **Cross-Signal Correlation** | P95 latency panel next to flame graph → natural investigation workflow |
+| **Meta-Metrics** | Monitoring the monitoring system (profiling SDK health) |
+| **Progressive Disclosure** | Simple overview → drill-down to flame graphs only when needed |
+
+#### 🚀 Deployment
+
+```bash
+# Restart Grafana to reload provisioned dashboards
+cd observability-sample-v2/on-premises/observability-vm/phase1-metrics
+docker compose restart grafana
+```
+
+**Verification:**
+1. Open Grafana → Dashboards → **Profiling** folder → `Profiling — Continuous Profiling (Pyroscope)`
+2. Select service from `$service` dropdown → flame graph should load
+3. Verify links in Unified Overview and App Performance dashboards
+
+---
+
+## [2.4.3] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope Storage Permission Denied
+
+#### ❌ Root Cause
+The Pyroscope container crashed with `permission denied` when trying to write profiling data:
+
+```
+mkdir /var/lib/pyroscope/anonymous/local: mkdir /var/lib/pyroscope/anonymous: permission denied
+```
+
+**Root Cause:** The `grafana/pyroscope:1.13.0` Docker image runs as non-root user `pyroscope` (UID 10001, GID 10001). The image's Dockerfile:
+
+1. **Pre-creates `/data` with correct ownership** (10001:10001) via `COPY --chown=pyroscope:pyroscope`
+2. **Declares `VOLUME /data`** — Docker copy-up semantics preserve the 10001:10001 ownership
+3. **Does NOT pre-create `/var/lib/pyroscope`** — this path doesn't exist in the image
+
+When we mounted the named volume `pyroscope_data` to `/var/lib/pyroscope`, Docker created the volume with **root:root ownership** (default). Pyroscope (running as UID 10001) could not write to the root-owned directory.
+
+**Positive Signal:** The logs showed `User-Agent: pyroscope-rs/pyspy/1.2.3` — confirming that the SDK integration from Phase 4.5 (gunicorn fork-safety, memory profiling) was working correctly. The apps were sending data to Pyroscope, but Pyroscope couldn't persist it.
+
+#### ✅ Fix Applied (Minimal Viable Change)
+
+**Changed storage path from `/var/lib/pyroscope` to `/data`:**
+
+1. **`pyroscope/config.yaml`:**
+   ```yaml
+   pyroscopedb:
+     data_path: /data  # ← Changed from /var/lib/pyroscope
+     min_free_disk_gb: 1  # ← Lowered from 5GB for lab safety
+   ```
+
+2. **`docker-compose.yml`:**
+   ```yaml
+   volumes:
+     - pyroscope_data:/data  # ← Changed from /var/lib/pyroscope
+   ```
+
+**Why this works:**
+- Named volumes mounted at `/data` inherit the image's pre-configured 10001:10001 ownership
+- Pyroscope (UID 10001) can write to the volume
+- No init container or `user: root` workaround needed
+
+#### 🔄 Rollback Plan
+
+If this fix causes issues, revert to the original configuration and use an init container:
+
+```yaml
+services:
+  pyroscope-init:
+    image: alpine:3.20
+    user: root
+    volumes:
+      - pyroscope_data:/var/lib/pyroscope
+    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/pyroscope"]
+    restart: "no"
+
+  pyroscope:
+    user: "10001:10001"
+    depends_on:
+      pyroscope-init:
+        condition: service_completed_successfully
+```
+
+#### 🎓 SRE Concepts Applied
+
+| Concept | Application |
+|---------|-------------|
+| **Docker Named Volume Copy-Up** | Volumes inherit content + ownership from the image's mountpoint at creation time |
+| **Least Privilege Principle** | Run containers as non-root (UID 10001), not `user: root` |
+| **Blast Radius = 0** | Fix only affects Pyroscope storage path, no impact on app tier or DB |
+| **Silent Failure Detection** | Logs showed `permission denied` + `User-Agent: pyroscope-rs` — SDK working, storage broken |
+
+#### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `observability-vm/phase4-profiling/pyroscope/config.yaml` | `data_path: /var/lib/pyroscope` → `/data`, `min_free_disk_gb: 5` → `1` |
+| `observability-vm/phase4-profiling/docker-compose.yml` | Volume mount: `/var/lib/pyroscope` → `/data` |
+
+---
+
+## [2.4.2] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope SDK Integration Bugs
+
+#### ❌ Root Cause
+The `profiling_setup.py` shared module contained **incorrect API parameter names** that caused `pyroscope.configure()` to fail silently with a `TypeError`. The service continued running but **no profiling data was collected** — a classic Silent Failure anti-pattern.
+
+**Specific bugs:**
+1. `app_name=service_name` — **WRONG parameter name**. The official Pyroscope Python SDK requires `application_name`, not `app_name` [[1]].
+2. `detect_subthread_spans=True` — **INVALID parameter**. This parameter doesn't exist in the `pyroscope-io` SDK API [[1]].
+3. Memory profiling was **disabled by default** (`mem_enabled` defaults to `False`), preventing memory leak detection — one of the primary use cases for continuous profiling.
+4. Gunicorn fork-safety was not addressed: Pyroscope SDK starts background threads on `configure()`, which are **NOT inherited after fork** [[1]].
+
+#### ✅ Fix Applied
+
+**1. Fixed `profiling_setup.py` (shared module):**
+- Changed `app_name` → `application_name` (correct official API) [[1]]
+- Removed invalid `detect_subthread_spans` parameter
+- Added `mem_enabled=True` for memory allocation profiling
+- Added `gil_only=True` for GIL contention detection
+- Added `cpu_enabled=True` explicitly
+- Added `ENABLE_MEMORY_PROFILING` env var for feature flag control
+- Added `init_profiling_for_gunicorn()` helper for fork-safe initialization
+
+**2. Created gunicorn.conf.py for all services:**
+- `api-gateway/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- `notification-worker/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- `inventory-worker/gunicorn.conf.py` — NEW (was hardcoded in Dockerfile)
+- Updated `order-service/gunicorn.conf.py` — added `post_worker_init` profiling
+- Updated `payment-service/gunicorn.conf.py` — added `post_worker_init` profiling
+
+**3. Updated all app.py files:**
+- Added `if 'gunicorn' not in sys.modules:` guard to module-level profiling init
+- Production path: profiling initialized in `post_worker_init` (fork-safe) [[1]]
+- Development path: profiling initialized at module import (python app.py)
+
+**4. Updated all Dockerfiles:**
+- Changed hardcoded gunicorn CLI args → `-c gunicorn.conf.py` for consistency
+- Added `COPY gunicorn.conf.py .` to each Dockerfile
+
+**5. Provisioned Grafana datasource:**
+- Copied `pyroscope.yml` to `phase1-metrics/grafana/provisioning/datasources/`
+- Grafana will auto-load Pyroscope datasource on next restart
+
+#### 📝 Files Changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `applications/shared/profiling_setup.py` | MODIFIED | Fix API params, enable memory profiling |
+| `applications/api-gateway/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/notification-worker/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/inventory-worker/gunicorn.conf.py` | **NEW** | Gunicorn config with profiling hook |
+| `applications/order-service/gunicorn.conf.py` | MODIFIED | Add `post_worker_init` profiling |
+| `applications/payment-service/gunicorn.conf.py` | MODIFIED | Add `post_worker_init` profiling |
+| `applications/*/app.py` (6 files) | MODIFIED | Add gunicorn guard for dev/prod split |
+| `applications/*/Dockerfile` (4 files) | MODIFIED | Use `-c gunicorn.conf.py` |
+| `observability-vm/phase1-metrics/grafana/provisioning/datasources/pyroscope.yml` | **NEW** | Grafana datasource auto-provisioning |
+
+#### 🔄 Rollback Plan
+```bash
+cd applications-vm/applications
+# Revert profiling_setup.py
+git checkout HEAD -- shared/profiling_setup.py
+# Remove new gunicorn configs (they didn't exist before)
+rm api-gateway/gunicorn.conf.py
+rm notification-worker/gunicorn.conf.py
+rm inventory-worker/gunicorn.conf.py
+# Revert modified files
+git checkout HEAD -- order-service/gunicorn.conf.py payment-service/gunicorn.conf.py
+git checkout HEAD -- */app.py */Dockerfile
+```
+
+#### 🎓 SRE Concepts Applied
+| Concept | Application |
+|---------|-------------|
+| `Silent Failure Detection` | SDK misconfiguration caused no data — not a crash. Only discovered by code review. |
+| `Fork Safety` | Pyroscope starts background threads — must initialize AFTER gunicorn fork [[1]] |
+| `Production-Grade Defaults` | Enable memory profiling (detect leaks) and GIL contention detection |
+| `Configuration as Code` | gunicorn.conf.py > CLI args (version-controlled, testable, consistent) |
+| `Feature Flag Pattern` | `ENABLE_MEMORY_PROFILING` env var for gradual rollout |
+| `Development/Production Parity` | Same code path for `python app.py` and `gunicorn app:app` |
+
+---
+
+## [2.4.1] — 2026-09-17
+
+### 🐛 Phase 4.5: Fix Pyroscope Container Startup Failure
+
+#### ❌ Root Cause
+Pyroscope v1.13.0 container failed to start with:
+```
+flag provided but not defined: -retention-period
+```
+The `docker-compose.yml` used **deprecated CLI flags** from the pre-1.0 era (`pyroscope/pyroscope`), which were **removed** in the `grafana/pyroscope` 1.0+ rewrite [[15]].
+
+Specifically:
+- `-retention-period` — **removed in v1.0**, replaced by `limits.compactor_blocks_retention_period` in YAML config
+- `-ingestion.max-ingestion-rate` — **non-existent flag**, ingestion rate is controlled via `limits.ingestion_rate_mb`
+- `-config.file=/etc/pyroscope/server.yml` — referenced the **old config path** (`server.yml`), new path is `config.yaml` [[15]]
+- No config file was actually mounted into the container
+
+#### ✅ Fix Applied
+1. **Created** `pyroscope/config.yaml` — proper v1.13 configuration file with:
+   - `compactor_blocks_retention_period: 168h` (7-day retention)
+   - `ingestion_rate_mb: 10` / `ingestion_burst_size_mb: 20` (rate limiting)
+   - `max_global_series_per_tenant: 100000` (cardinality guard)
+   - `compactor.compaction_interval: 15m` + `deletion_delay: 12h`
+   - `pyroscopedb` disk retention settings (`enforcement_interval: 5m`)
+
+2. **Fixed** `docker-compose.yml`:
+   - Removed all invalid CLI flags
+   - Changed to: `-config.file=/etc/pyroscope/config.yaml`
+   - Added volume mount: `./pyroscope/config.yaml:/etc/pyroscope/config.yaml:ro`
+
+#### 📝 Files Changed
+- `observability-vm/phase4-profiling/docker-compose.yml` — command + volumes
+- `observability-vm/phase4-profiling/pyroscope/config.yaml` — **new file**
+
+#### 🔄 Rollback Plan
+If issues arise, revert to the old compose (but it will fail to start):
+```bash
+cd observability-vm/phase4-profiling
+# The old config had invalid flags — there is no safe rollback state
+# Simply keep the fixed version
+```
+
+#### 🎓 SRE Lesson
+| Concept | Application |
+|---------|-------------|
+| `Breaking Changes in Major Versions` | Pyroscope 1.0 removed many CLI flags — always check upgrade guides |
+| `Configuration as Code` | YAML config file > CLI flags (version-controlled, auditable, testable) |
+| `Look Before You Leap` | Read the official upgrade guide before bumping image versions |
+| `Minimal Viable Change` | Fixed by moving config to file instead of guessing new flag names |
+
+---
+
 ## [2.4.0] — 2026-09-17
 
 ### 🛡️ Week 1-2: Production-Grade Infrastructure Hardening

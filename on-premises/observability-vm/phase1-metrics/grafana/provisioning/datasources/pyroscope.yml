@@ -1,0 +1,28 @@
+# ============================================================
+# Grafana Datasource - Pyroscope (Continuous Profiling)
+# ============================================================
+# Auto-provisions Pyroscope as a Grafana datasource.
+# This enables:
+#   - Flame graph visualization
+#   - Profile exploration
+#   - Trace-to-profile linking (from Tempo)
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    uid: pyroscope-datasource
+    access: proxy
+    url: http://pyroscope:4040
+    isDefault: false
+    editable: true
+    jsonData:
+      # Enable exemplars (link metrics → profiles)
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo-datasource
+          urlDisplayLabel: "View Trace"
+      # Time interval for profile aggregation
+      timeInterval: "15s"

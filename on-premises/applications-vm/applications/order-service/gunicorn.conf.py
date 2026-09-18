@@ -32,8 +32,12 @@ loglevel = "info"
 # post_worker_init chạy SAU khi worker fork, đúng lifecycle.
 def post_worker_init(worker):
     from shared.otel_watchdog import start_otel_watchdog
+    from shared.profiling_setup import init_profiling
     start_otel_watchdog(interval=30, max_failures=3)
     worker.log.info("✅ OTel Watchdog started for worker %s", worker.pid)
+    # Phase 4.5: Initialize Pyroscope profiling per-worker (fork-safe)
+    init_profiling("order-service", "3.0.0")
+    worker.log.info("✅ Pyroscope profiling initialized for worker %s", worker.pid)
 
 # 🔴 Finding 2 Fix: Gunicorn Worker.init_signals() ghi đè SIGTERM.
 # shutdown_manager.exit_gracefully() KHÔNG BAO GIỜ được gọi dưới gunicorn.

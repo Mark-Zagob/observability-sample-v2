@@ -40,6 +40,14 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 logger = setup_logging("api-gateway")
 tracer, meter = init_otel("api-gateway", "3.0.0")
 
+# Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
+# NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
+#       This module-level init is a fallback for development mode (python app.py).
+from shared.profiling_setup import init_profiling
+import sys
+if 'gunicorn' not in sys.modules:
+    init_profiling("api-gateway", "3.0.0")
+
 # ============================================================
 # Custom Metrics
 # ============================================================

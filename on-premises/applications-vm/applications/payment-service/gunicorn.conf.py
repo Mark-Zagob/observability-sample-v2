@@ -25,5 +25,11 @@ loglevel = "info"
 def worker_int(worker):
     worker.log.info("🛑 Received SIGINT/SIGTERM, finishing current request gracefully...")
 
+def post_worker_init(worker):
+    from shared.profiling_setup import init_profiling
+    # Phase 4.5: Initialize Pyroscope profiling per-worker (fork-safe)
+    init_profiling("payment-service", "2.0.0")
+    worker.log.info("✅ Pyroscope profiling initialized for worker %s", worker.pid)
+
 def on_exit(server):
     server.log.info("👋 Payment Service shut down cleanly.")

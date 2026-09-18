@@ -13,4 +13,5 @@ python-json-logger==3.2.*
 psycopg2-binary==2.9.*
 redis==5.2.*
 confluent-kafka==2.6.*
+pyroscope-io==1.2.3
 

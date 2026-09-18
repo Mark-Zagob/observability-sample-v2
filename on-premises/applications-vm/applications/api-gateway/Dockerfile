@@ -31,6 +31,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY shared/ ./shared/
 COPY api-gateway/app.py .
+COPY api-gateway/gunicorn.conf.py .
 
 # Health check
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
@@ -39,7 +40,5 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=10s \
 USER appuser
 
 EXPOSE 5000
-CMD ["gunicorn", "--workers", "2", "--threads", "8", "--worker-class", "gthread", \
-     "--bind", "0.0.0.0:5000", \
-     "--access-logfile", "-", "--timeout", "30", \
-     "--worker-tmp-dir", "/dev/shm", "app:app"]
+# 🌟 Use config file for consistency and maintainability
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "--bind", "0.0.0.0:5000", "--worker-tmp-dir", "/dev/shm", "app:app"]

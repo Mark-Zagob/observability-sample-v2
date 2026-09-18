@@ -49,6 +49,14 @@ from opentelemetry.metrics import Observation
 logger = setup_logging("order-service")
 tracer, meter = init_otel("order-service", "3.0.0")
 
+# Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
+# NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
+#       This module-level init is a fallback for development mode (python app.py).
+from shared.profiling_setup import init_profiling
+import sys
+if 'gunicorn' not in sys.modules:
+    init_profiling("order-service", "3.0.0")
+
 # Auto-instrumentation BEFORE creating connections
 Psycopg2Instrumentor().instrument()
 RedisInstrumentor().instrument()

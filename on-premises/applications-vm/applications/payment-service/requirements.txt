@@ -10,3 +10,4 @@ python-json-logger==3.2.*
 redis==5.0.*                                    # THÊM MỚI: Idempotency store
 requests==2.31.*                                # THÊM MỚI: HTTP Client
 pybreaker==1.0.0                                # THÊM MỚI: Circuit Breaker
+pyroscope-io==1.2.3                             # Phase 4.5: Continuous Profiling

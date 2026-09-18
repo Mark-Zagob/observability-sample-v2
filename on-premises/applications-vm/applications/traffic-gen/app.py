@@ -22,6 +22,10 @@ from flask import Flask, jsonify, request as flask_request
 
 app = Flask(__name__)
 
+# Phase 4.5: Continuous Profiling (traffic-gen doesn't use OTel, so init profiling directly)
+from shared.profiling_setup import init_profiling
+init_profiling("traffic-gen", "1.0.0")
+
 API_GATEWAY = "http://api-gateway:5000"
 NOTIFICATION_WORKER = "http://notification-worker:5004"
 INVENTORY_WORKER = "http://inventory-worker:5005"
