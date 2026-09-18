@@ -157,6 +157,7 @@ Sau incident, dùng **5 Whys** để tìm systemic gap:
 | Infrastructure | docker-containers | Container resource usage, restart count |
 | Logging | docker-logs | Container logs (Loki) |
 | Tracing | tracing-overview | Trace count, error traces, span durations |
+| Profiling | profiling-overview | Flame graphs, CPU/Memory hot functions (Phase 4.5) |
 
 ## 1.3 Incident Flow – Đọc dashboard theo luồng sự cố
 ```text
@@ -183,6 +184,10 @@ Sau incident, dùng **5 Whys** để tìm systemic gap:
  ⬇  |  Tracing Overview  |  Request chain? Span nào chậm?
     +-------------------+
               ↓
+    +---------------------+
+ ⬇  |  Profiling         |  Function nào gây ra? (CPU/Memory flame graph)
+    +-------------------+
+              ↓
     +---------+-----------------------------+
  ⬇  |  DB / Cache / Kafka Performance      |  Bottleneck ở đâu?
     +---------------------------------------+
@@ -195,8 +200,9 @@ Sau incident, dùng **5 Whys** để tìm systemic gap:
 2. **Unified Overview:** RPS bình thường (45 req/s), Error Rate thấp (0.3%), P95 Latency = 3.2s (bình thường 500ms) → Không phải traffic surge, không phải lỗi logic.
 3. **App Performance:** Payment P95 = 200ms (OK), Order Service P95 = 3.1s (CHẬM) → Bottleneck nằm trong order-service.
 4. **Tracing:** Mở trace 3.2s → `insert_order` (DB write) chiếm 2.8s (87% tổng thời gian).
-5. **DB Performance:** Connection pool 10/10 (đầy), Avg query duration 2.5s (gấp 500 lần) → DB saturated.
-6. **Logs (Loki):** PostgreSQL autovacuum đang chạy trên bảng `orders`, lock table.
+5. **Profiling:** Click "View Profile" trên span `insert_order` → flame graph cho thấy 65% CPU time trong `psycopg2.getconn()` waiting cho connection pool → connection pool contention.
+6. **DB Performance:** Connection pool 10/10 (đầy), Avg query duration 2.5s (gấp 500 lần) → DB saturated.
+7. **Logs (Loki):** PostgreSQL autovacuum đang chạy trên bảng `orders`, lock table.
 
 **Bài học:** Không dashboard nào đơn lẻ cho đủ thông tin. Mỗi bước thu hẹp phạm vi cho đến khi tìm ra root cause.
 
@@ -246,6 +252,24 @@ Sau incident, dùng **5 Whys** để tìm systemic gap:
 | DB Performance | Query duration, connection pool, slow queries |
 | Cache Performance | Hit rate, latency, evictions |
 | Kafka Overview | Consumer lag, produce rate, partition health |
+
+### 🔥 Profiling (4th Pillar — Phase 4.5)
+| Đọc gì | Hỏi gì |
+|--------|--------|
+| CPU Flame Graph | Function nào chiếm nhiều CPU time nhất? |
+| Memory Allocation Graph | Function nào allocate nhiều memory nhất? |
+| GIL Contention | Có nhiều threads chờ GIL không? |
+| Lock Contention | Threads có block trên locks (DB pool, mutex) không? |
+
+**Kỹ thuật:** Click span trong Tempo → click "View Profile" để jump thẳng vào flame graph của function đó. Đây là **production-grade workflow** giảm MTTR từ hours → minutes.
+
+**Khi nào dùng Profiling:**
+- P95/P99 tăng nhưng tracing không rõ root cause
+- Memory usage tăng dần (suspect memory leak)
+- CPU usage cao nhưng không biết function nào
+- GIL contention trong Python multi-threaded workers
+
+**SRE Insight:** Metrics + Logs + Traces cho bạn "WHAT, WHERE, WHEN". **Profiling** cho bạn "**HOW**" — code nào đang chạy và tại sao nó chậm.
 
 ---
 
@@ -395,6 +419,17 @@ curl -X POST http://localhost:5003/start \
 | **Alerting Overview** | `🚨 Critical` *(stat)* | Count | 0 |
 | **Alerting Overview** | `⚠️ Warning` *(stat)* | Count | 0 |
 | **Alerting Overview** | `⏳ Pending` *(stat)* | Count | 0 |
+
+### 🔥 Profiling (4th Pillar — Phase 4.5)
+
+| Dashboard | Panel trên Dashboard (tên chính xác) | Metric cần ghi | Baseline tham khảo |
+|-----------|--------------------------------------|----------------|-------------------|
+| **Profiling Overview** | `🔥 CPU Profile Activity` | CPU time (nanoseconds) per service | > 0 cho tất cả instrumented services |
+| **Profiling Overview** | `💾 Memory Allocation Activity` | Memory allocations (bytes) per service | > 0 cho tất cả instrumented services |
+| **Profiling Overview** | `✅ Profile Availability Check` | Status | Green: "Profiles Available" |
+| **Unified Overview** | `🔥 Profile Activity Summary` | CPU time per service (multi-series) | Multiple services showing data |
+
+> 💡 **Profiling Baseline Tip:** Khác với metrics (có giá trị cụ thể), profiling baseline là **qualitative**: xác nhận profiling đang hoạt động cho tất cả services. Khi incident xảy ra, bạn sẽ so sánh **flame graphs** trước/sau để identify hot functions.
 
 ### 📊 Hiểu về Aggregate vs Per-Endpoint Metrics
 
@@ -773,6 +808,42 @@ Sau khi hệ thống tự phục hồi (T+90s), mở code ra để tìm hiểu *
 
 ---
 
+### 🔥 Phase 4.5: Profiling Verification (4th Pillar — Phase 4.5)
+
+**Mục tiêu:** Dùng Continuous Profiling để **xác nhận root cause** mà không cần đọc code. Đây là workflow production-grade giúp giảm MTTR từ hours → minutes.
+
+**Workflow:**
+1. Mở Grafana → Tracing Overview → filter traces trong khoảng thời gian incident (T+30s đến T+90s)
+2. Sort by duration descending → tìm trace dài nhất (~30s timeout)
+3. Click vào span `db.query` hoặc `insert_order` (span chiếm nhiều thời gian nhất)
+4. Click "View Profile" → jump thẳng vào Pyroscope flame graph
+
+**Flame Graph Analysis:**
+
+| Bạn sẽ thấy | Ý nghĩa |
+|-------------|---------|
+| **`psycopg2.getconn()`** chiếm 65-80% CPU time | Threads đang block chờ lấy connection từ pool |
+| **`threading.Lock.acquire()`** chiếm 15-20% | GIL contention giữa các gunicorn threads |
+| **`time.sleep()`** chiếm 5-10% | `pg_sleep(90)` đang block connection |
+
+**So sánh Before/After:**
+
+| Thời điểm | Flame Graph Pattern | Ý nghĩa |
+|-----------|---------------------|---------|
+| **Baseline (T+0s)** | Spread đều, không có hot function | Hệ thống healthy, không có bottleneck |
+| **During incident (T+30s)** | `getconn()` chiếm 80% | Connection pool contention |
+| **After recovery (T+120s)** | Spread đều trở lại | Pool released, system healthy |
+
+**SRE Insight:**
+- **Tracing** cho bạn thấy "span nào chậm" (WHAT)
+- **Profiling** cho bạn thấy "function nào gây ra" (HOW)
+- Kết hợp cả hai = **root cause trong 5 phút**, không cần đọc code
+
+**Production Use Case:**
+Khi on-call lúc 3 AM, bạn KHÔNG có thời gian đọc code. Flame graph cho bạn thấy ngay bottleneck → fix nhanh hơn 10x so với manual code review.
+
+---
+
 ### 🎯 Kỳ vọng & Câu hỏi kiểm tra *(Checklist cho Junior SRE)*
 
 Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Incident Log):
@@ -806,6 +877,14 @@ Sau khi chạy experiment này, bạn phải trả lời được (ghi vào Inci
 > Lúc T+60s, Latency Fast Burn firing. Nhưng bạn biết traffic này là do Traffic Gen (không phải user thật). Bạn phân SEV mấy?
 
 ✅ *Đáp án:* **SEV-4** hoặc **Not an Incident** — vì Blast Radius = 0 đối với user thật. Đây là bài học về **Context-Aware Alerting**.
+
+---
+
+**5. Profiling Verification (4th Pillar — Phase 4.5)**
+
+> Nếu KHÔNG được đọc code, bạn có thể dùng Profiling để xác nhận root cause (connection pool contention) không? Flame graph sẽ cho bạn thấy function nào chiếm nhiều CPU time nhất?
+
+💬 *Gợi ý:* `psycopg2.getconn()` sẽ chiếm 65-80% CPU time vì threads đang block chờ lấy connection từ pool. Đây là cách production SRE debug nhanh hơn 10x so với manual code review.
 
 ---
 
@@ -1101,6 +1180,47 @@ Panel này có threshold được cấu hình sẵn:
 ```
 
 → Khi members = 0, panel tự động chuyển MÀU ĐỎ. Đây là **visual alert** giúp SRE nhận biết rebalance ngay lập tức mà không cần chờ Prometheus alert.
+
+### 🔥 Phase 4.5: Profiling Verification (4th Pillar — Phase 4.5)
+
+**Mục tiêu:** Dùng Continuous Profiling để xác nhận **Kafka consumer behavior** mà không cần đọc code. Đây là workflow production-grade giúp giảm MTTR từ hours → minutes.
+
+**Workflow:**
+1. Mở Grafana → Profiling Overview → chọn `notification-worker` trong Application dropdown
+2. Chọn profile type: `process_cpu:cpu:nanoseconds:cpu:nanoseconds`
+3. Time range: từ T+360s (unpause) đến T+390s (catch-up phase)
+4. Phân tích flame graph
+
+**Flame Graph Analysis (During Catch-up Phase T+360s → T+390s):**
+
+| Bạn sẽ thấy | Ý nghĩa |
+|-------------|---------|
+| **`consumer.poll()`** chiếm 40-50% CPU time | Worker đang poll messages từ Kafka với tốc độ tối đa |
+| **`json.loads()`** chiếm 15-20% | Deserializing message payloads |
+| **`process_notification()`** chiếm 20-25% | Business logic (send email/SMS) |
+| **`db.insert()` / `cursor.execute()`** chiếm 10-15% | Insert vào `processed_events` (idempotency table) |
+| **`consumer.commit()`** chiếm 5-10% | Manual sync commit sau mỗi message |
+
+**So sánh Before/After:**
+
+| Thời điểm | Flame Graph Pattern | Ý nghĩa |
+|-----------|---------------------|---------|
+| **Baseline (T+0s)** | Spread đều, `poll()` chiếm ~10% | Worker đang consume bình thường, không có backlog |
+| **During freeze (T+0s → T+360s)** | No data (worker paused) | Process bị SIGSTOP, không có CPU activity |
+| **Catch-up phase (T+360s → T+390s)** | `poll()` chiếm 40-50% | Worker đang xử lý backlog với tốc độ tối đa |
+| **After catch-up (T+390s+)** | Spread đều trở lại | Lag = 0, worker về steady state |
+
+**SRE Insight:**
+- **Profiling** cho bạn thấy **CPU time distribution** trong consumer → biết được bottleneck là poll, deserialize, business logic, hay DB
+- Nếu `poll()` chiếm > 70% → consumer đang CPU-bound, cần optimize message processing
+- Nếu `db.insert()` chiếm > 30% → DB là bottleneck, cần batch insert hoặc optimize queries
+- Nếu `consumer.commit()` chiếm > 20% → sync commit quá chậm, consider async commit với trade-off
+
+**Production Use Case:**
+Khi Kafka lag cao trong production, flame graph cho bạn biết ngay:
+- Worker đang CPU-bound (cần scale horizontal) hay I/O-bound (cần optimize DB/network)
+- Có nên tăng `max.poll.records` để batch process nhiều messages hơn không
+- Có function nào trong business logic đang inefficient không
 
 **Bước 6: Mở `docker-compose.yml` — Environment Variables**
 
@@ -1507,6 +1627,50 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Ứng dụng production:** Service bị OOMKilled 3 lần trong 1 giờ → bạn tăng memory limit hay investigate memory leak? Cách quyết định?
 - [ ] **SEV Assessment:** Container bị giới hạn memory, GC pauses → User thấy slow nhưng không error → SEV mấy? Predictive alert có cần page không?
 
+### 🔥 Phase 4.5: Profiling Verification (4th Pillar — Phase 4.5)
+
+**Mục tiêu:** Dùng Continuous Profiling để phát hiện **memory allocation patterns** và **GC pauses** mà metrics truyền thống không cho thấy.
+
+**Workflow:**
+1. Mở Grafana → Profiling Overview → chọn `order-service` trong Application dropdown
+2. Chọn profile type: `memory:alloc_objects:count:space:bytes`
+3. Time range: từ baseline đến trước khi OOMKilled
+4. Phân tích flame graph
+
+**Flame Graph Analysis (Memory Allocation):**
+
+| Bạn sẽ thấy | Ý nghĩa |
+|-------------|---------|
+| **`json.dumps()` / `json.loads()`** chiếm 20-30% | Serialization/deserialization tạo nhiều temporary objects |
+| **`psycopg2.fetchall()`** chiếm 15-20% | DB query results được allocate trong memory |
+| **`requests.get()`** chiếm 10-15% | HTTP client allocations |
+| **`OrderService.process_order()`** chiếm 25-30% | Business logic tạo objects (Order, Payment, etc.) |
+
+**GC Pause Detection:**
+- Mở profile type: `process_cpu:cpu:nanoseconds:cpu:nanoseconds`
+- Tìm `gc.collect()` trong flame graph
+- Nếu `gc.collect()` chiếm > 10% CPU time → **GC pressure cao** → memory pressure đang gây performance degradation
+
+**So sánh Before/After Memory Pressure:**
+
+| Thời điểm | Flame Graph Pattern | Ý nghĩa |
+|-----------|---------------------|---------|
+| **Baseline (512M limit)** | Spread đều, không có hot function | Memory đủ, GC chạy bình thường |
+| **Memory Pressure (64M limit)** | `gc.collect()` chiếm 15-20% CPU | GC chạy频繁 để reclaim memory → latency tăng |
+| **Before OOM** | Allocation rate cao, GC không thể catch up | Memory leak hoặc excessive allocations |
+
+**SRE Insight:**
+- **Memory profiling** cho bạn thấy **function nào allocate nhiều nhất** → biết được memory leak ở đâu
+- **GC pause detection** cho bạn biết **tại sao P95 tăng** trước khi OOM (GC pauses ảnh hưởng tail latency)
+- Kết hợp với `predict_linear()` alert → biết **bao lâu nữa sẽ OOM** dựa trên allocation rate
+
+**Production Use Case:**
+Khi service bị OOMKilled nhiều lần, flame graph cho bạn biết:
+- Có memory leak không (function allocate nhưng không release)
+- Có excessive allocations không (tạo nhiều temporary objects)
+- Có nên optimize serialization (json/pickle) không
+- Có nên tune GC parameters không (Python GC threshold)
+
 **Rollback (Restore Week 1-2 Baseline Limit):**
 ```bash
 # Restore về baseline limit (512M) — KHÔNG dùng --memory=0 vì sẽ xóa luôn limit
@@ -1731,6 +1895,44 @@ Sau khi chạy experiment này, bạn phải trả lời được:
 - [ ] **Ứng dụng production:** Redis cluster bị restart lúc flash sale → bạn cần ước lượng gì trước khi cho traffic vào lại? (DB capacity có chịu được 100% traffic không? Cần warm cache trước không?)
 - [ ] **SEV Assessment:** Redis down → service chậm nhưng không crash (graceful degradation) → SEV mấy? Khi nào cần escalate lên Engineering Manager?
 
+### 🔥 Phase 4.5: Profiling Verification (4th Pillar — Phase 4.5)
+
+**Mục tiêu:** Dùng Continuous Profiling để **so sánh CPU time distribution** trước và sau khi Redis down → đo được cache giá trị bao nhiêu CPU time.
+
+**Workflow:**
+1. Mở Grafana → Profiling Overview → chọn `order-service` trong Application dropdown
+2. Chọn profile type: `process_cpu:cpu:nanoseconds:cpu:nanoseconds`
+3. **Before Redis down:** Capture flame graph (baseline)
+4. **After Redis down:** Capture flame graph (cache miss storm)
+5. So sánh 2 flame graphs
+
+**Flame Graph Analysis (Before vs After):**
+
+| Function | Before (Cache Hit) | After (Cache Miss) | Change |
+|----------|-------------------|-------------------|--------|
+| **`redis.get()`** | 5-10% | No data (Redis down) | -10% |
+| **`psycopg2.execute()`** | 10-15% | 40-50% | +30-35% ⬆️ |
+| **`get_product_catalog()`** | 15-20% | 45-55% | +30-35% ⬆️ |
+| **`json.loads()`** (DB results) | 5-10% | 20-25% | +15-20% ⬆️ |
+
+**Visual Comparison:**
+
+| Thời điểm | Flame Graph Pattern | Ý nghĩa |
+|-----------|---------------------|---------|
+| **Baseline (Cache hit)** | Spread đều, `redis.get()` chiếm 5-10% | Cache serve 80% requests, DB chỉ serve 20% |
+| **Cache Miss Storm** | `psycopg2.execute()` chiếm 40-50% | Tất cả requests hit DB → DB overload |
+
+**SRE Insight:**
+- **Profiling** cho bạn thấy **cache value** bằng CPU time → biết được cache giúp giảm bao nhiêu % DB load
+- Nếu `psycopg2.execute()` tăng từ 15% → 50% khi cache down → cache giúp giảm 35% DB CPU time
+- Đây là **quantitative measurement** của cache effectiveness, không chỉ hit rate %
+
+**Production Use Case:**
+Khi Redis cluster bị restart trong production:
+- Flame graph cho bạn biết **DB sẽ chịu bao nhiêu % load** (1 / (1 - hit_rate))
+- Nếu DB không chịu được 5x load (hit rate 80%) → cần warm cache trước khi cho traffic vào
+- Có thể estimate **cache warm-up time** dựa trên allocation rate của cache entries
+
 **Bài học:** Cache-aside pattern **che giấu** DB performance issues. Khi cache down, DB load tăng `1 / (1 - hit_rate)` lần. Với hit rate 80%, DB load tăng 5x. Biết con số này giúp sizing DB cho worst case.
 
 **Rollback:**
@@ -1847,11 +2049,11 @@ Sau khi hoàn thành mỗi Experiment (và đã rollback), đừng tắt máy ng
 | 2 | Cascading Failure | ⭐⭐ | Hiểu dependency chain, graceful degradation |
 | 3 | Kafka Consumer Lag | ⭐⭐ | Leading vs lagging indicators |
 | 4 | Stock Deadlock | ⭐⭐⭐ | Design-level failure, cross-dashboard correlation |
-| 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method, Trace reading |
+| 5 | DB Saturation | ⭐⭐⭐ | Resource bottleneck, USE method, Trace reading, **Profiling: connection pool contention** |
 | 6 | SLO Burn Rate (Learning) | ⭐⭐⭐ | Error budgets, burn rate math, team playbooks |
-| 7 | Cache-Miss Storm | ⭐⭐⭐ | Cache dependency, DB amplification |
+| 7 | Cache-Miss Storm | ⭐⭐⭐ | Cache dependency, DB amplification, **Profiling: cache value measurement** |
 | 8 | DNS Cache | ⭐⭐⭐⭐ | Misleading dashboards, networking blind spots |
-| 9 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts |
+| 9 | Memory Pressure | ⭐⭐⭐⭐ | Infrastructure monitoring, predictive alerts, **Profiling: GC pauses & memory allocation** |
 | 10 | Phantom Alert | ⭐⭐⭐⭐ | Stale metrics, alert lifecycle, traffic guard |
 | 11 | Timezone Trap | ⭐⭐ | Human error, UTC convention, cross-reference |
 | 12 | Multi-Alert Triage | ⭐⭐⭐⭐⭐ | Compound failure, alert correlation, triage priority |
@@ -1885,6 +2087,23 @@ Bảng này giúp bạn **so sánh SEV assessment của mình** với production
 **3. Phantom alerts KHÔNG phải incident**
 - Alert firing + service healthy + no traffic → silence + log "phantom"
 - Đừng waste escalation cho phantom alerts — nhưng cũng đừng ignore nếu không chắc
+
+## 📊 Profiling Integration Notes (Phase 4.5)
+
+Sau khi bổ sung **Continuous Profiling** (Phase 4.5), 3 experiments sau đã được update với **Phase 4.5: Profiling Verification**:
+
+| Experiment | Profiling Insight |
+|------------|-------------------|
+| **Exp 2: DB Saturation** | Flame graph reveals `psycopg2.getconn()` chiếm 65-80% CPU time → connection pool contention |
+| **Exp 3: Kafka Consumer Lag** | Flame graph shows `consumer.poll()` chiếm 40-50% during catch-up → CPU-bound consumer |
+| **Exp 7: Memory Pressure** | Memory allocation profile reveals `gc.collect()` chiếm 15-20% CPU → GC pressure |
+| **Exp 11: Cache-Miss Storm** | Before/After comparison shows `psycopg2.execute()` tăng từ 15% → 50% → cache value = 35% CPU time |
+
+**Production-grade workflow:**
+1. Alert firing → Open Grafana → Tracing Overview → find slow span
+2. Click span → click "View Profile" → jump to flame graph
+3. Identify hot function → fix → verify improvement
+4. **MTTR reduced from hours → minutes**
 
 **Lời khuyên cuối cùng:** 
 Tool không thay thế được process. Tốt nhất là master manual process (dùng lab này + Incident Log + Post-Mortem) trước khi add các tools như PagerDuty hay incident.io. Chúc bạn thực hành tốt! 🚀
