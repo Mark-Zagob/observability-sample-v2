@@ -76,8 +76,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_profiling_ingested_samples_total{profile=~\"cpu|process_cpu\"}[5m])) by (service_name)",
-          "legendFormat": "{{ service_name }}",
+          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total{sample_type=~\"cpu|process_cpu\"}[5m])) by (app_name)",
+          "legendFormat": "{{ app_name }}",
           "refId": "A"
         }
       ]
@@ -99,8 +99,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_profiling_ingested_samples_total{profile=~\"memory|alloc_objects|alloc_space\"}[5m])) by (service_name)",
-          "legendFormat": "{{ service_name }}",
+          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total{sample_type=~\"memory|alloc_objects|alloc_space\"}[5m])) by (app_name)",
+          "legendFormat": "{{ app_name }}",
           "refId": "A"
         }
       ]
@@ -123,8 +123,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_profiling_failed_samples_total[5m])) by (service_name) and sum(rate(pyroscope_profiling_failed_samples_total[5m])) by (service_name) > 0",
-          "legendFormat": "{{ service_name }}",
+          "expr": "sum(rate(pyroscope_http_requests_total{code=~\"5..\"}[5m])) by (app_name) and sum(rate(pyroscope_http_requests_total{code=~\"5..\"}[5m])) by (app_name) > 0",
+          "legendFormat": "{{ app_name }}",
           "refId": "A"
         }
       ]
@@ -281,7 +281,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate({__name__=~\".*_total\", status=~\"error|failed\", service_name=\"$service\"}[5m])) / sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m]))",
+          "expr": "(sum(rate({__name__=~\".*_total\", status=~\"error|failed\", service_name=\"$service\"}[5m])) or vector(0)) / (sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m])) and sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m])) > 0.1)",
           "legendFormat": "Error Rate",
           "refId": "A"
         }

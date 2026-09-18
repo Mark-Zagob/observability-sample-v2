@@ -907,8 +907,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_profiling_ingested_samples_total[5m])) by (service_name, profile)",
-          "legendFormat": "{{ service_name }} — {{ profile }}",
+          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total[5m])) by (app_name, sample_type)",
+          "legendFormat": "{{ app_name }} — {{ sample_type }}",
           "refId": "A"
         }
       ]

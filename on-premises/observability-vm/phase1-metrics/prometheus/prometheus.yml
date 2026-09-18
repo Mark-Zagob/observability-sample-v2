@@ -179,3 +179,17 @@ scrape_configs:
       # Chuyển __address__ sang blackbox-exporter
       - target_label: __address__
         replacement: blackbox-exporter:9115
+
+  # ----------------------------------------------------------
+  # 12. Pyroscope Server — Self-monitoring metrics
+  # ----------------------------------------------------------
+  # Pyroscope expose self-monitoring metrics at /metrics endpoint
+  # Metrics: pyroscope_app_stats_samples_ingested_total, etc.
+  # ----------------------------------------------------------
+  - job_name: "pyroscope"
+    static_configs:
+      - targets: ["pyroscope:4040"]
+        labels:
+          environment: "lab"
+          type: "profiling"
+          vm: "observability"
