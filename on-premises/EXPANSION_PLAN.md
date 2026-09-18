@@ -7,8 +7,8 @@
 | Field | Value |
 |---|---|
 | Document Status | 🔄 In Progress (Syncing with Codebase) |
-| Last Updated | 2026-09-17 |
-| Version | 2.2 (Week 1-2 Infrastructure Hardening Completed) |
+| Last Updated | 2026-09-18 |
+| Version | 2.3 (Phase 4.5 Continuous Profiling Added) |
 | Owner | dungtt (Platform Engineering) |
 
 ## Document History
@@ -18,6 +18,7 @@
 | 2.0 | 2026-06-15 | dungtt | Added Saga Orchestration, CQRS, PgBouncer strategy |
 | 2.1 | 2026-07-10 | dungtt | **Reality Check:** Marked Phase 0 App-level as COMPLETED (Codebase over-delivered). Added new Production Guardrails to "Patterns đã có". Updated PgBouncer Risk Assessment based on new DB Driver Resilience. Adjusted Phase 4 SLO math to leverage existing Traffic Source Tagging. |
 | 2.2 | 2026-09-17 | dungtt | **Week 1-2 Infrastructure Hardening Completed:** Network Segmentation (3-tier: frontend/backend/data), Resource Limits (all containers), Log Rotation (10MB×5), Graceful Shutdown Contract (30s/60s). Updated Phase 0 Infrastructure Level from "CẦN TRIỂN KHAI" to "HOÀN THÀNH". See [CHANGELOG.md](CHANGELOG.md#240---2026-09-17) and [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) for details. |
+| 2.3 | 2026-09-18 | dungtt | **Phase 4.5 — Continuous Profiling Added:** Added Pyroscope as 4th observability pillar. Added to "Patterns đã có" list. See [ARCHITECTURE.md](ARCHITECTURE.md) Pattern #22, #23 and ADR-014. |
 ---
 
 ## Mục Tiêu
@@ -65,6 +66,8 @@ Web UI → API Gateway → Order Service → Payment Service
 - ✅ Traffic Source Tagging (`api-gateway/app.py` — Phân loại `synthetic_probe`, `synthetic_loadtest`, `browser`)
 - ✅ Redis Idempotency State Machine (`shared/idempotency.py` — Split TTLs, Lua Scripts atomicity)
 - ✅ OTel Sidecar Watchdog (`shared/otel_watchdog.py` — Auto-seppuku nếu ADOT sidecar chết trên ECS)
+- ✅ **Continuous Profiling (Pyroscope)** (`shared/profiling_setup.py` — 4th observability pillar, CPU/Memory/GIL profiling, flame graphs via Grafana). ADR-014.
+- ✅ **Shared Library Lazy Imports** (`shared/__init__.py` — No eager loading, prevent transitive dependency coupling). Pattern #23.
 
 **Thiếu:**
 - ❌ Saga pattern (distributed transaction)

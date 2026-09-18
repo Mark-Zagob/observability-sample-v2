@@ -2,7 +2,8 @@
 
 **Owner:** Platform Engineering Team  
 **Khởi tạo:** 2026-09-15  
-**Phiên bản:** v2.0 — Integrated with EXPANSION_PLAN  
+**Phiên bản:** v2.1 — Integrated with EXPANSION_PLAN + Phase 4.5 Continuous Profiling  
+**Last Updated:** 2026-09-18  
 **Review Cycle:** Monthly
 
 ---
@@ -33,6 +34,7 @@ Dựa trên câu trả lời Q&A của bạn, roadmap được điều chỉnh n
 | **Q3** (Shipping + Saga) | Phase 2: Shipping + Worker + Backup | 🟰 **Đồng bộ 1-1** | Saga Orchestration + DLQ + Backup/Restore |
 | **Q4** (Search + CQRS) | Phase 3: Search Service + Index Mgmt | 🟰 **Đồng bộ 1-1** | OpenSearch + eventual consistency |
 | **Q5 Month 1-2** (Saga Tracing, SLO, Synthetic) | Phase 4: Advanced Observability | 🟰 **Đồng bộ 1-1** | Proactive reliability engineering |
+| **✅ Phase 4.5 — DONE 2026-09-18** | **Continuous Profiling (4th Pillar)** | 🟰 **Đồng bộ 1-1** | **Pyroscope + flame graphs + cross-signal correlation. Xem [CHANGELOG.md](CHANGELOG.md#250---2026-09-18).** |
 | **Q5 Month 2-3** (Chaos Integration + DR) | Phase 5: Chaos + SLO + DR Drill | 🟰 **Đồng bộ 1-1** | Full-stack chaos, DR drill |
 | **Q5 Month 3+** (k6 + Pact + Playwright) | Phase 6: Automated Testing | 🟰 **Đồng bộ 1-1** | CI reliability gates |
 
@@ -98,6 +100,8 @@ Q4 (Months 10-12): Phase 3 — Search/CQRS   🔗
 
 Q5 (Months 13-15): Phase 4-6 — Advanced Reliability 🔗
 ├── Month 13  : Saga Tracing + SLO         📊 🔗
+├── **Phase 4.5: Continuous Profiling (DONE 2026-09-18)**  🔥
+│             Pyroscope + 4th pillar + flame graphs
 ├── Month 14  : Synthetic Monitoring       🔧 📊
 └── Month 15+ : k6 + Pact + Playwright     🐍 📊
 ```

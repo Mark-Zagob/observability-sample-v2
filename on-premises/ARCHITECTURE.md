@@ -20,8 +20,8 @@
 | Field | Value |
 |-------|-------|
 | **Document Status** | ✅ Reviewed & Approved |
-| **Last Updated** | 2026-09-17 |
-| **Version** | 2.4 (Week 1-2 Production Hardening) |
+| **Last Updated** | 2026-09-18 |
+| **Version** | 2.5 (Phase 4.5 Continuous Profiling Added) |
 | **Owner** | Platform Engineering Team |
 | **Author(s)** | dungtt, [Co-author if any] |
 | **Reviewers** | [Principal Architect], [SRE Lead], [Security Team] |
@@ -38,6 +38,7 @@
 | 2.2 | 2026-07-10 | dungtt | Phase 5 patterns: Circuit Breaker, IdempotencyGuard, Graceful Shutdown Manager, Auto-migration, HTTP Semantic Mapping, OTel Watchdog. Added ENABLE_REDIS/ENABLE_KAFKA feature flags |
 | 2.3 | 2026-07-10 | dungtt | Added Production Guardrails: DB Driver Resilience, Page Visibility API, OTel Custom Buckets, Kafka Natural Batching, Traffic Source Tagging, Redis Idempotency State Machine details, Graceful Degradation pattern. Updated Gunicorn config details, Nginx DNS re-resolution. Added ADR-011, ADR-012, ADR-013 |
 | 2.4 | 2026-09-17 | dungtt | **Week 1-2 Production Hardening:** Network Segmentation (3-tier frontend/backend/data), Resource Limits (all services), Log Rotation (10MB×5), Graceful Shutdown Contract (30s/60s). Added Observability Stack Capacity Planning table. Updated Current State security table. Added Graceful Shutdown Contract dedicated section. Marked Network Segmentation/Resource Limits/Log Rotation as DONE in Planned Improvements. See [CHANGELOG.md](CHANGELOG.md) & [WEEK1-2_CHANGES.md](WEEK1-2_CHANGES.md) |
+| 2.5 | 2026-09-18 | dungtt | **Phase 4.5 — Continuous Profiling (4th Pillar):** Added Pyroscope (Grafana) as profiling backend. Added ADR-014 (Continuous Profiling). Added Pattern #22 (Continuous Profiling with Pyroscope) and Pattern #23 (Shared Library Lazy Imports). Updated Observability Stack table (Pyroscope :4040), Ports Summary, Environment Variables, and Observability Pipeline diagram. See [CHANGELOG.md](CHANGELOG.md) |
 
 ### Related Architecture Decision Records (ADRs)
 
@@ -56,6 +57,7 @@
 | ADR-011 | Custom OTel histogram buckets for accurate P95/P99 | ✅ Accepted | 2026-07-10 |
 | ADR-012 | TCP Keep-Alive and statement_timeout for PostgreSQL resilience | ✅ Accepted | 2026-07-10 |
 | ADR-013 | Page Visibility API to prevent phantom frontend traffic | ✅ Accepted | 2026-07-10 |
+| ADR-014 | Continuous Profiling as 4th Observability Pillar (Pyroscope) | ✅ Accepted | 2026-09-18 |
 
 > **Note:** Xem chi tiết các ADRs trong [`docs/adrs/`](./docs/adrs/) (nếu có) hoặc trong git commit history.
 
@@ -251,6 +253,10 @@ graph LR
     PROM -->|alerts| AM[Alertmanager]
     AM --> TG[Telegram]
     AM --> WH[Webhook Receiver]
+    
+    APP -->|Push profiles\nHTTP/4040| PYRO[Pyroscope]
+    PROM -->|scrape /metrics| PYRO
+    PYRO --> GRAF
 ```
 ---
 
@@ -414,6 +420,7 @@ Time 0:31  With resolver: Nginx re-resolves → 172.18.0.8 → 200 ✓
 | **Alloy** | — | Log collection agent — Docker + host logs → Loki |
 | **Alertmanager** | 9093 | Alert routing → Telegram |
 | **Blackbox Exporter** | 9115 | Active probing — HTTP health checks to service `/health/live` endpoints |
+| **Pyroscope** | 4040 | **Continuous Profiling backend** (4th Observability Pillar) — CPU/Memory/GIL profiling storage & query. Receives profiles from Python SDKs via push, exposes flame graphs via Grafana datasource plugin. **Phase 4.5 addition** (ADR-014). |
 
 ---
 
@@ -558,6 +565,7 @@ erDiagram
 | cAdvisor (both VMs) | 0.5 | 256M | 0.1 / 64M | Container metrics |
 | Node Exporter (both VMs) | 0.25 | 128M | 0.05 / 32M | Host metrics (lightweight) |
 | Webhook Receiver | 0.25 | 128M | 0.05 / 32M | Alert webhook handling |
+| **Pyroscope (Phase 4.5)** | **1.0** | **1G** | **0.25 / 512M** | **Continuous Profiling storage + query server. Ingestion-heavy, query-light workload.** |
 
 **Total observability overhead:** ~6.5 CPU, ~10.75 GB RAM (Observability VM 32GB — comfortable headroom for growth)
 
@@ -1393,6 +1401,148 @@ sum(rate(api_gateway_requests_total{traffic_source="browser"}[5m]))
 
 ---
 
+### 22. Continuous Profiling as 4th Observability Pillar (Pyroscope)
+
+**File:** `shared/profiling_setup.py` + `observability-vm/phase4-profiling/`
+
+**Problem:** Metrics tell you **what** happened. Logs tell you **why**. Traces tell you **where**. But none of them tell you **what code caused it**. When P95 latency spikes to 2.5s, you know the database query is slow — but you don't know which Python function is spending 80% of CPU time parsing JSON.
+
+**Solution:** Add Pyroscope as the **4th observability pillar** — Continuous Profiling — with `grafana-pyroscope` Python SDK instrumented across all 6 services.
+
+**Architecture:**
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Python Service (Order, Payment, Gateway, Workers...)        │
+│                                                              │
+│  [grafana-pyroscope SDK]                                    │
+│    ├── CPU sampling at 100 Hz (statistical profiling)       │
+│    ├── Memory allocation tracking (per-call-site)           │
+│    └── GIL contention detection                             │
+│           │                                                  │
+│           │ Push (HTTP/4040)                                │
+│           ▼                                                  │
+│  ┌─────────────────────┐                                    │
+│  │ Pyroscope Server    │ ← Grafana datasource plugin       │
+│  │ (192.168.100.55:4040)│   queries flame graphs directly   │
+│  └─────────────────────┘                                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Implementation (shared module):**
+
+```python
+# shared/profiling_setup.py
+import pyroscope
+import os
+
+def init_profiling(service_name, version="1.0.0"):
+    if os.environ.get("ENABLE_PROFILING", "true").lower() != "true":
+        logger.info("⏸️ Profiling disabled via feature flag")
+        return None
+
+    try:
+        pyroscope.configure(
+            application_name=service_name,      # ← correct API (not app_name)
+            server_address=os.environ.get("PYROSCOPE_URL", "http://pyroscope:4040"),
+            sample_rate=int(os.environ.get("PYROSCOPE_SAMPLE_RATE", "100")),
+            detect_subthread_spans=True,        # ThreadPoolExecutor spans
+            tags={"environment": "lab", "version": version}
+        )
+        logger.info(f"✅ Pyroscope profiling initialized for {service_name}")
+        return pyroscope
+    except Exception as e:
+        # Graceful degradation: profiling must NEVER crash service
+        logger.warning(f"⚠️ Pyroscope init failed: {e}. Service continues without profiling.")
+        return None
+```
+
+**Sampling Rate Trade-offs:**
+
+| Sample Rate | CPU Overhead | Use Case | Production Rule |
+|-------------|--------------|----------|------------------|
+| 50 Hz | ~0.5% | High-throughput services (>1000 RPS) | Default for production |
+| **100 Hz** | **~1-2%** | **Balanced default** | **Lab & most production** |
+| 200 Hz | ~3-5% | Debugging sessions | Temporary only |
+| 1000 Hz | ~10%+ | Local dev | **NEVER** in production |
+
+**Production Guardrails:**
+
+1. **Feature Flag Kill Switch:** `ENABLE_PROFILING=false` disables without code changes (< 1 min response during incidents)
+2. **Graceful Degradation:** `try/except` around init — observability must NEVER cause outages
+3. **Fork Safety:** For gunicorn services, init happens in `post_worker_init` hook (not at module import)
+4. **Overhead Monitoring:** Alert if `rate(pyroscope_cpu_seconds_total) > 0.05` (> 5% CPU overhead)
+5. **Retention Policy:** 7 days (lab), 30 days (production), then aggregated
+
+**Use Cases:**
+
+| Scenario | Signal (Prometheus) | Investigation (Pyroscope) |
+|----------|---------------------|---------------------------|
+| P95 latency spike | `api_gateway_request_duration_seconds{quantile="0.95"}` ↑ | Flame graph → 80% time in `json.loads()` |
+| Memory leak | `process_resident_memory_bytes` ↑↑ | Memory allocation flame graph → `process_order()` allocates 1000 objects/request |
+| Low throughput | `requests_total` ↓ | CPU flame graph → GIL contention between 8 gthread workers |
+| Silent performance regression | New deploy shows P95 +200ms | Before/after flame graph diff shows new hot function |
+
+**Grafana Integration:**
+- Pyroscope datasource plugin auto-provisioned (`pyroscope.yml`)
+- Flame graphs embedded in `profiling-overview` dashboard
+- Drill-down from Tempo trace → Pyroscope flame graph (via `exemplarTraceIdDestinations`)
+
+---
+
+### 23. Shared Library Lazy Imports (No Eager Loading)
+
+**File:** `shared/__init__.py`
+
+**Problem:** A shared module that eagerly imports all submodules creates **transitive dependency coupling**. If `shared/__init__.py` does `from shared.logging_config import setup_logging`, then EVERY service that imports anything from `shared` must have `python-json-logger` installed — even if it only uses `shared.profiling_setup`.
+
+**Incident that taught us:** When Phase 4.5 added `from shared.profiling_setup import init_profiling` to `traffic-gen`, the service crashed with `ModuleNotFoundError: No module named 'pythonjsonlogger'`. The cascade:
+```
+traffic-gen/app.py → shared.profiling_setup 
+                   → shared/__init__.py executes 
+                   → from shared.logging_config import setup_logging
+                   → from pythonjsonlogger import json as json_logger  ❌
+```
+traffic-gen never used logging, but was forced to pay for its dependencies.
+
+**Solution:** Make `shared/__init__.py` a thin namespace with no eager imports:
+
+```python
+# shared/__init__.py — CORRECT: empty or docstring only
+"""
+Shared utilities for microservices.
+
+Services should import specific modules explicitly:
+    from shared.logging_config import setup_logging
+    from shared.otel_setup import init_otel
+    from shared.profiling_setup import init_profiling
+"""
+# NO EAGER IMPORTS — each module has its own dependencies
+# Services only pay for the dependencies they actually use.
+```
+
+**Benefits:**
+
+| Aspect | Before (eager) | After (lazy) |
+|--------|---------------|--------------|
+| **Coupling** | Importing `shared.foo` requires ALL `shared.*` deps | Only requires deps of `shared.foo` |
+| **Image Size** | Every service bloats with unused deps | Each service only has what it uses |
+| **Blast Radius** | Bug in any `shared.*` module crashes ALL services | Bug isolated to consumers of that module |
+| **Debugging** | Import errors have unclear origin | Import errors clearly trace to specific module |
+
+**Anti-patterns avoided:**
+- ❌ Eager imports in `__init__.py`
+- ❌ `shared.foo` depending on `shared.bar` (circular coupling)
+- ❌ Global state shared between submodules
+
+**When this is NOT appropriate:**
+- If the shared package has a clear public API (e.g., `from observability_sdk import setup`), eager imports are acceptable
+- If all consumers genuinely need all submodules
+
+**Related concept:** This is the inverse of the **Facade Pattern** — instead of hiding complexity behind a single entry point, we expose modules individually so consumers can choose what they need.
+
+---
+
 ### 21. Graceful Degradation (Redis in Payment Service)
 
 **File:** `payment-service/app.py` — `redis_health_check()`
@@ -1733,6 +1883,10 @@ Redis restart → cache empty → all requests hit DB
 | `PAYMENT_FAILURE_RATE` | Payment | Business failure rate: `0.10`(default). Gateway reject simulation |
 | `DB_SECRET` | Order (AWS) | JSON from RDS managed secret: `{"username":"...", "password":"..."}` |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | Order (AWS) | RDS endpoint components (from SSM) |
+| `ENABLE_PROFILING` | All services | Feature flag: `true`(default)/`false`. Toggle continuous profiling on/off without code changes (production kill switch) |
+| `PYROSCOPE_URL` | All services | Pyroscope server endpoint: `http://<obs-vm>:4040` (Phase 4.5 — ADR-014) |
+| `PYROSCOPE_SAMPLE_RATE` | All services | Sampling rate in Hz: `100`(default, ~1-2% overhead) / `200`(debug) / `50`(high-load). See Pattern #22 |
+| `ENABLE_MEMORY_PROFILING` | All services | Feature flag: `true`(default)/`false`. Toggle memory allocation profiling for leak detection |
 
 ---
 
@@ -1753,6 +1907,7 @@ Redis restart → cache empty → all requests hit DB
 | 9092 | Kafka | TCP |
 | 9115 | Blackbox Exporter | HTTP |
 | 9308 | Kafka Exporter | HTTP |
+| 4040 | Pyroscope (Continuous Profiling) | HTTP + gRPC |
 
 ---
 ## Key Design Decisions

@@ -4,7 +4,118 @@
 > Tuân thủ định dạng [Keep a Changelog](https://keepachangelog.com/), phiên bản tuân thủ [Semantic Versioning](https://semver.org/).
 
 **Owner:** Platform Engineering Team — dungtt  
-**Last Updated:** 2026-09-17
+**Last Updated:** 2026-09-18
+
+---
+
+## [2.5.0] — 2026-09-18
+
+### 🚀 Phase 4.5: Continuous Profiling (4th Observability Pillar)
+
+#### 🎯 Motivation
+
+Metrics tell you **what** happened. Logs tell you **why**. Traces tell you **where**. But none of them tell you **what code caused it**. Phase 4.5 adds Pyroscope as the **4th observability pillar** — Continuous Profiling — để trả lời câu hỏi này. Đây KHÔNG phải over-engineering, đây là **production-grade observability stack** mà mọi Senior/Staff SRE cần biết.
+
+#### 🏗️ Implementation
+
+**1. Pyroscope Server (Observability VM)**
+- Image: `grafana/pyroscope:1.13.0`
+- Port: `4040` (HTTP + gRPC)
+- Storage: named volume `pyroscope_data` mounted at `/data` (fixes permission denied issue — see [2.4.3])
+- Config: `pyroscope/config.yaml` with 7-day retention, 10MB/s ingestion rate, 100K global series limit
+- Prometheus scrape target: job `pyroscope` added to `prometheus.yml`
+
+**2. Python SDK Integration (All 6 Services)**
+- Shared module: `applications/shared/profiling_setup.py`
+- Package: `grafana-pyroscope==0.8.2` added to all `requirements.txt`
+- Initialization in `post_worker_init` gunicorn hook (fork-safe)
+- Feature flags: `ENABLE_PROFILING`, `ENABLE_MEMORY_PROFILING`
+- Sampling rate: configurable via `PYROSCOPE_SAMPLE_RATE` env var (default 100 Hz = ~1-2% overhead)
+
+**3. Grafana Integration**
+- Pyroscope datasource provisioned (`pyroscope.yml`)
+- `profiling-overview.json` dashboard with 4 sections: Profiling Health, CPU, Memory, Cross-Signal Correlation
+- `unified-overview.json` extended with profiling row + drill-down link
+- `app-performance.json` extended with profiling link
+
+**4. Prometheus Scrape Job**
+- Added `pyroscope` job to `prometheus.yml` to scrape server-side metrics at `/metrics`
+- Server exposes Go runtime metrics + ingestion telemetry
+
+#### 🎓 SRE Concepts Applied
+
+| Concept | Application |
+|---------|-------------|
+| **4 Pillars of Observability** | Metrics + Logs + Traces + **Profiles** (single pane of glass) |
+| **Flame Graph Interpretation** | Visual representation of CPU/memory usage by function |
+| **Statistical Profiling** | 100 Hz sampling = ~1-2% CPU overhead, production-safe |
+| **Fork Safety** | `post_worker_init` hook ensures profiling starts AFTER gunicorn fork |
+| **Feature Flag Kill Switch** | `ENABLE_PROFILING=false` disables profiling in < 1 min during incidents |
+| **Graceful Degradation** | Profiling SDK failure must NEVER crash the service |
+| **Transitive Dependency Coupling** | Fixed via Shared Library Lazy Imports pattern (Pattern #23) |
+
+#### 🐛 Bugs Found & Fixed (Learning Value)
+
+This phase uncovered **multiple latent bugs** that are perfect production-grade lessons:
+
+1. **Pyroscope CLI flags deprecated** ([2.4.1]) — migrated from CLI flags to YAML config
+2. **Pyroscope SDK API parameter names wrong** ([2.4.2]) — `app_name` vs `application_name`, fork safety
+3. **Pyroscope storage permission denied** ([2.4.3]) — Docker named volume copy-up semantics
+4. **Pyroscope doesn't expose Prometheus metrics** ([2.4.5]) — switched to Pyroscope datasource plugin
+5. **Dashboard PromQL error: vector labelset** ([2.4.5]) — simplified binary operations
+6. **Shared library eager imports** ([2.5.0]) — traffic-gen crash due to transitive dependency (Pattern #23)
+
+#### 📝 Documentation Updates
+
+- ✅ `ARCHITECTURE.md` v2.4 → v2.5: Added ADR-014, Pattern #22 (Continuous Profiling), Pattern #23 (Lazy Imports), Pyroscope in Observability Stack table, Ports Summary, Environment Variables
+- ✅ `EXPANSION_PLAN.md` v2.2 → v2.3: Added Continuous Profiling to "Patterns đã có" list
+- ✅ `README.md`: Added Pyroscope to Observability Stack table, phase4-profiling to folder structure
+- ✅ Created `observability-vm/phase4-profiling/README.md` — comprehensive learning guide with 4 practice exercises
+- ✅ Created `observability-vm/phase4-profiling/INTEGRATION_GUIDE.md` — step-by-step integration example
+- ✅ Created `observability-vm/phase4-profiling/DASHBOARD_FIX_SUMMARY.md` — dashboard debugging lessons
+
+#### 🚀 Deployment
+
+```bash
+# 1. Deploy Pyroscope
+cd observability-vm/phase4-profiling
+docker compose up -d
+
+# 2. Configure Grafana datasource (auto-provisioned on restart)
+cd ../phase1-metrics
+docker compose restart grafana
+
+# 3. Rebuild Python services (to install grafana-pyroscope package)
+cd ../../applications-vm/applications
+docker compose build
+docker compose up -d
+```
+
+#### ✅ Verification
+
+```bash
+# Pyroscope UI
+open http://192.168.100.55:4040
+
+# Grafana profiling dashboard
+open http://192.168.100.55:3000
+# Navigate: Dashboards → Profiling → Profiling — Continuous Profiling (Pyroscope)
+
+# Verify profiling data flowing
+curl http://192.168.100.55:4040/api/v1/label/__name__/values
+# Expected: list of profile types
+```
+
+#### 📚 Learning Outcomes
+
+By completing Phase 4.5, you master:
+- Continuous Profiling as 4th observability pillar
+- Flame graph interpretation for performance debugging
+- Sampling strategies & overhead trade-offs
+- Python fork safety for multi-worker services
+- Docker named volume ownership semantics
+- Production-grade feature flag patterns
+- Shared library anti-patterns (transitive dependency coupling)
 
 ---
 

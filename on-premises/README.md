@@ -62,9 +62,10 @@ Hệ thống áp dụng mô hình **3 Pillars + Correlation** chuẩn OpenTeleme
 | **Prometheus** | Metrics Storage & Alerting | RED metrics, Business KPIs, Infra USE | `trace_id` (via exemplars) |
 | **Loki** | Log Aggregation | Structured JSON logs từ Flask/Gunicorn | `trace_id` (injected via OTel logging instrumentation) |
 | **Tempo** | Distributed Tracing | Full request lifecycle across services | `trace_id` (primary key) |
+| **Pyroscope** | **Continuous Profiling (4th Pillar)** | CPU/Memory/GIL profiling with flame graphs | `service_name` + `trace_id` correlation (Phase 4.5) |
 | **Grafana** | Visualization & Incident UI | Dashboards, Explore, Alerting UI | Cross-datasource linking via `trace_id` |
 
-> 🔗 **Workflow thực tế:** Alert firing → Grafana Explore → Filter by `trace_id` → Jump to Tempo Trace → View Loki Logs cùng trace → Root cause trong < 3 phút.
+> 🔗 **Workflow thực tế:** Alert firing → Grafana Explore → Filter by `trace_id` → Jump to Tempo Trace → View Loki Logs cùng trace → **Drill down to Pyroscope flame graph to find the hot function** → Root cause trong < 3 phút.
 ---
 
 ## 🏗️ Kiến Trúc Hệ Thống
@@ -263,6 +264,7 @@ on-premises/
 │   ├── phase1-metrics/                # Prometheus, Alertmanager, Blackbox
 │   ├── phase2-logging/                # Loki, Alloy
 │   ├── phase3-tracing/                # Tempo, OTel Collector
+│   ├── phase4-profiling/              # 🆕 Pyroscope (4th Observability Pillar)
 │   └── scripts/                       # annotate.sh, deploy.sh
 │
 └── post-mortems/                      # Blameless Post-Mortem Templates
