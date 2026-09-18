@@ -56,76 +56,112 @@
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
       "id": 100,
-      "title": "🩺 Profiling Health (SDK Telemetry)",
+      "title": "🩺 Profile Availability & Health",
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-      "description": "📈 Tỷ lệ samples được ingest vào Pyroscope mỗi giây (CPU profile).\\n\\n💡 SRE Insight:\\n• Value > 0: Profiling SDK đang hoạt động bình thường\\n• Value = 0: SDK bị tắt hoặc Pyroscope unreachable\\n• Spike đột biến: Có thể do high CPU load hoặc profiling overhead tăng\\n\\nĐây là 'meta-metric' — đo lường chính hệ thống profiling.",
+      "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
+      "description": "📊 **CPU Profile Activity** — Hiển thị tổng CPU time (nanoseconds) được profile trong khoảng thời gian chọn.\n\n💡 **SRE Insight:**\n• Value > 0: CPU profiling đang hoạt động bình thường\n• Value = 0: Không có CPU profiles được gửi tới Pyroscope\n• So sánh giá trị này với P95 latency để detect performance bottlenecks\n\n🎯 **Use Case:** Khi P95 spike, check panel này để confirm profiling đang capture data, sau đó xem flame graph bên dưới.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
-          "unit": "cps",
+          "unit": "ns",
           "min": 0,
           "custom": {"fillOpacity": 15, "lineWidth": 2}
         }
       },
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
       "id": 1,
-      "title": "🔥 CPU Samples Ingestion Rate",
+      "title": "🔥 CPU Profile Activity (Total CPU Time)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total{sample_type=~\"cpu|process_cpu\"}[5m])) by (app_name)",
-          "legendFormat": "{{ app_name }}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "metrics",
+          "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+          "labelSelector": "{service_name=\"$service\"}",
+          "groupBy": ["service_name"]
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-      "description": "💾 Tỷ lệ samples memory được ingest vào Pyroscope mỗi giây.\\n\\n💡 SRE Insight:\\n• Value > 0: Memory profiling đang hoạt động\\n• Value = 0: Memory profiling bị tắt (ENABLE_MEMORY_PROFILING=false)\\n\\nMemory profiling có overhead ~1-3% CPU. Monitor panel này để detect overhead bất thường.",
+      "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
+      "description": "💾 **Memory Allocation Activity** — Hiển thị tổng bytes được allocate trong khoảng thời gian chọn.\n\n💡 **SRE Insight:**\n• Value > 0: Memory profiling đang hoạt động\n• Value = 0: Memory profiling bị tắt hoặc không có allocations\n• High value + stable RSS = allocations được GC tốt\n• High value + growing RSS = **memory leak potential**\n\n🎯 **Use Case:** Khi RSS memory tăng liên tục, dùng panel này + flame graph bên dưới để tìm allocation site gây leak.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
-          "unit": "cps",
+          "unit": "bytes",
           "min": 0,
           "custom": {"fillOpacity": 15, "lineWidth": 2}
         }
       },
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
       "id": 2,
-      "title": "💾 Memory Samples Ingestion Rate",
+      "title": "💾 Memory Allocation Activity (Total Bytes)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total{sample_type=~\"memory|alloc_objects|alloc_space\"}[5m])) by (app_name)",
-          "legendFormat": "{{ app_name }}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "metrics",
+          "profileTypeId": "memory:alloc_objects:count:space:bytes",
+          "labelSelector": "{service_name=\"$service\"}",
+          "groupBy": ["service_name"]
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-      "description": "❌ Tỷ lệ samples KHÔNG thể gửi tới Pyroscope.\\n\\n💡 SRE Insight:\\n• Value = 0 (No Data): SDK hoạt động bình thường\\n• Value > 0: Có vấn đề kết nối hoặc Pyroscope down\\n• Spike: Network issue hoặc Pyroscope overwhelmed\\n\\nNếu panel này > 0 → Kiểm tra Pyroscope container health và network connectivity.",
+      "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
+      "description": "✅ **Profile Availability Check** — Kiểm tra xem có profiles nào được gửi tới Pyroscope không.\n\n💡 **SRE Insight:**\n• **\"Profiles Available\"**: Profiling SDK hoạt động bình thường, Pyroscope đang nhận data\n• **\"No Data\"**: Có vấn đề với:\n  - ENABLE_PROFILING=false (feature flag tắt)\n  - Pyroscope container down\n  - Network connectivity issue\n  - SDK chưa được initialized\n\n🎯 **Troubleshooting Steps:**\n1. Check Pyroscope container: `docker logs pyroscope`\n2. Check app logs: `docker logs <service-name> | grep -i pyroscope`\n3. Check network: `docker exec <service> curl http://pyroscope:4040/ready`",
       "fieldConfig": {
         "defaults": {
-          "color": {"fixedColor": "red", "mode": "fixed"},
-          "unit": "cps",
-          "min": 0,
-          "custom": {"fillOpacity": 15, "lineWidth": 2},
-          "noValue": "0 (healthy)"
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {"text": "No Data", "color": "red"}
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 999999999,
+                "result": {"text": "Profiles Available", "color": "green"}
+              }
+            }
+          ]
         }
       },
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
       "id": 3,
-      "title": "❌ Failed Samples (Error Rate)",
-      "type": "timeseries",
+      "title": "✅ Profile Availability Check",
+      "type": "stat",
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_http_requests_total{code=~\"5..\"}[5m])) by (app_name) and sum(rate(pyroscope_http_requests_total{code=~\"5..\"}[5m])) by (app_name) > 0",
-          "legendFormat": "{{ app_name }}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "metrics",
+          "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+          "labelSelector": "{service_name=\"$service\"}",
+          "groupBy": []
         }
       ]
     },
@@ -138,7 +174,7 @@
     },
     {
       "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
-      "description": "🔥 CPU Flame Graph — Hiển thị call stack hierarchy và thời gian CPU tiêu thụ.\\n\\n💡 SRE Insight:\\n• Thanh càng rộng = CPU time càng nhiều\\n• Màu càng tối = CPU time càng cao\\n• Click vào function để drill-down\\n• Right-click → 'View trace' để xem distributed trace tương ứng\\n\\n🎯 Use Case: Khi P95 latency tăng, dùng flame graph để tìm function gây bottleneck.",
+      "description": "🔥 **CPU Flame Graph** — Hiển thị call stack hierarchy và thời gian CPU tiêu thụ.\n\n💡 **SRE Insight:**\n• Thanh càng rộng = CPU time càng nhiều\n• Màu càng tối = CPU time càng cao\n• Click vào function để drill-down\n• Right-click → 'View trace' để xem distributed trace tương ứng\n\n🎯 **Use Case:** Khi P95 latency tăng, dùng flame graph để tìm function gây bottleneck.\n\n**Example Investigation:**\n1. P95 latency = 2.5s (normal = 200ms)\n2. Click flame graph\n3. Thấy `json.loads()` chiếm 80% CPU time\n4. **Root cause:** JSON payload quá lớn → optimize serialization",
       "gridPos": {"h": 16, "w": 24, "x": 0, "y": 10},
       "id": 4,
       "title": "🔥 CPU Flame Graph — $service",
@@ -155,7 +191,7 @@
     },
     {
       "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
-      "description": "📊 Top 10 functions tiêu thụ CPU nhiều nhất.\\n\\n💡 SRE Insight:\\n• 'self' time = thời gian function tự chạy (không gọi function khác)\\n• 'total' time = tổng thời gian bao gồm cả sub-calls\\n• Function có 'self' cao thường là bottleneck thật sự\\n\\n🎯 Use Case: Khi flame graph quá phức tạp, table này cho biết ngay function nào 'nóng' nhất.",
+      "description": "📊 **Top 10 functions tiêu thụ CPU nhiều nhất** — Bảng tổng hợp.\n\n💡 **SRE Insight:**\n• **'self' time** = thời gian function tự chạy (không gọi function khác)\n• **'total' time** = tổng thời gian bao gồm cả sub-calls\n• Function có **'self' cao** thường là bottleneck thật sự\n\n🎯 **Use Case:** Khi flame graph quá phức tạp, table này cho biết ngay function nào 'nóng' nhất.\n\n**Optimization Priority:**\n1. Sort by 'Self' time descending\n2. Focus on top 3 functions\n3. Ask: 'Can this be cached, optimized, or removed?'",
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 26},
       "id": 5,
       "title": "📊 Top 10 CPU-Consuming Functions — $service",
@@ -190,7 +226,7 @@
     },
     {
       "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
-      "description": "💾 Memory Allocation Flame Graph — Hiển thị nơi memory được cấp phát.\\n\\n💡 SRE Insight:\\n• Thanh rộng = nhiều memory được allocate\\n• Tìm function có pattern 'allocation loop' → memory leak tiềm ẩn\\n• So sánh với 'inuse_space' để phát hiện memory bị retain (không GC được)\\n\\n🎯 Use Case: Khi RSS memory tăng liên tục (memory leak), dùng flame graph này để tìm 'allocation site'.",
+      "description": "💾 **Memory Allocation Flame Graph** — Hiển thị nơi memory được cấp phát.\n\n💡 **SRE Insight:**\n• Thanh rộng = nhiều memory được allocate\n• Tìm function có pattern **'allocation loop'** → memory leak tiềm ẩn\n• So sánh với **'inuse_space'** để phát hiện memory bị retain (không GC được)\n\n🎯 **Use Case:** Khi RSS memory tăng liên tục (memory leak), dùng flame graph này để tìm 'allocation site'.\n\n**Memory Leak Detection:**\n1. RSS tăng 50MB/hour\n2. Memory flame graph shows `OrderService.process_order()` allocates 1000 objects/request\n3. **Root cause:** Objects không được release → add cleanup logic hoặc use object pool",
       "gridPos": {"h": 16, "w": 24, "x": 0, "y": 37},
       "id": 6,
       "title": "💾 Memory Allocation Flame Graph — $service",
@@ -207,7 +243,7 @@
     },
     {
       "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope-datasource"},
-      "description": "📊 Top 10 functions cấp phát memory nhiều nhất.\\n\\n💡 SRE Insight:\\n• 'alloc_objects' = số lần allocation\\n• 'alloc_space' = tổng bytes allocated\\n• Function có alloc_objects cao nhưng alloc_space thấp = nhiều allocation nhỏ (fragmentation risk)\\n\\n🎯 Use Case: Optimize memory usage bằng cách cache hoặc reuse objects.",
+      "description": "📊 **Top 10 functions cấp phát memory nhiều nhất** — Bảng tổng hợp.\n\n💡 **SRE Insight:**\n• **'alloc_objects'** = số lần allocation\n• **'alloc_space'** = tổng bytes allocated\n• Function có **alloc_objects cao nhưng alloc_space thấp** = nhiều allocation nhỏ (fragmentation risk)\n\n🎯 **Use Case:** Optimize memory usage bằng cách cache hoặc reuse objects.\n\n**Optimization Strategies:**\n1. **Caching:** Cache expensive computations hoặc DB queries\n2. **Object Pooling:** Reuse objects thay vì allocate mới mỗi lần\n3. **Batch Processing:** Allocate 1 lần cho nhiều items thay vì allocate từng cái",
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 53},
       "id": 7,
       "title": "📊 Top 10 Memory-Allocating Functions — $service",
@@ -242,7 +278,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-      "description": "📈 P95 Latency của service được chọn.\\n\\n💡 SRE Insight:\\n• Khi P95 spike → chuyển sang CPU flame graph ở trên để tìm function gây chậm\\n• Đây là 'trigger signal' — khi nào cần investigate profiling\\n\\n🎯 Workflow: P95 tăng → Click flame graph tab → Tìm function 'nóng' → Optimize.",
+      "description": "📈 **P95 Latency** của service được chọn.\n\n💡 **SRE Insight:**\n• Khi P95 spike → chuyển sang CPU flame graph ở trên để tìm function gây chậm\n• Đây là **'trigger signal'** — khi nào cần investigate profiling\n\n🎯 **Workflow:**\n1. P95 tăng đột biến (200ms → 2.5s)\n2. Click flame graph tab\n3. Tìm function chiếm >50% CPU time\n4. Optimize function đó\n5. Verify P95 giảm về normal",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -265,7 +301,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-      "description": "❌ Error Rate của service được chọn.\\n\\n💡 SRE Insight:\\n• Khi error rate tăng → check memory flame graph để tìm OOM hoặc exception\\n• Correlate với failed samples panel ở trên\\n\\n🎯 Workflow: Error tăng → Check memory profile → Tìm allocation gây crash.",
+      "description": "❌ **Error Rate** của service được chọn.\n\n💡 **SRE Insight:**\n• Khi error rate tăng → check memory flame graph để tìm OOM hoặc exception\n• Correlate với failed samples panel ở trên\n\n🎯 **Workflow:**\n1. Error rate tăng 5%\n2. Check memory profile\n3. Tìm allocation gây crash (ví dụ: `json.loads()` với invalid input)\n4. Add input validation hoặc error handling",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},

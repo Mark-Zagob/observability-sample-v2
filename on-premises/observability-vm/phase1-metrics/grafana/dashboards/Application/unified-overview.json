@@ -884,14 +884,14 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "type": "grafana-pyroscope-datasource",
+        "uid": "pyroscope-datasource"
       },
-      "description": "🩺 Profiling SDK Health — Tỷ lệ samples được gửi tới Pyroscope mỗi giây.\n\n💡 SRE Insight:\n• Value > 0: SDK hoạt động bình thường\n• Value = 0: SDK bị tắt hoặc Pyroscope down\n• Click 'Open Profiling Dashboard' để xem flame graph chi tiết\n\n🎯 Workflow: P95 spike → Check profiling samples → Click dashboard để xem flame graph.",
+      "description": "🩺 **Profile Activity Summary** — Kiểm tra xem profiling có hoạt động không bằng cách query profile data trực tiếp từ Pyroscope.\n\n💡 **SRE Insight:**\n• **Shows profile data**: SDK hoạt động, Pyroscope đang nhận data\n• **No Data**: Có vấn đề với:\n  - ENABLE_PROFILING=false (feature flag tắt)\n  - Pyroscope container down\n  - Network connectivity issue\n  - SDK chưa được initialized\n\n🎯 **Workflow:**\n1. P95 latency spike → Check panel này\n2. Nếu có data → Click 'Open Profiling Dashboard' để xem flame graph chi tiết\n3. Nếu no data → Troubleshoot Pyroscope connectivity\n\n**Troubleshooting Steps:**\n- Check Pyroscope container: `docker logs pyroscope`\n- Check app logs: `docker logs <service-name> | grep -i pyroscope`\n- Check network: `docker exec <service> curl http://pyroscope:4040/ready`",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
-          "unit": "cps",
+          "unit": "ns",
           "min": 0,
           "custom": {"fillOpacity": 15, "lineWidth": 2}
         }
@@ -903,13 +903,15 @@
         "y": 53
       },
       "id": 10,
-      "title": "🔥 Profiling Samples Ingestion Rate (CPU + Memory)",
+      "title": "🔥 Profile Activity Summary (CPU Time per Service)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(pyroscope_app_stats_samples_ingested_total[5m])) by (app_name, sample_type)",
-          "legendFormat": "{{ app_name }} — {{ sample_type }}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "metrics",
+          "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+          "labelSelector": "{service_name=~\".*\"}",
+          "groupBy": ["service_name"]
         }
       ]
     },
