@@ -317,7 +317,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "(sum(rate({__name__=~\".*_total\", status=~\"error|failed\", service_name=\"$service\"}[5m])) or vector(0)) / (sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m])) and sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m])) > 0.1)",
+          "expr": "sum(rate({__name__=~\".*_total\", status=~\"error|failed\", service_name=\"$service\"}[5m])) / sum(rate({__name__=~\".*_total\", service_name=\"$service\"}[5m]))",
           "legendFormat": "Error Rate",
           "refId": "A"
         }
