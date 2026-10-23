@@ -52,6 +52,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
     networks:
       - data
     deploy:
@@ -76,6 +77,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
     networks:
       - data
     deploy:
@@ -109,6 +111,7 @@ services:
     depends_on:
       order-service:
         condition: service_started
+    restart: unless-stopped
     <<: *app-hardening
     networks:
       - frontend
@@ -150,6 +153,7 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    restart: unless-stopped
     <<: *app-hardening
     networks:
       - backend
@@ -181,6 +185,7 @@ services:
     ports:
       - "5002:5002"
     <<: *app-hardening
+    restart: unless-stopped
     networks:
       - backend
       - data
@@ -263,6 +268,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    restart: unless-stopped
     restart: unless-stopped
     networks:
       - data
