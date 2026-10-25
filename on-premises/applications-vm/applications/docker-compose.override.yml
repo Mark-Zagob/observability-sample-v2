@@ -1,0 +1,52 @@
+# ============================================================
+# Local Development Override — auto-loaded by docker compose
+# ============================================================
+# 📁 This file is auto-loaded by `docker compose` (no -f flag needed)
+# 🚫 On Production VM: DELETE this file → chỉ dùng docker-compose.yml
+#
+# Behavior when this file exists:
+#   docker compose up         → Dùng GHCR image nếu có local, nếu chưa có thì BUILD
+#   docker compose up --build → LUÔN build từ source (recommended cho dev)
+#   docker compose build      → Force rebuild tất cả app images
+#
+# Infrastructure services (postgres, redis, kafka...) KHÔNG cần override
+# vì chúng đã dùng `image:` fixed tags trong docker-compose.yml.
+# ============================================================
+
+services:
+
+  # ──────────────────────────────────────────────────────────
+  # App Services — override image: bằng build:
+  # ──────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: notification-worker/Dockerfile
+
+  inventory-worker:
+    build:
+      context: .
+      dockerfile: inventory-worker/Dockerfile
+
+  traffic-gen:
+    build:
+      context: .
+      dockerfile: traffic-gen/Dockerfile
+
+  web-ui:
+    build: ./web-ui

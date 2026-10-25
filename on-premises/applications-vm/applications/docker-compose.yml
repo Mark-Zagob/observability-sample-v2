@@ -95,9 +95,9 @@ services:
   # ==========================================================
 
   api-gateway:
-    build:
-      context: .
-      dockerfile: api-gateway/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/api-gateway:${IMAGE_TAG:-latest}
+    # pull_policy: always  # Uncomment nếu muốn luôn pull từ registry (dùng với IMAGE_TAG=latest)
+    pull_policy: missing   # Mặc định: chỉ pull khi image chưa có local (an toàn với SHA tags)
     container_name: api-gateway
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -128,9 +128,8 @@ services:
     stop_grace_period: 30s  # Match gunicorn graceful_timeout (25s) + buffer
 
   order-service:
-    build:
-      context: .
-      dockerfile: order-service/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/order-service:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: order-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -170,9 +169,8 @@ services:
     stop_grace_period: 30s  # Match gunicorn graceful_timeout (25s) + buffer
 
   payment-service:
-    build:
-      context: .
-      dockerfile: payment-service/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/payment-service:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: payment-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -269,7 +267,6 @@ services:
       kafka:
         condition: service_healthy
     restart: unless-stopped
-    restart: unless-stopped
     networks:
       - data
     deploy:
@@ -312,9 +309,8 @@ services:
   # ==========================================================
 
   notification-worker:
-    build:
-      context: .
-      dockerfile: notification-worker/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/notification-worker:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: notification-worker
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -355,9 +351,8 @@ services:
     stop_grace_period: 30s  # Match graceful shutdown timeout
 
   inventory-worker:
-    build:
-      context: .
-      dockerfile: inventory-worker/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/inventory-worker:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: inventory-worker
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
@@ -397,9 +392,8 @@ services:
   # ==========================================================
 
   traffic-gen:
-    build:
-      context: .
-      dockerfile: traffic-gen/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/traffic-gen:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: traffic-gen
     environment:
       # Phase 4.5: Continuous Profiling
@@ -430,7 +424,8 @@ services:
   # ==========================================================
 
   web-ui:
-    build: ./web-ui
+    image: ghcr.io/${GHCR_OWNER:-mark-zagob}/observability-lab/web-ui:${IMAGE_TAG:-latest}
+    pull_policy: missing
     container_name: web-ui
     ports:
       - "8580:8080"

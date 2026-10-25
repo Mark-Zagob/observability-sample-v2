@@ -210,3 +210,435 @@ jobs:
           echo "| Event | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SHA | \`$(echo ${{ github.sha }} | cut -c1-7)\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Push to registry | \`${{ github.event_name != 'pull_request' }}\` |" >> $GITHUB_STEP_SUMMARY
+# ============================================================
+# CI Orchestrator — Production Pipeline (Step 1: Artifact Contract)
+# ============================================================
+# Workflow chính điều phối toàn bộ CI pipeline.
+#
+# Architecture (Reusable Workflows):
+#   ci.yml (orchestrator)
+#     ├─ prepare           → Tính image_tag, owner_lc MỘT LẦN (Single Source of Truth)
+#     ├─ detect-changes    → Detect services nào có thay đổi
+#     ├─→ _reusable-lint-test.yml      (Hadolint + Ruff + Bandit + Pytest)
+#     ├─→ _reusable-build-push.yml     (Build + Trivy + Push)
+#     └─ artifact-contract → Verify contract + xuất deploy instructions
+#
+# Branching Strategy:
+#   feature/* → PR → develop    : Lint + Test + Build Verify (no push)
+#   develop   → PR → main       : Lint + Test + Build + Scan + Push
+#   main      (hotfix push)     : Lint + Test + Build + Scan + Push
+#
+# Change Detection:
+#   - Chỉ build services có file thay đổi
+#   - Matrix strategy — build song song nhiều services
+#
+# 🛡️ Step 1 Concept: Artifact Contract
+#   "Don't trust the contract, TEST the contract."
+#   - Single Source of Truth: image_tag tính 1 lần ở prepare job
+#   - Immutable tag: SHORT_SHA (không dùng 'latest' trong production)
+#   - Build Once, Deploy Many: cùng 1 image pull ở mọi môi trường
+#   - Automated Contract Test: render compose → verify matches pushed
+# ============================================================
+
+name: CI — Orchestrator
+
+# ============================================================
+# TRIGGER
+# ============================================================
+on:
+  # push:
+  #   # branches: [main, develop]
+  #   paths:
+  #     - 'applications-vm/applications/**'
+  #     - 'observability-vm/phase1-metrics/webhook-receiver/**'
+  #     - '.github/workflows/ci.yml'
+  #     - '.github/workflows/_reusable-*.yml'
+
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'applications-vm/applications/**'
+      - 'observability-vm/phase1-metrics/webhook-receiver/**'
+      # 🛡️ Step 1: Workflow file thay đổi cũng phải chạy CI (tránh silent failure)
+      - '.github/workflows/**'
+
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service cụ thể muốn build (để trống = detect changes)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - api-gateway
+          - order-service
+          - payment-service
+          - inventory-worker
+          - notification-worker
+          - sample-app
+          - traffic-gen
+          - web-ui
+          - webhook-receiver
+
+# ============================================================
+# PERMISSIONS
+# ============================================================
+permissions:
+  contents: read
+  packages: write
+
+# ============================================================
+# CONCURRENCY — Tránh race condition khi push 2 commit liên tiếp
+# ============================================================
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ============================================================
+# JOBS
+# ============================================================
+jobs:
+
+  # ============================================================
+  # JOB 0: Prepare — Single Source of Truth
+  # Tính image_tag + owner_lc MỘT LẦN, share cho toàn bộ pipeline.
+  # Tránh mỗi matrix leg tự tính → drift, inconsistency.
+  # ============================================================
+  prepare:
+    name: Prepare — Compute Artifact Contract
+    runs-on: [vm-runner-001]
+    timeout-minutes: 2
+    outputs:
+      short_sha: ${{ steps.contract.outputs.short_sha }}
+      owner_lc: ${{ steps.contract.outputs.owner_lc }}
+      compose_path: ${{ steps.contract.outputs.compose_path }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute contract values
+        id: contract
+        run: |
+          # SHORT_SHA: 7 ký tự đầu của commit SHA (immutable tag)
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+          # OWNER_LC: repository owner ở lowercase (GHCR yêu cầu lowercase)
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
+
+          # Compose path (relative to repo root)
+          COMPOSE_PATH="on-premises/applications-vm/applications/docker-compose.yml"
+          echo "compose_path=${COMPOSE_PATH}" >> $GITHUB_OUTPUT
+
+          echo "📋 Artifact Contract (Single Source of Truth):"
+          echo "   short_sha: ${SHORT_SHA}"
+          echo "   owner_lc:  ${OWNER_LC}"
+          echo "   compose:   ${COMPOSE_PATH}"
+
+  # ============================================================
+  # JOB 1: Detect Changes
+  # ============================================================
+  detect-changes:
+    runs-on: [vm-runner-001]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_changes: ${{ steps.set-matrix.outputs.has_changes }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: set-matrix
+        run: |
+          # -------------------------------------------------------
+          # Service registry — thêm service mới chỉ cần thêm 1 dòng
+          # -------------------------------------------------------
+          declare -A SERVICE_PATHS=(
+            ["api-gateway"]="applications-vm/applications/api-gateway"
+            ["order-service"]="applications-vm/applications/order-service"
+            ["payment-service"]="applications-vm/applications/payment-service"
+            ["inventory-worker"]="applications-vm/applications/inventory-worker"
+            ["notification-worker"]="applications-vm/applications/notification-worker"
+            ["sample-app"]="applications-vm/applications/sample-app"
+            ["traffic-gen"]="applications-vm/applications/traffic-gen"
+            ["web-ui"]="applications-vm/applications/web-ui"
+            ["webhook-receiver"]="observability-vm/phase1-metrics/webhook-receiver"
+          )
+
+          # -------------------------------------------------------
+          # Manual trigger — build service cụ thể
+          # -------------------------------------------------------
+          if [ -n "${{ github.event.inputs.service }}" ]; then
+            SERVICE="${{ github.event.inputs.service }}"
+            PATH_VALUE="${SERVICE_PATHS[$SERVICE]}"
+            MATRIX=$(jq -n -c \
+              --arg name "$SERVICE" \
+              --arg context "$PATH_VALUE" \
+              '{include: [{service: $name, context: $context}]}')
+            echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "🔧 Manual trigger: building $SERVICE"
+            exit 0
+          fi
+
+          # -------------------------------------------------------
+          # Auto detect changes
+          # -------------------------------------------------------
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "📝 Changed files:"
+          echo "$CHANGED_FILES"
+
+          SERVICES_TO_BUILD="[]"
+          for SERVICE in "${!SERVICE_PATHS[@]}"; do
+            CONTEXT="${SERVICE_PATHS[$SERVICE]}"
+            if echo "$CHANGED_FILES" | grep -q "^${CONTEXT}/"; then
+              SERVICES_TO_BUILD=$(echo "$SERVICES_TO_BUILD" | jq -c \
+                --arg name "$SERVICE" \
+                --arg context "$CONTEXT" \
+                '. + [{service: $name, context: $context}]')
+              echo "✅ $SERVICE — has changes, will build"
+            else
+              echo "⏭️  $SERVICE — no changes, skipping"
+            fi
+          done
+
+          COUNT=$(echo "$SERVICES_TO_BUILD" | jq length)
+          if [ "$COUNT" -gt 0 ]; then
+            MATRIX=$(echo "$SERVICES_TO_BUILD" | jq -c '{include: .}')
+            echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo ""
+            echo "🏗️  Will build $COUNT service(s)"
+          else
+            echo "matrix={}" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo ""
+            echo "💤 No services changed, nothing to build"
+          fi
+
+  # ============================================================
+  # JOB 2: Lint & Test — gọi reusable workflow
+  # ============================================================
+  lint-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2  # 🛡️ Khớp với runner capacity (tránh OOM)
+
+    uses: ./.github/workflows/_reusable-lint-test.yml
+    with:
+      service: ${{ matrix.service }}
+      context: ${{ matrix.context }}
+
+  # ============================================================
+  # JOB 3: Build, Scan & Push — gọi reusable workflow
+  # Nhận image_tag + owner_lc từ prepare job (Single Source of Truth)
+  # ============================================================
+  build-push:
+    needs: [prepare, detect-changes, lint-test]
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+
+    uses: ./.github/workflows/_reusable-build-push.yml
+    with:
+      service: ${{ matrix.service }}
+      context: ${{ matrix.context }}
+      # PR → chỉ build verify, KHÔNG push
+      # Push vào develop/main → build + push
+      push: ${{ github.event_name != 'pull_request' }}
+      # 🛡️ Step 1: Artifact Contract — nhận từ Single Source of Truth
+      image_tag: ${{ needs.prepare.outputs.short_sha }}
+      owner_lc: ${{ needs.prepare.outputs.owner_lc }}
+    secrets: inherit  # Truyền GITHUB_TOKEN cho GHCR login
+
+  # ============================================================
+  # JOB 4: Artifact Contract Test
+  # "Don't trust the contract, TEST the contract."
+  # Render docker-compose.yml với cùng env vars mà CI đã dùng,
+  # verify mọi image refs đều match pattern CI đã push.
+  # ============================================================
+  artifact-contract:
+    name: Artifact Contract — Verify + Deploy Instructions
+    needs: [prepare, build-push]
+    # Chạy cả khi build-push fail (để report contract vẫn đúng hay sai)
+    if: always() && needs.prepare.result == 'success'
+    runs-on: [vm-runner-001]
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Render compose file with contract values
+        id: render
+        run: |
+          COMPOSE_FILE="${{ needs.prepare.outputs.compose_path }}"
+          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
+          OWNER_LC="${{ needs.prepare.outputs.owner_lc }}"
+
+          echo "📋 Rendering ${COMPOSE_FILE}..."
+          echo "   IMAGE_TAG=${SHORT_SHA}"
+          echo "   GHCR_OWNER=${OWNER_LC}"
+          echo ""
+
+          # Render compose file với env vars cụ thể (không cần docker compose, dùng envsubst)
+          # Lọc chỉ các image refs thuộc observability-lab namespace
+          IMAGE_REFS=$(IMAGE_TAG="${SHORT_SHA}" GHCR_OWNER="${OWNER_LC}" \
+            envsubst < "${COMPOSE_FILE}" \
+            | grep -E '^\s+image:' \
+            | grep 'ghcr.io/' \
+            | grep 'observability-lab' \
+            | awk '{print $2}' \
+            | sort -u)
+
+          echo "📦 Rendered image refs:"
+          echo "$IMAGE_REFS"
+          echo ""
+
+          # Save to output for later steps
+          # Use delimiter to handle multi-line output safely
+          {
+            echo 'image_refs<<EOF'
+            echo "$IMAGE_REFS"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Verify contract — all refs use SHORT_SHA tag
+        id: verify
+        run: |
+          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
+          IMAGE_REFS="${{ steps.render.outputs.image_refs }}"
+
+          VIOLATIONS=0
+          TOTAL=0
+
+          echo "### 🔍 Artifact Contract Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Ref | Tag Valid? |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          while IFS= read -r REF; do
+            [ -z "$REF" ] && continue
+            TOTAL=$((TOTAL + 1))
+
+            # Extract tag from ref (format: registry/owner/namespace/service:tag)
+            TAG="${REF##*:}"
+            SERVICE=$(echo "$REF" | awk -F/ '{print $NF}' | awk -F: '{print $1}')
+
+            if [ "$TAG" = "$SHORT_SHA" ]; then
+              echo "| \`${REF}\` | ✅ Matches SHORT_SHA |" >> $GITHUB_STEP_SUMMARY
+            elif [ "$TAG" = "latest" ]; then
+              echo "| \`${REF}\` | ❌ Uses mutable 'latest' |" >> $GITHUB_STEP_SUMMARY
+              VIOLATIONS=$((VIOLATIONS + 1))
+            else
+              echo "| \`${REF}\` | ❌ Wrong tag: \`${TAG}\` (expected \`${SHORT_SHA}\`) |" >> $GITHUB_STEP_SUMMARY
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done <<< "$IMAGE_REFS"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total services in contract:** ${TOTAL}" >> $GITHUB_STEP_SUMMARY
+          echo "**Violations:** ${VIOLATIONS}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Artifact contract VIOLATED.** Compose file contains refs that don't match CI-pushed images." >> $GITHUB_STEP_SUMMARY
+            echo "   Deploy sẽ fail (pull image sai tag) hoặc deploy nhầm version." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Artifact contract VALID.** All compose refs match CI-pushed images." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "total=${TOTAL}" >> $GITHUB_OUTPUT
+          echo "violations=${VIOLATIONS}" >> $GITHUB_OUTPUT
+
+      - name: Output deploy instructions
+        if: github.event_name != 'pull_request' && steps.verify.outputs.violations == '0'
+        run: |
+          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Deploy Instructions (Copy-paste to VM)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sau khi CI pass, copy block sau vào \`.env\` trên VM **192.168.100.57**:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# 1. Trên VM 192.168.100.57, cd vào project folder:" >> $GITHUB_STEP_SUMMARY
+          echo "cd ~/observability-sample-v2/on-premises/applications-vm/applications" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# 2. Cập nhật IMAGE_TAG trong .env:" >> $GITHUB_STEP_SUMMARY
+          echo "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${SHORT_SHA}/' .env" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# 3. Pull images mới:" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose pull" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# 4. Roll out (zero-downtime rolling restart):" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose up -d --remove-orphans" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Rollback (nếu cần)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Đổi IMAGE_TAG về SHA cũ trong .env, rồi:" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose pull" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose up -d --remove-orphans" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 5: Pipeline Summary (Aggregator)
+  # ============================================================
+  summary:
+    name: CI Gate — Final Status
+    needs: [prepare, detect-changes, lint-test, build-push, artifact-contract]
+    if: always()
+    runs-on: [vm-runner-001]
+
+    steps:
+      - name: Pipeline summary
+        run: |
+          echo "## 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Prepare (Contract Values) | ${{ needs.prepare.result == 'success' && '✅' || '❌' }} ${{ needs.prepare.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Detect Changes | ✅ ${{ needs.detect-changes.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Test | ${{ needs.lint-test.result == 'success' && '✅' || (needs.lint-test.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.lint-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Push | ${{ needs.build-push.result == 'success' && '✅' || (needs.build-push.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.build-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact Contract | ${{ needs.artifact-contract.result == 'success' && '✅' || '❌' }} ${{ needs.artifact-contract.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **IMAGE_TAG** | \`${{ needs.prepare.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **GHCR_OWNER** | \`${{ needs.prepare.outputs.owner_lc }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Push to registry | \`${{ github.event_name != 'pull_request' }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          # Fail the gate if any critical job failed
+          CRITICAL_FAIL=""
+          if [ "${{ needs.prepare.result }}" != "success" ]; then CRITICAL_FAIL="prepare"; fi
+          if [ "${{ needs.build-push.result }}" = "failure" ]; then CRITICAL_FAIL="build-push"; fi
+          if [ "${{ needs.artifact-contract.result }}" = "failure" ]; then CRITICAL_FAIL="artifact-contract"; fi
+
+          if [ -n "$CRITICAL_FAIL" ]; then
+            echo ""
+            echo "❌ Critical job '$CRITICAL_FAIL' failed. Pipeline gate CLOSED."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Pipeline gate OPEN. Ready to deploy."

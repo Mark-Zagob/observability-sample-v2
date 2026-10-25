@@ -126,3 +126,198 @@ jobs:
           echo "| Size | $(docker images ${{ env.IMAGE_NAME }}:latest --format '{{.Size}}' 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy | ✅ No CRITICAL/HIGH |" >> $GITHUB_STEP_SUMMARY
           echo "| Pushed | ${{ inputs.push }} |" >> $GITHUB_STEP_SUMMARY
+# ============================================================
+# Reusable Workflow — Build, Scan & Push Image (Step 1: Artifact Contract)
+# ============================================================
+# Được gọi bởi ci.yml orchestrator SAU KHI lint-test pass.
+#
+# Artifact Contract (Hợp đồng Artifact):
+#   - Image name: ghcr.io/{owner_lc}/observability-lab/{service}
+#   - Tags: {SHORT_SHA} (immutable) + latest (mutable, main branch only)
+#   - Contract được verify tự động trong summary step
+#
+# Inputs (đến từ orchestrator - Single Source of Truth):
+#   - service:       tên service (vd: api-gateway)
+#   - context:       đường dẫn đến Dockerfile
+#   - push:          có push lên registry hay không (false cho PR)
+#   - image_tag:     SHORT_SHA từ prepare job (tính 1 lần, share toàn pipeline)
+#   - owner_lc:      repository owner ở lowercase (tính 1 lần)
+#
+# Outputs:
+#   - image-ref:     full image reference (để orchestrator verify contract)
+# ============================================================
+
+name: _Reusable — Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Tên service (vd: api-gateway)'
+        required: true
+        type: string
+      context:
+        description: 'Đường dẫn đến thư mục chứa Dockerfile'
+        required: true
+        type: string
+      push:
+        description: 'Có push image lên registry không (false cho PR)'
+        required: true
+        type: boolean
+      image_tag:
+        description: 'Immutable tag (SHORT_SHA) - tính 1 lần ở orchestrator'
+        required: true
+        type: string
+      owner_lc:
+        description: 'Repository owner ở lowercase'
+        required: true
+        type: string
+    outputs:
+      image-ref:
+        description: 'Full image reference (vd: ghcr.io/mark-zagob/observability-lab/api-gateway:abc1234)'
+        value: ${{ jobs.build-scan-push.outputs.image-ref }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-scan-push:
+    runs-on: [vm-runner-001]
+    timeout-minutes: 15  # 🛡️ Production: Bounded execution, tránh runner hang vô hạn
+
+    outputs:
+      image-ref: ${{ steps.vars.outputs.image-ref }}
+
+    steps:
+      # -------------------------------------------------------
+      # 1. Checkout source code
+      # -------------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # 2. Compute image name (KHÔNG tự tính tag - nhận từ input)
+      #    Single Source of Truth: tag được tính 1 lần ở orchestrator
+      # -------------------------------------------------------
+      - name: Set image name
+        id: vars
+        run: |
+          IMAGE_NAME="ghcr.io/${{ inputs.owner_lc }}/observability-lab/${{ inputs.service }}"
+          IMAGE_REF="${IMAGE_NAME}:${{ inputs.image_tag }}"
+
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> $GITHUB_ENV
+          echo "IMAGE_REF=${IMAGE_REF}" >> $GITHUB_ENV
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+
+          echo "📋 Artifact Contract:"
+          echo "   Image: ${IMAGE_NAME}"
+          echo "   Tag:   ${{ inputs.image_tag }}"
+          echo "   Ref:   ${IMAGE_REF}"
+
+      # -------------------------------------------------------
+      # 3. Login to GHCR (chỉ khi cần push)
+      # -------------------------------------------------------
+      - name: Login to GHCR
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -------------------------------------------------------
+      # 4. Build Docker image
+      #    Tag kép: SHORT_SHA (immutable) + latest (mutable)
+      # -------------------------------------------------------
+      - name: Build ${{ inputs.service }}
+        run: |
+          echo "🏗️  Building ${{ inputs.service }}..."
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --label "org.opencontainers.image.title=${{ inputs.service }}" \
+            --label "org.opencontainers.image.version=${{ inputs.image_tag }}" \
+            -f ${{ inputs.context }}/Dockerfile \
+            ${{ inputs.context }}
+
+      # -------------------------------------------------------
+      # 5. Trivy — Container image vulnerability scan
+      #    Scan IMMUTABLE tag (KHÔNG scan 'latest' - race condition)
+      # -------------------------------------------------------
+      - name: Trivy — Image security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.IMAGE_REF }}'   # ✅ Scan immutable tag
+          format: 'table'
+          exit-code: '1'                      # Fail pipeline nếu tìm thấy vuln
+          severity: 'CRITICAL,HIGH'           # Chỉ block CRITICAL và HIGH
+          ignore-unfixed: true                # Bỏ qua vuln chưa có fix
+          output: 'trivy-report.txt'
+
+      # -------------------------------------------------------
+      # 6. Upload Trivy report (luôn upload dù pass hay fail)
+      # -------------------------------------------------------
+      - name: Upload Trivy report
+        if: always()
+        run: |
+          if [ -f trivy-report.txt ]; then
+            echo "### 🔒 Trivy Scan — ${{ inputs.service }}:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -100 trivy-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # -------------------------------------------------------
+      # 7. Push image (chỉ khi push=true VÀ Trivy pass)
+      # -------------------------------------------------------
+      - name: Push ${{ inputs.service }}
+        if: inputs.push
+        run: |
+          echo "📦 Pushing ${{ env.IMAGE_REF }} to GHCR..."
+          docker push ${{ env.IMAGE_REF }}
+
+      # -------------------------------------------------------
+      # 8. Summary with Artifact Contract info + Deploy Instructions
+      # -------------------------------------------------------
+      - name: Build summary
+        if: always()
+        run: |
+          echo "### 🏗️ Build — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📋 Artifact Contract" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Image Ref** | \`${{ env.IMAGE_REF }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Registry | \`ghcr.io\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Owner | \`${{ inputs.owner_lc }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | \`observability-lab\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | \`${{ inputs.service }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag (immutable) | \`${{ inputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Size | $(docker images ${{ env.IMAGE_REF }} --format '{{.Size}}' 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ✅ No CRITICAL/HIGH |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pushed | ${{ inputs.push }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.push }}" = "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### 🚀 Deploy to VM" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "# Copy vào .env trên VM 192.168.100.57:" >> $GITHUB_STEP_SUMMARY
+            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# Hoặc deploy service này:" >> $GITHUB_STEP_SUMMARY
+            echo "docker compose pull ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+            echo "docker compose up -d ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # -------------------------------------------------------
+      # 9. Cleanup docker artifacts (tránh runner bị layer pollution)
+      # -------------------------------------------------------
+      - name: Cleanup docker artifacts
+        if: always()
+        run: |
+          docker rmi -f ${{ env.IMAGE_REF }} 2>/dev/null || true
+          docker image prune -f || true

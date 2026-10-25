@@ -1,0 +1,82 @@
+# ============================================================
+# docker-compose.prod.yml — Production Overlay
+# ============================================================
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# File này MERGE với docker-compose.yml để tạo ra production-grade config.
+# Chỉ chứa những thay đổi cần thiết cho production.
+#
+# Prerequisites:
+#   - docker-compose.yml (base file) phải tồn tại
+#   - .env phải có GHCR_OWNER và IMAGE_TAG (short SHA)
+#   - docker login ghcr.io trước khi pull images
+#
+# Merge order: docker-compose.yml (base) -> docker-compose.prod.yml (override)
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # App Services - Production Hardening
+  # ----------------------------------------------------------
+  # pull_policy: missing
+  #   SHA tag là immutable, chỉ cần pull 1 lần.
+  #   Docker Compose sẽ skip pull nếu image đã có local -> fast deploy.
+
+  api-gateway:
+    pull_policy: missing
+    # Giữ port 5000 exposed (API access point)
+
+  order-service:
+    pull_policy: missing
+    # Production: Chỉ access internal qua backend network
+    ports: !reset []
+
+  payment-service:
+    pull_policy: missing
+    ports: !reset []
+
+  notification-worker:
+    pull_policy: missing
+    ports: !reset []
+
+  inventory-worker:
+    pull_policy: missing
+    ports: !reset []
+
+  traffic-gen:
+    pull_policy: missing
+    ports: !reset []
+
+  web-ui:
+    pull_policy: missing
+    # Giữ port 8580 (user-facing)
+
+  # ----------------------------------------------------------
+  # Infrastructure - Port Restrictions
+  # ----------------------------------------------------------
+  # Production: Infrastructure KHÔNG nên expose ra host network.
+  # App containers access qua Docker internal network.
+  # Uncomment 'ports: !reset []' để harden.
+  # Sau đó chỉ access bằng: docker exec -it postgres psql -U app -d orders
+
+  postgres:
+    # ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    # ports: !reset []
+    restart: unless-stopped
+
+  kafka:
+    # ports: !reset []
+    restart: unless-stopped
+
+  kafka-exporter:
+    # ports: !reset []
+    restart: unless-stopped
+
+  kafka-ui:
+    # ports: !reset []
+    restart: unless-stopped
+
