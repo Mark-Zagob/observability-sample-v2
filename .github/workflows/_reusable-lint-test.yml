@@ -224,7 +224,7 @@ jobs:
       # debug offline, hoặc xem lại history khi cần.
       - name: Upload lint & test artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lint-test-${{ inputs.service }}-${{ github.run_id }}
           path: |

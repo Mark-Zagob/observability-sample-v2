@@ -126,7 +126,7 @@ jobs:
       #    Scan IMMUTABLE tag (KHÔNG scan 'latest' - race condition)
       # -------------------------------------------------------
       - name: Trivy — Image security scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: '${{ env.IMAGE_REF }}'   # ✅ Scan immutable tag
           format: 'table'
@@ -144,7 +144,7 @@ jobs:
       # - Debug false positives
       - name: Upload Trivy report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-report-${{ inputs.service }}-${{ github.run_id }}
           path: trivy-report.txt

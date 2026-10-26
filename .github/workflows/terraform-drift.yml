@@ -142,7 +142,7 @@ jobs:
 
       - name: Upload plan output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-report-${{ env.ENVIRONMENT }}-${{ github.run_number }}
           path: observability-sample-v2/terraform/environments/${{ env.ENVIRONMENT }}/plan-output.txt

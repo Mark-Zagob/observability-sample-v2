@@ -120,7 +120,7 @@ jobs:
           conftest test tfplan.json --policy ../../policy/ --all-namespaces --output json > conftest-results.json || true
 
       - name: Upload policy results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: policy-results-${{ matrix.environment }}
           path: observability-sample-v2/terraform/environments/${{ matrix.environment }}/conftest-results.json
