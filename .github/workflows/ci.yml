@@ -52,7 +52,7 @@ jobs:
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
-          COMPOSE_PATH="applications-vm/applications/docker-compose.yml"
+          COMPOSE_PATH="on-premises/applications-vm/applications/docker-compose.yml"
           echo "compose_path=${COMPOSE_PATH}" >> "$GITHUB_OUTPUT"
           echo "=== Artifact Contract (Single Source of Truth) ==="
           echo "   short_sha: ${SHORT_SHA}"
@@ -76,13 +76,13 @@ jobs:
         run: |
           set -euo pipefail
           declare -A SERVICE_PATHS=(
-            ["api-gateway"]="applications-vm/applications/api-gateway"
-            ["order-service"]="applications-vm/applications/order-service"
-            ["payment-service"]="applications-vm/applications/payment-service"
-            ["inventory-worker"]="applications-vm/applications/inventory-worker"
-            ["notification-worker"]="applications-vm/applications/notification-worker"
-            ["traffic-gen"]="applications-vm/applications/traffic-gen"
-            ["web-ui"]="applications-vm/applications/web-ui"
+            ["api-gateway"]="on-premises/applications-vm/applications/api-gateway"           
+            ["order-service"]="on-premises/applications-vm/applications/order-service"
+            ["payment-service"]="on-premises/applications-vm/applications/payment-service"
+            ["inventory-worker"]="on-premises/applications-vm/applications/inventory-worker"
+            ["notification-worker"]="on-premises/applications-vm/applications/notification-worker"
+            ["traffic-gen"]="on-premises/applications-vm/applications/traffic-gen"
+            ["web-ui"]="on-premises/applications-vm/applications/web-ui"
           )
           if [ -n "${{ github.event.inputs.service }}" ]; then
             SERVICE="${{ github.event.inputs.service }}"
@@ -105,7 +105,7 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
           BUILD_ALL="false"
-          if echo "$CHANGED_FILES" | grep -qE "^applications-vm/applications/(docker-compose\.yml|\.env)$"; then
+          if echo "$CHANGED_FILES" | grep -qE "^on-premises/applications-vm/applications/(docker-compose\.yml|\.env)$"; then
             BUILD_ALL="true"
           fi
           if echo "$CHANGED_FILES" | grep -qE "^\.github/(workflows|actions)/"; then
