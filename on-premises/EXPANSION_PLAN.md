@@ -2045,7 +2045,7 @@ jobs:
   lint-test-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Lint (flake8)
         run: flake8 applications-vm/applications/
       - name: Unit tests

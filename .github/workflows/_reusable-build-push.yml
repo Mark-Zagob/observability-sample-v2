@@ -54,7 +54,7 @@ jobs:
       # 1. Checkout source code
       # -------------------------------------------------------
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # -------------------------------------------------------
       # 2. Compute image name (KHÔNG tự tính tag - nhận từ input)
@@ -80,7 +80,7 @@ jobs:
       # -------------------------------------------------------
       - name: Login to GHCR
         if: inputs.push
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
