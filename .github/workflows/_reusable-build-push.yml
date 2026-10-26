@@ -87,13 +87,26 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # -------------------------------------------------------
-      # 4. Build Docker image
-      #    Tag kép: SHORT_SHA (immutable) + latest (mutable)
+      # 4. Build Docker image (with BuildKit for better caching)
       # -------------------------------------------------------
+      # Anchor: BuildKit — Docker build engine mới với nhiều cải tiến:
+      # - Layer caching thông minh hơn
+      # - Parallel layer building
+      # - Better error messages
       - name: Build ${{ inputs.service }}
+        id: build
+        env:
+          DOCKER_BUILDKIT: 1
         run: |
           echo "🏗️  Building ${{ inputs.service }}..."
+          echo "📊 Build started at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          BUILD_START=$(date +%s)
+
+          # 🛡️ Pull base image explicitly to avoid rate limits and ensure fresh cache
+          docker pull python:3.12-slim-bookworm 2>/dev/null || echo "⚠️  Base image pull failed, using local cache"
+
           docker build \
+            --progress=plain \
             -t ${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
@@ -102,6 +115,11 @@ jobs:
             --label "org.opencontainers.image.version=${{ inputs.image_tag }}" \
             -f ${{ inputs.context }}/Dockerfile \
             ${{ inputs.context }}
+
+          BUILD_END=$(date +%s)
+          BUILD_DURATION=$((BUILD_END - BUILD_START))
+          echo "✅ Build completed in ${BUILD_DURATION}s"
+          echo "build_duration=${BUILD_DURATION}" >> $GITHUB_OUTPUT
 
       # -------------------------------------------------------
       # 5. Trivy — Container image vulnerability scan
@@ -118,16 +136,54 @@ jobs:
           output: 'trivy-report.txt'
 
       # -------------------------------------------------------
-      # 6. Upload Trivy report (luôn upload dù pass hay fail)
+      # 6. Upload Trivy report (for audit & history)
       # -------------------------------------------------------
+      # Anchor: Security Audit Trail — Lưu lại vulnerability reports để:
+      # - Audit compliance
+      # - Track vulnerability trends over time
+      # - Debug false positives
       - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report-${{ inputs.service }}-${{ github.run_id }}
+          path: trivy-report.txt
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # -------------------------------------------------------
+      # 6.1 Trivy summary (show in workflow UI)
+      # -------------------------------------------------------
+      - name: Trivy scan summary
         if: always()
         run: |
           if [ -f trivy-report.txt ]; then
-            echo "### 🔒 Trivy Scan — ${{ inputs.service }}:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -100 trivy-report.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Count vulnerabilities by severity
+            CRITICAL=$(grep -c "^│ CRITICAL" trivy-report.txt 2>/dev/null || echo "0")
+            HIGH=$(grep -c "^│ HIGH" trivy-report.txt 2>/dev/null || echo "0")
+            MEDIUM=$(grep -c "^│ MEDIUM" trivy-report.txt 2>/dev/null || echo "0")
+            LOW=$(grep -c "^│ LOW" trivy-report.txt 2>/dev/null || echo "0")
+
+            {
+              echo "### 🔒 Trivy Scan — ${{ inputs.service }}:${{ inputs.image_tag }}"
+              echo "| Severity | Count |"
+              echo "|----------|-------|"
+              echo "| CRITICAL | ${CRITICAL} |"
+              echo "| HIGH | ${HIGH} |"
+              echo "| MEDIUM | ${MEDIUM} |"
+              echo "| LOW | ${LOW} |"
+              echo ""
+              echo "<details><summary>View full report (first 50 lines)</summary>"
+              echo ""
+              echo '```'
+              head -50 trivy-report.txt
+              echo '```'
+              echo "</details>"
+              echo ""
+              echo "📥 Full report available as artifact: \`trivy-report-${{ inputs.service }}-${{ github.run_id }}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 🔒 Trivy Scan — No report generated" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # -------------------------------------------------------
@@ -145,33 +201,52 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "### 🏗️ Build — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 📋 Artifact Contract" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Full Image Ref** | \`${{ env.IMAGE_REF }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Registry | \`ghcr.io\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Owner | \`${{ inputs.owner_lc }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Namespace | \`observability-lab\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | \`${{ inputs.service }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tag (immutable) | \`${{ inputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Size | $(docker images ${{ env.IMAGE_REF }} --format '{{.Size}}' 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy | ✅ No CRITICAL/HIGH |" >> $GITHUB_STEP_SUMMARY
-          echo "| Pushed | ${{ inputs.push }} |" >> $GITHUB_STEP_SUMMARY
+          # Determine build and trivy status
+          build_status="✅ Built"
+          [ "${{ steps.build.outcome }}" == "failure" ] && build_status="❌ Failed"
+          [ "${{ steps.build.outcome }}" == "cancelled" ] && build_status="⏭️ Cancelled"
 
-          if [ "${{ inputs.push }}" = "true" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "#### 🚀 Deploy to VM" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "# Copy vào .env trên VM 192.168.100.57:" >> $GITHUB_STEP_SUMMARY
-            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "# Hoặc deploy service này:" >> $GITHUB_STEP_SUMMARY
-            echo "docker compose pull ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
-            echo "docker compose up -d ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          trivy_status="✅ No CRITICAL/HIGH"
+          # If build succeeded but we're here with always(), Trivy either passed or was skipped
+          # If Trivy failed, the job would have failed, but we still show it accurately
+          if [ -f trivy-report.txt ]; then
+            CRITICAL=$(grep -c "^│ CRITICAL" trivy-report.txt 2>/dev/null || echo "0")
+            HIGH=$(grep -c "^│ HIGH" trivy-report.txt 2>/dev/null || echo "0")
+            if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+              trivy_status="❌ ${CRITICAL}C / ${HIGH}H"
+            fi
           fi
+
+          {
+            echo "### 🏗️ Build — ${{ inputs.service }}"
+            echo ""
+            echo "#### 📋 Artifact Contract"
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| **Full Image Ref** | \`${{ env.IMAGE_REF }}\` |"
+            echo "| Registry | \`ghcr.io\` |"
+            echo "| Owner | \`${{ inputs.owner_lc }}\` |"
+            echo "| Namespace | \`observability-lab\` |"
+            echo "| Service | \`${{ inputs.service }}\` |"
+            echo "| Tag (immutable) | \`${{ inputs.image_tag }}\` |"
+            echo "| Size | $(docker images ${{ env.IMAGE_REF }} --format '{{.Size}}' 2>/dev/null || echo 'N/A') |"
+            echo "| Build Time | ${{ steps.build.outputs.build_duration }}s |"
+            echo "| Trivy | ${trivy_status} |"
+            echo "| Pushed | ${{ inputs.push }} |"
+
+            if [ "${{ inputs.push }}" = "true" ]; then
+              echo ""
+              echo "#### 🚀 Deploy to VM"
+              echo "\`\`\`bash"
+              echo "# Copy vào .env trên VM 192.168.100.57:"
+              echo "IMAGE_TAG=${{ inputs.image_tag }}"
+              echo ""
+              echo "# Hoặc deploy service này:"
+              echo "docker compose pull ${{ inputs.service }}"
+              echo "docker compose up -d ${{ inputs.service }}"
+              echo "\`\`\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # -------------------------------------------------------
       # 9. Cleanup docker artifacts (tránh runner bị layer pollution)

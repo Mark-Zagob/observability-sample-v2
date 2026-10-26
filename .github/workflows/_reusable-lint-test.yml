@@ -26,6 +26,7 @@ on:
 jobs:
   lint-and-test:
     runs-on: [vm-runner-001]
+    timeout-minutes: 15  # 🛡️ Production: Bounded execution, tránh runner hang
 
     steps:
       # -------------------------------------------------------
@@ -38,6 +39,7 @@ jobs:
       # 2. Hadolint — Dockerfile linting
       # -------------------------------------------------------
       - name: Hadolint — Dockerfile lint
+        id: hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: ${{ inputs.context }}/Dockerfile
@@ -70,17 +72,37 @@ jobs:
           python-version: '3.12'
 
       # -------------------------------------------------------
-      # 5. Install linting tools
+      # 4.1 Cache pip packages (Speed optimization)
       # -------------------------------------------------------
+      # Anchor: Dependency Caching — Lưu lại downloaded packages giữa các workflow runs.
+      # Key = hash của requirements.txt → tự động invalidate khi dependencies thay đổi.
+      - name: Cache pip packages
+        if: steps.detect-lang.outputs.is_python == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ inputs.service }}-${{ hashFiles(format('{0}/requirements.txt', inputs.context)) }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ inputs.service }}-
+            ${{ runner.os }}-pip-
+
+      # -------------------------------------------------------
+      # 5. Install linting tools (VERSION PINNED — reproducibility)
+      # -------------------------------------------------------
+      # Anchor: Version Pinning — Cố định version của tools để tránh "works on my machine"
+      # và breaking changes khi tool release version mới.
       - name: Install lint tools
         if: steps.detect-lang.outputs.is_python == 'true'
         run: |
-          pip install --quiet ruff bandit
+          pip install --quiet \
+            ruff==0.8.6 \
+            bandit==1.8.0
 
       # -------------------------------------------------------
       # 6. Ruff — Python linting (PEP8, import sort, etc.)
       # -------------------------------------------------------
       - name: Ruff — Python lint
+        id: ruff
         if: steps.detect-lang.outputs.is_python == 'true'
         run: |
           echo "🔍 Running Ruff on ${{ inputs.context }}..."
@@ -93,6 +115,7 @@ jobs:
       # 7. Bandit — Python security scan (SAST)
       # -------------------------------------------------------
       - name: Bandit — Security scan (SAST)
+        id: bandit
         if: steps.detect-lang.outputs.is_python == 'true'
         run: |
           echo "🛡️  Running Bandit on ${{ inputs.context }}..."
@@ -105,9 +128,10 @@ jobs:
             || true
 
           # Parse results and fail if CRITICAL/HIGH issues found
+          # 🛡️ FIX: Replace jq with python to avoid hidden dependency
           if [ -f bandit-report.json ]; then
-            HIGH_COUNT=$(cat bandit-report.json | jq '[.results[] | select(.issue_severity == "HIGH")] | length')
-            MEDIUM_COUNT=$(cat bandit-report.json | jq '[.results[] | select(.issue_severity == "MEDIUM")] | length')
+            HIGH_COUNT=$(python3 -c "import json; data = json.load(open('bandit-report.json')); print(len([r for r in data.get('results', []) if r.get('issue_severity') == 'HIGH']))")
+            MEDIUM_COUNT=$(python3 -c "import json; data = json.load(open('bandit-report.json')); print(len([r for r in data.get('results', []) if r.get('issue_severity') == 'MEDIUM']))")
 
             echo "### 🛡️ Bandit SAST — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
             echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
@@ -118,7 +142,14 @@ jobs:
             if [ "$HIGH_COUNT" -gt 0 ]; then
               echo ""
               echo "❌ Found ${HIGH_COUNT} HIGH severity issues!"
-              cat bandit-report.json | jq '.results[] | select(.issue_severity == "HIGH") | {file: .filename, line: .line_number, issue: .issue_text}'
+              # 🛡️ FIX: Replace jq with python to avoid hidden dependency
+              python3 -c "
+                import json
+                data = json.load(open('bandit-report.json'))
+                for r in data.get('results', []):
+                    if r.get('issue_severity') == 'HIGH':
+                        print(f\"{r['filename']}:{r['line_number']} - {r['issue_text']}\")
+                "
               exit 1
             fi
 
@@ -150,9 +181,14 @@ jobs:
         run: |
           echo "📦 Installing service dependencies..."
           if [ -f "${{ inputs.context }}/requirements.txt" ]; then
-            pip install --quiet -r ${{ inputs.context }}/requirements.txt
+            # 🛡️ Network retry logic: transient errors are common on CI
+            for i in 1 2 3; do
+              pip install --quiet -r ${{ inputs.context }}/requirements.txt && break
+              echo "⚠️  pip install attempt $i failed, retrying in 5s..."
+              sleep 5
+            done
           fi
-          pip install --quiet pytest
+          pip install --quiet pytest==8.3.4
 
       # -------------------------------------------------------
       # 10. Pytest — Unit tests
@@ -182,23 +218,62 @@ jobs:
           echo "| ⚠️ Errors | ${ERRORS} |" >> $GITHUB_STEP_SUMMARY
 
       # -------------------------------------------------------
-      # 11. Summary
+      # 10.1 Upload test artifacts (for debugging & history)
       # -------------------------------------------------------
+      # Anchor: Artifact Upload — Lưu lại reports sau mỗi run để có thể audit,
+      # debug offline, hoặc xem lại history khi cần.
+      - name: Upload lint & test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-test-${{ inputs.service }}-${{ github.run_id }}
+          path: |
+            bandit-report.json
+            ${{ inputs.context }}/test-results.xml
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # -------------------------------------------------------
+      # 11. Summary (ACCURATE STATUS — based on step outcomes)
+      # -------------------------------------------------------
+      # Anchor: Outcome-based Summary — Thay vì hardcode "✅ Passed",
+      # summary này đọc actual outcome từ mỗi step để hiển thị chính xác.
       - name: Pipeline summary
         if: always()
         run: |
-          echo "### 📋 Lint & Test Summary — ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Hadolint (Dockerfile) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          # Determine status for each check based on step outcomes
+          hadolint_status="✅ Passed"
+          [ "${{ steps.hadolint.outcome }}" == "failure" ] && hadolint_status="❌ Failed"
+          [ "${{ steps.hadolint.outcome }}" == "skipped" ] && hadolint_status="⏭️ Skipped"
+
+          ruff_status="⏭️ Skipped (non-Python)"
+          bandit_status="⏭️ Skipped (non-Python)"
+          pytest_status="⏭️ Skipped"
+
           if [ "${{ steps.detect-lang.outputs.is_python }}" == "true" ]; then
-            echo "| Ruff (Python lint) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-            echo "| Bandit (SAST) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            ruff_status="✅ Passed"
+            [ "${{ steps.ruff.outcome }}" == "failure" ] && ruff_status="❌ Failed"
+
+            bandit_status="✅ Passed"
+            [ "${{ steps.bandit.outcome }}" == "failure" ] && bandit_status="❌ Failed"
+
             if [ "${{ steps.detect-tests.outputs.has_tests }}" == "true" ]; then
-              echo "| Pytest (Unit tests) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+              pytest_status="✅ Passed"
+              [ "${{ steps.pytest.outcome }}" == "failure" ] && pytest_status="❌ Failed"
+              [ "${{ steps.pytest.outcome }}" == "skipped" ] && pytest_status="⏭️ Skipped"
             else
-              echo "| Pytest (Unit tests) | ⏭️ Skipped (no test files) |" >> $GITHUB_STEP_SUMMARY
+              pytest_status="⏭️ Skipped (no test files)"
             fi
-          else
-            echo "| Python checks | ⏭️ Skipped (non-Python) |" >> $GITHUB_STEP_SUMMARY
           fi
+
+          {
+            echo "### 📋 Lint & Test Summary — ${{ inputs.service }}"
+            echo "| Check | Status |"
+            echo "|-------|--------|"
+            echo "| Hadolint (Dockerfile) | ${hadolint_status} |"
+            echo "| Ruff (Python lint) | ${ruff_status} |"
+            echo "| Bandit (SAST) | ${bandit_status} |"
+            echo "| Pytest (Unit tests) | ${pytest_status} |"
+            echo ""
+            echo "**Pinned versions:** ruff==0.8.6, bandit==1.8.0, pytest==8.3.4"
+          } >> $GITHUB_STEP_SUMMARY
