@@ -67,7 +67,7 @@ jobs:
       # -------------------------------------------------------
       - name: Setup Python
         if: steps.detect-lang.outputs.is_python == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -78,7 +78,7 @@ jobs:
       # Key = hash của requirements.txt → tự động invalidate khi dependencies thay đổi.
       - name: Cache pip packages
         if: steps.detect-lang.outputs.is_python == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ inputs.service }}-${{ hashFiles(format('{0}/requirements.txt', inputs.context)) }}
