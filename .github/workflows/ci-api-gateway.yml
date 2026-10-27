@@ -33,7 +33,7 @@ permissions:
 # ============================================================
 jobs:
   build-and-push:
-    runs-on: [vm-runner-001]   # Self-hosted runner, Docker đã cài sẵn
+    runs-on: [idc-dev]   # Self-hosted runner, Docker đã cài sẵn
 
     steps:
       # --- Step 1: Checkout code ---

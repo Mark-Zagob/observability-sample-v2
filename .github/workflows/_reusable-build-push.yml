@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   build-scan-push:
-    runs-on: [vm-runner-001]
+    runs-on: [idc-dev]
     permissions:
       contents: read      # Checkout repository
       packages: write 
