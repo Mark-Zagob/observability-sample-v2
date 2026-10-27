@@ -9,9 +9,11 @@ Chạy: pytest test_app.py -v
 ============================================================
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from app import app
+
 
 # ============================================================
 # Fixture: Flask test client (mock all external deps)
@@ -27,6 +29,7 @@ def client():
          patch("opentelemetry.instrumentation.redis.RedisInstrumentor"):
 
         import importlib
+
         import app as app_module
         importlib.reload(app_module)
 
@@ -270,13 +273,13 @@ def test_payment_timeout_must_return_502_bad_gateway(
     mock_cache_get, mock_db_execute, mock_requests_post, plain_client
 ):
     """
-    [Infra Failure] Khi Payment Service timeout (infra failure), 
+    [Infra Failure] Khi Payment Service timeout (infra failure),
     Order Service PHẢI trả về 502 Bad Gateway, TUYỆT ĐỐI KHÔNG ĐƯỢC là 200 OK.
     """
     # Setup Mocks: Cache hit để bypass DB query sản phẩm
     mock_cache_get.return_value = [{"id": 1, "name": "Test Product", "price": 10.0, "stock": 100}]
-    mock_db_execute.return_value = [{"stock": 100}] 
-    
+    mock_db_execute.return_value = [{"stock": 100}]
+
     # Simulate Payment Service Timeout (Infrastructure Failure)
     mock_requests_post.side_effect = Exception("Connection timeout")
 
@@ -286,7 +289,7 @@ def test_payment_timeout_must_return_502_bad_gateway(
     # Assert HTTP Semantic
     assert response.status_code == 502, \
         "🚨 HTTP 200 Trap detected! Payment timeout must return 502 Bad Gateway for SRE SLI accuracy."
-    
+
     # Assert Payload (Backward compatibility for Web UI)
     data = response.get_json()
     assert data['status'] == 'payment_error'
@@ -297,15 +300,15 @@ def test_payment_timeout_must_return_502_bad_gateway(
 @patch('app.cache.get')
 def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_db_execute, mock_requests_post, plain_client):
     """
-    [Business Failure] Khi Payment Gateway từ chối giao dịch (business failure), 
+    [Business Failure] Khi Payment Gateway từ chối giao dịch (business failure),
     Order Service PHẢI trả về 402 Payment Required.
     """
     mock_cache_get.return_value = [{"id": 1, "name": "Test Product", "price": 10.0, "stock": 100}]
     mock_db_execute.return_value = [{"stock": 100}]
-    
+
     # Simulate Payment Gateway rejection (e.g., Stripe returns 400 Bad Request)
     mock_response = MagicMock()
-    mock_response.status_code = 400 
+    mock_response.status_code = 400
     mock_response.json.return_value = {"status": "failed", "error": "insufficient_funds"}
     mock_requests_post.return_value = mock_response
 
@@ -313,6 +316,6 @@ def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_
 
     assert response.status_code == 402, \
         "🚨 Business failure must return 4xx (402 Payment Required), not 5xx or 200."
-    
+
     data = response.get_json()
     assert data['status'] == 'payment_failed'

@@ -14,33 +14,37 @@ Features:
 ============================================================
 """
 
-import os
-import time
 import json
+import os
 import random
+import time
 import uuid
+
 import requests
 from confluent_kafka import Producer as KafkaProducer
-from flask import Flask, jsonify, request as flask_request
-from shared.errors import problem_response, map_order_status_to_http
+from flask import Flask, jsonify
+from flask import request as flask_request
+
+# ----------------------------------------------------------
+# Auto-instrumentation imports
+# ----------------------------------------------------------
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.metrics import Observation
+from opentelemetry.propagate import inject
+from shared.db_utils import DatabasePool, RedisCache, retry_connect
+from shared.errors import map_order_status_to_http, problem_response
+from shared.health import create_health_blueprint
+
 # ----------------------------------------------------------
 # Shared modules
 # ----------------------------------------------------------
 from shared.logging_config import setup_logging
 from shared.otel_setup import init_otel
-from shared.db_utils import DatabasePool, RedisCache, retry_connect
-from shared.health import create_health_blueprint
+from shared.otel_watchdog import start_otel_watchdog  # add watchdog
 from shared.shutdown_handler import shutdown_manager
-from shared.otel_watchdog import start_otel_watchdog # add watchdog
-# ----------------------------------------------------------
-# Auto-instrumentation imports
-# ----------------------------------------------------------
-from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
-from opentelemetry.instrumentation.redis import RedisInstrumentor
-from opentelemetry.propagate import inject
-from opentelemetry.metrics import Observation
 
 # ----------------------------------------------------------
 # Initialize logging + OTel
@@ -51,8 +55,10 @@ tracer, meter = init_otel("order-service", "3.0.0")
 # Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
 # NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
 #       This module-level init is a fallback for development mode (python app.py).
-from shared.profiling_setup import init_profiling
 import sys
+
+from shared.profiling_setup import init_profiling
+
 if 'gunicorn' not in sys.modules:
     init_profiling("order-service", "3.0.0")
 
@@ -173,7 +179,7 @@ cache = RedisCache(REDIS_URL, ttl=60, cache_ops_counter=cache_ops_counter,
 # Schema Management Architecture Note:
 # ============================================================
 # Schema creation, migrations & seed data are 100% decoupled from app code.
-# DDL execution is managed exclusively by the Migration Plane 
+# DDL execution is managed exclusively by the Migration Plane
 # (Dedicated ECS Migration Task / init-app.sql).
 # Application runtime user operates under DML-only privileges (Least Privilege).
 
@@ -199,23 +205,23 @@ def get_kafka_producer():
                 "acks": "all",
                 "retries": 3,
                 "retry.backoff.ms": 100,
-                
+
                 # 🌟 FIX BOMB #2: Natural Batching Configuration
                 # Thay vì flush() sau mỗi request, để librdkafka tự batch:
-                
+
                 # linger.ms: Chờ tối đa 50ms để gom nhiều messages thành 1 batch
                 # Trade-off: 50ms latency thêm vs giảm network calls đáng kể
                 "linger.ms": 50,
-                
+
                 # batch.size: Kích thước batch tối đa (16KB)
                 # Khi batch đầy hoặc linger.ms hết giờ → gửi đi
                 "batch.size": 16384,
-                
+
                 # queue.buffering.max.messages: Buffer tối đa 100k messages
                 # Nếu buffer đầy → produce() sẽ block hoặc throw exception
                 # Đây là "Backpressure" mechanism của Kafka
                 "queue.buffering.max.messages": 100000,
-                
+
                 # compression.type: Nén batch để giảm network bandwidth
                 "compression.type": "lz4",
             })
@@ -228,7 +234,7 @@ def get_kafka_producer():
 
 def make_kafka_delivery_callback(event_type):
     """Factory returning a delivery callback with event_type in scope.
-    
+
     Confluent Kafka callback signature is (err, msg). We use a closure
     to capture event_type from the publish_event call site, since the
     Message object doesn't expose custom metadata.
@@ -298,7 +304,7 @@ def publish_event(event_type, order_id, data):
 def flush_kafka_on_shutdown():
     """
     Flush toàn bộ Kafka buffer khi process chuẩn bị tắt.
-    
+
     Timeout = 10s:
     - Đủ thời gian để gửi hết messages đang buffer
     - Nhỏ hơn ECS stopTimeout (60s) để tránh bị SIGKILL
@@ -327,7 +333,7 @@ shutdown_manager.register(
 def close_db_pool_on_shutdown():
     """
     Đóng TẤT CẢ PostgreSQL connections khi ECS Fargate gửi SIGTERM.
-    
+
     Tại sao PHẢI làm điều này?
     ─────────────────────────
     1. RDS db.t3.micro có max_connections ≈ 150 (hard limit)
@@ -336,7 +342,7 @@ def close_db_pool_on_shutdown():
     4. Task mới mở 10 connections mới → Ghost vẫn chiếm slots
     5. Sau ~15 lần deploy → "FATAL: sorry, too many clients already"
     6. Toàn bộ Order Service down → Cascading Failure
-    
+
     Cơ chế phòng vệ:
     ─────────────────
     - SIGTERM → shutdown_manager.exit_gracefully()
@@ -344,13 +350,13 @@ def close_db_pool_on_shutdown():
     - psycopg2 pool.closeall() gửi TCP FIN cho tất cả connections
     - PostgreSQL nhận FIN → giải phóng backend process
     - Slots được trả về pool → Task mới có thể connect
-    
+
     Order of cleanup:
     ─────────────────
     1. Kafka flush (10s) — push buffered messages
     2. PostgreSQL close (5s) — release connection slots
     3. Process exit (sys.exit(0))
-    
+
     Total: ~15s, NHỎ HƠN ECS stopTimeout (60s) → An toàn
     """
     if db and hasattr(db, '_pool') and db._pool is not None:
@@ -368,14 +374,14 @@ shutdown_manager.register(
 def close_redis_on_shutdown():
     """
     Đóng Redis connections khi process tắt.
-    
+
     Tại sao cần cho Order Service?
     ──────────────────────────────
     - Order Service dùng Redis làm cache cho product catalog
     - redis-py duy trì connection pool nội bộ
     - Nếu không close → ElastiCache giữ clients trong CLIENT LIST
     - Sau nhiều deploys → maxclients exhaustion
-    
+
     Trade-off:
     ─────────
     - Cache-aside pattern: Redis down = cache miss, không phải outage
