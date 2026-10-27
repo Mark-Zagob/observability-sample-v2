@@ -44,6 +44,9 @@ permissions:
 jobs:
   build-scan-push:
     runs-on: [vm-runner-001]
+    permissions:
+      contents: read      # Checkout repository
+      packages: write 
     timeout-minutes: 15  # 🛡️ Production: Bounded execution, tránh runner hang vô hạn
 
     outputs:
@@ -84,7 +87,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GH_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # -------------------------------------------------------
       # 4. Build Docker image (with BuildKit for better caching)
