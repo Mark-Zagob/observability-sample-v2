@@ -272,15 +272,10 @@ def charge():
             logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Circuit Breaker OPEN")
-<<<<<<< HEAD
-            return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
 
-=======
             return problem_response(
                 503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge"
             )
-            
->>>>>>> c0d71f8959faa7f3bd9230c998c9c4d93075b8e9
         except Exception as e:
             duration = time.time() - start_time
             gateway_duration.record(duration, {"provider": provider})
