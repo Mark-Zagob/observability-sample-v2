@@ -298,7 +298,9 @@ def test_payment_timeout_must_return_502_bad_gateway(
 @patch('app.requests.post')
 @patch('app.db.execute')
 @patch('app.cache.get')
-def test_payment_rejected_must_return_402_payment_required(mock_cache_get, mock_db_execute, mock_requests_post, plain_client):
+def test_payment_rejected_must_return_402_payment_required(
+    mock_cache_get, mock_db_execute, mock_requests_post, plain_client
+):
     """
     [Business Failure] Khi Payment Gateway từ chối giao dịch (business failure),
     Order Service PHẢI trả về 402 Payment Required.
