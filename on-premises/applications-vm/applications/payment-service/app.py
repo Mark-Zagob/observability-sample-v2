@@ -57,7 +57,9 @@ RequestsInstrumentor().instrument()
 # ============================================================
 payments_counter = meter.create_counter(name="payments_total", description="Total payment transactions", unit="1")
 payment_amount = meter.create_histogram(name="payment_amount_dollars", description="Payment amount", unit="$")
-gateway_duration = meter.create_histogram(name="payment_gateway_duration_seconds", description="Gateway latency", unit="s")
+gateway_duration = meter.create_histogram(
+    name="payment_gateway_duration_seconds", description="Gateway latency", unit="s"
+)
 
 ENABLE_CIRCUIT_BREAKER_METRICS = os.getenv("ENABLE_CIRCUIT_BREAKER_METRICS", "true").lower() == "true"
 
@@ -270,8 +272,15 @@ def charge():
             logger.error("Circuit Breaker OPEN", extra={"order_id": order_id})
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Circuit Breaker OPEN")
+<<<<<<< HEAD
             return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
 
+=======
+            return problem_response(
+                503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge"
+            )
+            
+>>>>>>> c0d71f8959faa7f3bd9230c998c9c4d93075b8e9
         except Exception as e:
             duration = time.time() - start_time
             gateway_duration.record(duration, {"provider": provider})

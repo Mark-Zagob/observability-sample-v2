@@ -237,8 +237,10 @@ def consume_loop():
                 if msg.value() is None:
                     logger.debug("Tombstone message received, committing and skipping.",
                                  extra={"partition": msg.partition(), "offset": msg.offset()})
-                    try: consumer.commit(asynchronous=False)
-                    except Exception: pass
+                    try:
+                        consumer.commit(asynchronous=False)
+                    except Exception:
+                        pass
                     continue
 
                 try:
@@ -254,8 +256,10 @@ def consume_loop():
                             "raw_value": str(msg.value())[:100]
                         }
                     )
-                    try: consumer.commit(asynchronous=False)
-                    except Exception: pass
+                    try:
+                        consumer.commit(asynchronous=False)
+                    except Exception:
+                        pass
                     continue
 
                 event_id = event.get("event_id", "unknown")
@@ -289,8 +293,10 @@ def consume_loop():
                             notifications_skipped_counter.add(1, {"reason": "duplicate", "event_type": event_type})
                             consumer_stats["skipped"] += 1
                             # Vẫn phải commit để advance offset
-                            try: consumer.commit(asynchronous=False)
-                            except Exception: pass
+                            try:
+                                consumer.commit(asynchronous=False)
+                            except Exception:
+                                pass
                             continue
 
                         # Process notification
@@ -303,7 +309,9 @@ def consume_loop():
                                     "event_type": event_type,
                                 })
                             else:
-                                notifications_skipped_counter.add(1, {"reason": "no_template", "event_type": event_type})
+                                notifications_skipped_counter.add(
+                                    1, {"reason": "no_template", "event_type": event_type}
+                                )
 
                         # Mark as processed
                         mark_event_processed(event_id, event_type)
