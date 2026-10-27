@@ -114,7 +114,7 @@ jobs:
             --label "org.opencontainers.image.title=${{ inputs.service }}" \
             --label "org.opencontainers.image.version=${{ inputs.image_tag }}" \
             -f ${{ inputs.context }}/Dockerfile \
-            ${{ inputs.context }}
+            "$(dirname "${{ inputs.context }}")"
 
           BUILD_END=$(date +%s)
           BUILD_DURATION=$((BUILD_END - BUILD_START))
