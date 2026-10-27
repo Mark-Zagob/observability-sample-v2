@@ -33,7 +33,10 @@ def start_otel_watchdog(interval=30, max_failures=3):
                 logger.warning(f"[Watchdog] ADOT sidecar health check failed ({failures}/{max_failures}): {e}")
                 
                 if failures >= max_failures:
-                    logger.critical("[Watchdog] ADOT sidecar is permanently dead. Committing seppuku to force ECS Task restart.")
+                    logger.critical(
+                        "[Watchdog] ADOT sidecar is permanently dead. "
+                        "Committing seppuku to force ECS Task restart."
+                    )
                     # os._exit(1) bypass Python cleanup, ensures ECS Agent sees exit code 1 and restarts the whole Task.
                     os._exit(1)
 
