@@ -95,8 +95,8 @@ jobs:
         if: steps.detect-lang.outputs.is_python == 'true'
         run: |
           pip install --quiet \
-            ruff==0.8.6 \
-            bandit==1.8.0
+            ruff==0.15.6 \
+            bandit==1.9.4
 
       # -------------------------------------------------------
       # 6. Ruff — Python linting (PEP8, import sort, etc.)
