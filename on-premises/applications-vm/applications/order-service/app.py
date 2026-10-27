@@ -30,7 +30,6 @@ from shared.logging_config import setup_logging
 from shared.otel_setup import init_otel
 from shared.db_utils import DatabasePool, RedisCache, retry_connect
 from shared.health import create_health_blueprint
-from shared.errors import problem_response
 from shared.shutdown_handler import shutdown_manager
 from shared.otel_watchdog import start_otel_watchdog # add watchdog
 # ----------------------------------------------------------
