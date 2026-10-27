@@ -11,6 +11,7 @@ Usage:
     app.register_blueprint(health_bp)
 """
 import time
+
 from flask import Blueprint, jsonify
 
 

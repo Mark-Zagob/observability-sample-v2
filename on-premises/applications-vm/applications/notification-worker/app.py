@@ -18,25 +18,16 @@ Features:
 ============================================================
 """
 
-import os
-import time
+import atexit
 import json
+import os
 import signal
 import threading
-import atexit
+import time
 
 # 🛡️ FIX: Import thêm KafkaException để bắt lỗi khi commit thủ công
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from flask import Flask, jsonify
-
-# ----------------------------------------------------------
-# Shared modules
-# ----------------------------------------------------------
-from shared.logging_config import setup_logging
-from shared.otel_setup import init_otel
-from shared.db_utils import DatabasePool
-from shared.kafka_utils import extract_trace_context
-from shared.health import create_health_blueprint
 
 # ----------------------------------------------------------
 # Auto-instrumentation imports
@@ -44,6 +35,15 @@ from shared.health import create_health_blueprint
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+from shared.db_utils import DatabasePool
+from shared.health import create_health_blueprint
+from shared.kafka_utils import extract_trace_context
+
+# ----------------------------------------------------------
+# Shared modules
+# ----------------------------------------------------------
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
 
 # ----------------------------------------------------------
 # Initialize logging + OTel
@@ -54,8 +54,10 @@ tracer, meter = init_otel("notification-worker", "1.0.0")
 # Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
 # NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
 #       This module-level init is a fallback for development mode (python app.py).
-from shared.profiling_setup import init_profiling
 import sys
+
+from shared.profiling_setup import init_profiling
+
 if 'gunicorn' not in sys.modules:
     init_profiling("notification-worker", "1.0.0")
 
@@ -203,15 +205,15 @@ def consume_loop():
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": KAFKA_GROUP,
         "auto.offset.reset": "earliest",
-        
+
         # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU
-        "enable.auto.commit": False,  
-        
+        "enable.auto.commit": False,
+
         # ⚙️ Tối ưu cho Manual Commit & Stability
         "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
         "heartbeat.interval.ms": 15000, # Bắt buộc < 1/3 session.timeout.ms
         "max.poll.interval.ms": 300000, # 5 phút: Max time để xử lý 1 msg trước khi bị kick khỏi group
-        
+
         "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
     })
     consumer.subscribe([KAFKA_TOPIC])
@@ -233,7 +235,7 @@ def consume_loop():
             try:
                 # 🛡️ FIX #2: HANDLE TOMBSTONES & POISON PILLS (Message độc hại)
                 if msg.value() is None:
-                    logger.debug("Tombstone message received, committing and skipping.", 
+                    logger.debug("Tombstone message received, committing and skipping.",
                                  extra={"partition": msg.partition(), "offset": msg.offset()})
                     try: consumer.commit(asynchronous=False)
                     except Exception: pass
@@ -247,8 +249,8 @@ def consume_loop():
                         "Poison Pill detected: Invalid message format. Committing offset to skip.",
                         extra={
                             "error": str(decode_err),
-                            "partition": msg.partition(), 
-                            "offset": msg.offset(), 
+                            "partition": msg.partition(),
+                            "offset": msg.offset(),
                             "raw_value": str(msg.value())[:100]
                         }
                     )
@@ -315,8 +317,8 @@ def consume_loop():
                             logger.error(
                                 "Failed to commit offset. Message will be re-processed.",
                                 extra={
-                                    "error": str(commit_err), 
-                                    "partition": msg.partition(), 
+                                    "error": str(commit_err),
+                                    "partition": msg.partition(),
                                     "offset": msg.offset()
                                 }
                             )

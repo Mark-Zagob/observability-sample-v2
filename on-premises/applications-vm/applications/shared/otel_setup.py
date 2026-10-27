@@ -4,18 +4,18 @@ Initializes tracing, metrics, and common auto-instrumentation.
 """
 import os
 
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View   # ← THÊM DÒNG NÀY
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from opentelemetry.propagate import set_global_textmap
 from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View  # ← THÊM DÒNG NÀY
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 # ============================================================
@@ -61,7 +61,7 @@ def init_otel(service_name, service_version="1.0.0"):
     """
     # 👇 FIX Q1: Parse endpoint an toàn cho cả gRPC và HTTP
     raw_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
-    
+
     # OTLP gRPC Exporter của Python KHÔNG chấp nhận prefix http:// hoặc https://
     # Nó chỉ chấp nhận format: "host:port"
     if raw_endpoint.startswith("http://"):
@@ -75,7 +75,7 @@ def init_otel(service_name, service_version="1.0.0"):
         "service.name": service_name,
         "service.version": service_version,
         # 👇 Thêm Cloud Attribute để X-Ray / AMP nhận diện đây là task chạy trên ECS
-        "cloud.platform": "aws_ecs_fargate" 
+        "cloud.platform": "aws_ecs_fargate"
     })
 
     # --- Tracing ---

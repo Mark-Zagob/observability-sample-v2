@@ -14,24 +14,26 @@ Endpoints:
 """
 
 import os
-import time
 import random
+import time
+
+import pybreaker
 import redis
 import requests
-import pybreaker
 from flask import Flask, jsonify, request
+
+# Auto-instrumentation
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from shared.errors import problem_response
+from shared.health import create_health_blueprint
+from shared.idempotency import IdempotencyGuard
 
 # Shared modules
 from shared.logging_config import setup_logging
 from shared.otel_setup import init_otel
-from shared.health import create_health_blueprint
-from shared.errors import problem_response
+from shared.otel_watchdog import start_otel_watchdog  # add watchdog
 from shared.shutdown_handler import shutdown_manager
-from shared.idempotency import IdempotencyGuard
-from shared.otel_watchdog import start_otel_watchdog # add watchdog
-# Auto-instrumentation
-from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
 # Initialize logging + OTel
 logger = setup_logging("payment-service")
@@ -40,8 +42,10 @@ tracer, meter = init_otel("payment-service", "2.0.0")
 # Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
 # NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
 #       This module-level init is a fallback for development mode (python app.py).
-from shared.profiling_setup import init_profiling
 import sys
+
+from shared.profiling_setup import init_profiling
+
 if 'gunicorn' not in sys.modules:
     init_profiling("payment-service", "2.0.0")
 
@@ -101,7 +105,7 @@ shutdown_manager.register(
 # ============================================================
 # Mở circuit nếu có 3 lỗi liên tiếp, đóng lại sau 30s
 payment_breaker = pybreaker.CircuitBreaker(
-    fail_max=3, 
+    fail_max=3,
     reset_timeout=30,
     name="payment_gateway_breaker"
 )
@@ -173,7 +177,7 @@ def redis_health_check():
         return redis_client.ping()
     except Exception as e:
         logger.warning(f"Redis is unavailable: {e}. Degrading gracefully (Idempotency disabled).")
-        return True 
+        return True
 
 _health_checks = {"redis": redis_health_check} if redis_client else {}
 health_bp = create_health_blueprint("payment-service", checks=_health_checks)
@@ -202,11 +206,11 @@ def charge():
     # ────────────────────────────────────────────────────────────
     if idempotency_guard:
         status = idempotency_guard.acquire(order_id)
-        
+
         if status == "blocked":
             # Request trùng lặp! Kiểm tra cached result
             cached_result = idempotency_guard.get_cached_result(order_id)
-            
+
             if cached_result:
                 # Transaction đã success trước đó → trả về cached result
                 logger.warning(
@@ -227,7 +231,7 @@ def charge():
                     "order_id": order_id,
                     "retry_after_seconds": 60
                 }), 409
-    
+
     # ────────────────────────────────────────────────────────────
     # BƯỚC 2: TRACE & GATEWAY CALL
     # ────────────────────────────────────────────────────────────
@@ -235,19 +239,19 @@ def charge():
         span.set_attribute("app.order_id", order_id)
         span.set_attribute("app.provider", provider)
         span.set_attribute("payment.amount", amount)
-        
+
         delay = random.uniform(0.5, 1.5)
         is_slow = random.random() < SLOW_RATE
         if is_slow:
             delay = random.uniform(3.0, 6.0)
             span.set_attribute("app.slow", True)
-        
+
         start_time = time.time()
-        
+
         try:
             # Gọi qua Circuit Breaker (with state tracking)
             call_external_gateway_with_tracking(provider, delay)
-                
+
         except requests.exceptions.Timeout:
             duration = time.time() - start_time
             gateway_duration.record(duration, {"provider": provider})
@@ -258,7 +262,7 @@ def charge():
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Gateway Timeout")
             return problem_response(504, "Gateway Timeout", "Payment gateway took too long", instance="/charge")
-            
+
         except pybreaker.CircuitBreakerError:
             payments_counter.add(1, {
                 "status": "failed", "provider": provider, "reason": "circuit_open"
@@ -267,7 +271,7 @@ def charge():
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, "Circuit Breaker OPEN")
             return problem_response(503, "Service Unavailable", "Payment gateway is down (Circuit Open)", instance="/charge")
-            
+
         except Exception as e:
             duration = time.time() - start_time
             gateway_duration.record(duration, {"provider": provider})
@@ -278,19 +282,19 @@ def charge():
             if idempotency_guard:
                 idempotency_guard.mark_failed(order_id, str(e))
             return problem_response(500, "Payment Error", str(e), instance="/charge")
-        
+
         duration = time.time() - start_time
         gateway_duration.record(duration, {"provider": provider})
-        
+
         # ────────────────────────────────────────────────────────────
         # BƯỚC 3: SUCCESS — Mark và cache result
         # ────────────────────────────────────────────────────────────
         txn_id = f"txn-{random.randint(10000, 99999)}"
         span.set_attribute("app.transaction_id", txn_id)
-        
+
         payments_counter.add(1, {"status": "success", "provider": provider})
         payment_amount.record(amount, {"status": "success", "provider": provider})
-        
+
         # 🆕 Build result dict
         result = {
             "status": "success",
@@ -299,11 +303,11 @@ def charge():
             "provider": provider,
             "amount": amount,
         }
-        
+
         # 🆕 Mark as success với TTL 24h
         if idempotency_guard:
             idempotency_guard.mark_success(order_id, result)
-        
+
         return jsonify(result)
 
 if __name__ == "__main__":
@@ -320,7 +324,7 @@ if __name__ == "__main__":
             daemon=True,
             name="circuit-breaker-metrics"
         ).start()
-    
+
     # Chỉ chạy watchdog khi app thực sự chạy (tránh chạy 2 lần do Flask reloader)
     start_otel_watchdog(interval=30, max_failures=3)
     app.run(host="0.0.0.0", port=5002)

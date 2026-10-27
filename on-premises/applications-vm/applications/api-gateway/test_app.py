@@ -9,9 +9,9 @@ Chạy: pytest test_app.py -v
 ============================================================
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ============================================================
 # Fixture: Flask test client
@@ -31,6 +31,7 @@ def client():
 
         # Import app SAU KHI mock — tránh connect tới otel-collector
         import importlib
+
         import app as app_module
         importlib.reload(app_module)
 

@@ -1,9 +1,9 @@
 """
 Database utilities — shared across services that use PostgreSQL/Redis.
 """
-import time
 import json
 import logging
+import time
 
 # psycopg2 and redis are imported lazily inside their respective classes
 # so services that don't need them won't crash on import.
@@ -103,10 +103,10 @@ class DatabasePool:
         self._params['keepalives_idle'] = 60        # 60s before first probe
         self._params['keepalives_interval'] = 15    # 15s between probes
         self._params['keepalives_count'] = 3        # 3 failed probes → close
-        
+
         # 🆕 Connection timeout: Fail-fast nếu PostgreSQL không respond
         self._params['connect_timeout'] = 5         # 5s timeout khi connect
-        
+
         # 🆕 Statement timeout: Prevent runaway queries
         # Nếu query chạy > 30s → PostgreSQL tự kill query (không phải connection)
         # Phòng vệ chống lại "Connection Thrashing" khi có slow query
@@ -131,12 +131,12 @@ class DatabasePool:
     def execute(self, query, params=None, fetch=True):
         """Execute a query, return rows (fetch=True) or rowcount (fetch=False)."""
         pool = self._get_pool()
-        
+
         # --- BẮT ĐẦU ĐO THỜI GIAN CHỜ (QUEUE WAIT TIME) ---
         wait_start = time.time()
         conn = pool.getconn() # Nếu pool đầy (10/10), thread sẽ bị block (chờ) ở đây
         wait_duration = time.time() - wait_start
-        
+
         if self._pool_wait_histogram:
             self._pool_wait_histogram.record(wait_duration, {"operation": "getconn"})
         # --- KẾT THÚC ĐO THỜI GIAN CHỜ ---
@@ -189,18 +189,18 @@ class DatabasePool:
     def close_pool(self):
         """
         🛡️ BOMB #3 FIX: Đóng TẤT CẢ connections trong pool.
-        
+
         Khi nào cần gọi?
         - Khi process nhận SIGTERM (trước khi exit)
         - Khi test teardown
         - Khi tái sử dụng pool object
-        
+
         Tại sao phải gọi tường minh?
         - Python interpreter KHÔNG đảm bảo gọi __del__ khi exit
         - psycopg2 ThreadedConnectionPool KHÔNG auto-close khi process chết
         - Nếu không gọi, PostgreSQL giữ connections ở 'idle' state (Ghost Connections)
         - RDS max_connections sẽ bị exhaust sau vài lần Rolling Update
-        
+
         Cơ chế:
         - closeall() gửi TCP FIN cho tất cả connections
         - PostgreSQL nhận ra client disconnect → giải phóng backend process
@@ -304,13 +304,13 @@ class RedisCache:
     def close(self):
         """
         🛡️ BOMB #3 FIX: Đóng Redis connection pool.
-        
+
         Tại sao cần?
         - redis-py duy trì connection pool nội bộ (mặc định 2^31 connections)
         - Khi process exit, pool KHÔNG tự đóng → Redis giữ clients trong CLIENT LIST
         - Redis maxclients (mặc định 10000) sẽ bị exhaust sau nhiều deploys
         - ElastiCache có thể tính phí cho idle connections
-        
+
         Cơ chế:
         - redis.close() đóng tất cả connections trong pool
         - Gửi QUIT command tới Redis server

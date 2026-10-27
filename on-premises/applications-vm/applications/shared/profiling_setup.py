@@ -37,7 +37,6 @@ Reference:
 """
 
 import os
-import sys
 
 # ============================================================
 # Pyroscope SDK Import with Graceful Degradation
@@ -86,8 +85,8 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
     # SDK Availability Check
     # ============================================================
     if not PYROSCOPE_AVAILABLE:
-        print(f"⚠️  Pyroscope SDK not installed. Profiling disabled.")
-        print(f"   Install with: pip install pyroscope-io")
+        print("⚠️  Pyroscope SDK not installed. Profiling disabled.")
+        print("   Install with: pip install pyroscope-io")
         return None
 
     # ============================================================
@@ -142,9 +141,9 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
         print(f"✅ Profiling enabled for {service_name}")
         print(f"   Pyroscope URL: {pyroscope_url}")
         print(f"   Sample Rate: {sample_rate} Hz")
-        print(f"   CPU Profiling: enabled")
+        print("   CPU Profiling: enabled")
         print(f"   Memory Profiling: {'enabled' if enable_memory else 'disabled'}")
-        print(f"   GIL-only: True (detect GIL contention)")
+        print("   GIL-only: True (detect GIL contention)")
         return pyroscope
 
     except Exception as e:
@@ -158,7 +157,7 @@ def init_profiling(service_name: str, service_version: str = "1.0.0"):
         # failures. Better to have no profiling than a crashed service.
         # ============================================================
         print(f"⚠️  Failed to initialize Pyroscope: {e}")
-        print(f"   Service will continue without profiling.")
+        print("   Service will continue without profiling.")
         return None
 
 

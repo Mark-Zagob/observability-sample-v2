@@ -51,7 +51,7 @@ def map_order_status_to_http(order_status: str) -> int:
     """
     [Platform Guardrail] Maps internal business order status to standard HTTP status codes.
     Prevents the 'HTTP 200 Trap' where business/infra failures incorrectly return 200 OK.
-    
+
     - 200: Success
     - 402: Payment Required (Business failure, e.g., gateway rejected card)
     - 409: Conflict (Business state, e.g., out of stock)

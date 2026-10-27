@@ -2,6 +2,7 @@
 Structured JSON logging setup — shared across all services.
 """
 import logging
+
 from pythonjsonlogger import json as json_logger
 
 

@@ -15,24 +15,26 @@ Endpoints:
 """
 
 import os
-import time
 import random
-import requests
-from flask import Flask, jsonify, request as flask_request
+import time
 
-# ----------------------------------------------------------
-# Shared modules
-# ----------------------------------------------------------
-from shared.logging_config import setup_logging
-from shared.otel_setup import init_otel
-from shared.health import create_health_blueprint
-from shared.errors import problem_response
+import requests
+from flask import Flask, jsonify
+from flask import request as flask_request
 
 # ----------------------------------------------------------
 # Auto-instrumentation imports
 # ----------------------------------------------------------
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from shared.errors import problem_response
+from shared.health import create_health_blueprint
+
+# ----------------------------------------------------------
+# Shared modules
+# ----------------------------------------------------------
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
 
 # ----------------------------------------------------------
 # Initialize logging + OTel
@@ -43,8 +45,10 @@ tracer, meter = init_otel("api-gateway", "3.0.0")
 # Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
 # NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
 #       This module-level init is a fallback for development mode (python app.py).
-from shared.profiling_setup import init_profiling
 import sys
+
+from shared.profiling_setup import init_profiling
+
 if 'gunicorn' not in sys.modules:
     init_profiling("api-gateway", "3.0.0")
 
@@ -73,15 +77,15 @@ RequestsInstrumentor().instrument()
 @app.before_request
 def tag_traffic_source():
     """Phân biệt synthetic traffic vs organic traffic.
-    
+
     Synthetic = Blackbox Exporter probes, Traffic Generator load tests
     Organic   = Real users từ browser/mobile
-    
+
     Label này giúp SRE exclude synthetic traffic khỏi SLO calculation,
     tránh phantom alerts và capacity planning sai lệch.
     """
     user_agent = flask_request.headers.get("User-Agent", "").lower()
-    
+
     if "blackbox" in user_agent or "prometheus" in user_agent:
         # Blackbox Exporter health probes
         source = "synthetic_probe"
@@ -92,7 +96,7 @@ def tag_traffic_source():
         source = "browser"
     else:
         source = "unknown"
-    
+
     flask_request.environ["traffic_source"] = source
 
 ORDER_SERVICE = os.getenv("ORDER_SERVICE_URL", "http://order-service:5001")

@@ -17,12 +17,13 @@ Features:
 ============================================================
 """
 
-import os
-import time
+import atexit
 import json
+import os
 import signal
 import threading
-import atexit
+import time
+
 import psycopg2.extras
 
 # 🛡️ FIX: Import thêm KafkaException để xử lý lỗi khi manual commit fail
@@ -30,20 +31,20 @@ from confluent_kafka import Consumer, KafkaError, KafkaException
 from flask import Flask, jsonify
 
 # ----------------------------------------------------------
-# Shared modules
-# ----------------------------------------------------------
-from shared.logging_config import setup_logging
-from shared.otel_setup import init_otel
-from shared.db_utils import DatabasePool
-from shared.kafka_utils import extract_trace_context
-from shared.health import create_health_blueprint
-
-# ----------------------------------------------------------
 # Auto-instrumentation imports
 # ----------------------------------------------------------
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+from shared.db_utils import DatabasePool
+from shared.health import create_health_blueprint
+from shared.kafka_utils import extract_trace_context
+
+# ----------------------------------------------------------
+# Shared modules
+# ----------------------------------------------------------
+from shared.logging_config import setup_logging
+from shared.otel_setup import init_otel
 
 # ----------------------------------------------------------
 # Initialize logging + OTel
@@ -54,8 +55,10 @@ tracer, meter = init_otel("inventory-worker", "1.0.0")
 # Phase 4.5: Continuous Profiling (after OTel init so resource attributes are set)
 # NOTE: In production (gunicorn), profiling is initialized in post_worker_init.
 #       This module-level init is a fallback for development mode (python app.py).
-from shared.profiling_setup import init_profiling
 import sys
+
+from shared.profiling_setup import init_profiling
+
 if 'gunicorn' not in sys.modules:
     init_profiling("inventory-worker", "1.0.0")
 
@@ -137,7 +140,7 @@ def restock_product(product_id, current_stock):
         span.set_attribute("product.id", product_id)
         span.set_attribute("stock.current", current_stock)
         span.set_attribute("stock.restock_amount", RESTOCK_AMOUNT)
-        
+
         conn = db.get_conn()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -329,16 +332,16 @@ def consume_loop():
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": KAFKA_GROUP,
         "auto.offset.reset": "earliest",
-        
+
         # 🛡️ FIX #1: TẮT AUTO-COMMIT ĐỂ TRÁNH MẤT DỮ LIỆU (THE SILENT DROP TRAP)
-        "enable.auto.commit": False,  
-        
+        "enable.auto.commit": False,
+
         # ⚙️ Tối ưu cho Manual Commit & Rebalance
         "session.timeout.ms": int(os.getenv("KAFKA_SESSION_TIMEOUT", "45000")),
         "heartbeat.interval.ms": 10000, # Phải < 1/3 session.timeout.ms
         "max.poll.interval.ms": 300000, # 5 phút
-        
-        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range") 
+
+        "partition.assignment.strategy": os.getenv("KAFKA_ASSIGNMENT_STRATEGY", "range")
     })
     consumer.subscribe([KAFKA_TOPIC])
 
@@ -398,7 +401,7 @@ def consume_loop():
                             logger.info("Duplicate event skipped",
                                         extra={"event_id": event_id, "event_type": event_type})
                             consumer_stats["skipped"] += 1
-                            
+
                             # 🛡️ FIX: Vẫn phải commit offset nếu là duplicate
                             try:
                                 consumer.commit(asynchronous=False)

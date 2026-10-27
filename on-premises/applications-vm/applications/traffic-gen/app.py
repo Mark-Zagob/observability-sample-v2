@@ -13,17 +13,19 @@ Endpoints:
 ============================================================
 """
 
-import time
 import random
-import json
 import threading
+import time
+
 import requests
-from flask import Flask, jsonify, request as flask_request
+from flask import Flask, jsonify
+from flask import request as flask_request
 
 app = Flask(__name__)
 
 # Phase 4.5: Continuous Profiling (traffic-gen doesn't use OTel, so init profiling directly)
 from shared.profiling_setup import init_profiling
+
 init_profiling("traffic-gen", "1.0.0")
 
 API_GATEWAY = "http://api-gateway:5000"
@@ -266,7 +268,7 @@ def metrics():
     """Prometheus metrics endpoint."""
     with lock:
         running = 1 if state["running"] else 0
-        total = state["stats"]["total"]
+        state["stats"]["total"]
         success = state["stats"]["success"]
         errors = state["stats"]["errors"]
 
