@@ -106,17 +106,16 @@ jobs:
         if: steps.detect-lang.outputs.is_python == 'true'
         run: |
           echo "🔍 Running Ruff on ${{ inputs.context }}..."
-          ruff check ${{ inputs.context }} \
-            --select=E,W,F,I \
-            --output-format=github
-        # E=pycodestyle errors, W=warnings, F=pyflakes, I=isort
+          # 🛡️ Production: Config file (ruff.toml at repo root) is authoritative.
+          # Do NOT override with --select to ensure local/CI parity.
+          ruff check ${{ inputs.context }} --output-format=github
 
       # -------------------------------------------------------
       # 7. Bandit — Python security scan (SAST)
       # -------------------------------------------------------
       - name: Bandit — Security scan (SAST)
         id: bandit
-        if: steps.detect-lang.outputs.is_python == 'true'
+        if: always() && steps.detect-lang.outputs.is_python == 'true'
         run: |
           echo "🛡️  Running Bandit on ${{ inputs.context }}..."
           bandit -r ${{ inputs.context }} \
@@ -275,5 +274,5 @@ jobs:
             echo "| Bandit (SAST) | ${bandit_status} |"
             echo "| Pytest (Unit tests) | ${pytest_status} |"
             echo ""
-            echo "**Pinned versions:** ruff==0.8.6, bandit==1.8.0, pytest==8.3.4"
+            echo "**Pinned versions:** ruff==0.15.6, bandit==1.9.4, pytest==8.3.4"
           } >> $GITHUB_STEP_SUMMARY

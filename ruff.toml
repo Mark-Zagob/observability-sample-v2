@@ -1,0 +1,26 @@
+# ============================================================
+# Ruff Configuration — Single Source of Truth
+# ============================================================
+# This file is the authoritative config for Ruff.
+# CI workflow will NOT override with --select flags.
+# Local and CI will use the same config → parity guaranteed.
+# ============================================================
+
+line-length = 120  # 🛡️ Production: Pragmatic length, reduces E501 noise
+target-version = "py312"
+
+[lint]
+select = ["E", "W", "F", "I"]
+# E=pycodestyle errors, W=warnings, F=pyflakes, I=isort
+
+# Baseline ignores — RATCHET DOWN over time (see Phase 3)
+ignore = [
+    # "E501",  # Line too long — enabled by default, but line-length=120 handles most
+]
+
+[lint.per-file-ignores]
+# 🛡️ SRE Pattern: E402 is a false positive in observability-instrumented apps.
+# OTel/logging MUST be initialized before some imports to ensure instrumentation.
+# This is a legitimate pattern in OTel-instrumented services.
+"**/applications/*/app.py" = ["E402"]
+"**/applications/*/test_app.py" = ["E402"]

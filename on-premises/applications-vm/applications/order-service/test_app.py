@@ -266,7 +266,9 @@ def plain_client():
 @patch('app.requests.post')
 @patch('app.db.execute')
 @patch('app.cache.get')
-def test_payment_timeout_must_return_502_bad_gateway(mock_cache_get, mock_db_execute, mock_requests_post, plain_client):
+def test_payment_timeout_must_return_502_bad_gateway(
+    mock_cache_get, mock_db_execute, mock_requests_post, plain_client
+):
     """
     [Infra Failure] Khi Payment Service timeout (infra failure), 
     Order Service PHẢI trả về 502 Bad Gateway, TUYỆT ĐỐI KHÔNG ĐƯỢC là 200 OK.
