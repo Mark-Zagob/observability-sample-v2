@@ -325,7 +325,7 @@ jobs:
   ci-gate:
     name: CI Gate
     needs: [prepare, detect-changes, lint-test, build-push, artifact-contract]
-    if: always()
+    if: ${{ always() && !cancelled() }}
     runs-on: [vm-runner-001]
     steps:
       - name: Evaluate results
