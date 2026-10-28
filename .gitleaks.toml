@@ -11,6 +11,16 @@
 title = "Gitleaks Configuration for Reliability Lab"
 
 # -------------------------------------------------------
+# Extend — CRITICAL: keep the default 800+ rules
+# -------------------------------------------------------
+# Without this, defining ANY custom [[rules]] REPLACES the whole
+# default ruleset → you would scan with your custom rules only.
+# This is the #1 Gitleaks configuration mistake.
+# -------------------------------------------------------
+[extend]
+useDefault = true
+
+# -------------------------------------------------------
 # Allowlist — files/paths to EXCLUDE from scanning
 # -------------------------------------------------------
 # Anchor: Allowlist — Danh sách ngoại lệ, quan trọng để tránh noise.
@@ -61,39 +71,64 @@ paths = [
 ]
 
 # -------------------------------------------------------
-# Rule-specific allowlists
+# Stopwords — global false-positive reduction
 # -------------------------------------------------------
-# For specific rules that produce false positives in our codebase,
-# add regex patterns to allowlist them.
-
-# Example: If Gitleaks flags example API keys in docs
-[[rules]]
-id = "generic-api-key"
-[rules.allowlist]
-commits = []
-regexes = [
-  '''example[_-]?(key|token|secret|password)''',
-  '''placeholder[_-]?(key|token|secret)''',
-  '''test[_-]?(key|token|secret|password)''',
-  '''dummy[_-]?(key|token|secret)''',
-  '''sample[_-]?(key|token|secret)''',
-]
-paths = [
-  '''\.md$''',
-  '''docs/''',
-  '''examples/''',
-]
-
-# -------------------------------------------------------
-# Disable overly noisy rules (if needed)
-# -------------------------------------------------------
-# Uncomment if specific rules produce too many false positives:
+# WHY NOT a rule-specific allowlist ([[rules]] id = "generic-api-key")?
 #
-# [[rules]]
-# id = "aws-access-token"
-# description = "Disable AWS token detection (false positive heavy)"
-# regex = '''(?:^|[\\s\\-])((?:A3T8|AKIA)[A-Z0-9]{16})(?:$|[\\s\-.])'''
-# [rules.allowlist]
-# commits = []
-# paths = []
-# regexes = [".*"]  # Allow all matches
+# To override a built-in rule you must re-declare its FULL definition
+# including `regex`. A [[rules]] block containing ONLY an allowlist has
+# no regex/path → Gitleaks FATAL on config load:
+#
+#   "generic-api-key: both |regex| and |path| are empty,
+#    this rule will have no effect"
+#
+# ← That is exactly the bug that broke our first run.
+#
+# Global stopwords/regexes deliver the same noise reduction with zero
+# risk of clobbering a default rule.
+# -------------------------------------------------------
+stopwords = [
+  'example',
+  'placeholder',
+  'dummy',
+  'sample',
+  'changeme',
+  'your-',
+  'your_',
+  'xxxxxx',
+  '******',
+  '${',
+  '{{',
+  'REPLACE_ME',
+  'TODO',
+]
+
+# -------------------------------------------------------
+# Global regex allowlist — anchored to the SECRET value
+# -------------------------------------------------------
+# Default regexTarget = "secret" → the regex is tested against the
+# detected credential, NOT the whole line. Anchoring with ^ keeps this
+# tight so it cannot mask a real leak.
+#
+# If false positives persist in documentation you MAY widen scope:
+#   regexTarget = "line"
+# ⚠️ Trade-off: "line" can hide a genuine secret that happens to sit on
+#    a line containing the word "example". Prefer path-scoping instead.
+# -------------------------------------------------------
+regexes = [
+  '''(?i)^(example|placeholder|dummy|sample|test|changeme|fake|mock|notreal|nope)''',
+  '''(?i)^(your|my|the|xxx|abc|foo|bar)''',
+  '''(?i)^[<>{}]''',
+]
+
+# -------------------------------------------------------
+# Silencing a specific built-in rule (only if it becomes noisy)
+# -------------------------------------------------------
+# Do NOT redefine the rule. Scope it away by PATH instead:
+#
+#   [allowlist]
+#   paths = [ '''tests/fixtures/.*''' ]
+#
+# ⚠️ NEVER blanket-disable high-value rules:
+#    aws-access-token, github-pat, private-key, generic-api-key.
+#    Disabling them is precisely how leaks ship to production.
