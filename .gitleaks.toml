@@ -1,0 +1,99 @@
+# ============================================================
+# Gitleaks Configuration
+# ============================================================
+# Purpose: Custom rules + allowlist to reduce false positives
+# Documentation: https://github.com/gitleaks/gitleaks#configuration
+#
+# SRE CONCEPT: Tuning detective controls to reduce alert fatigue.
+# False positives erode trust in security tooling.
+# ============================================================
+
+title = "Gitleaks Configuration for Reliability Lab"
+
+# -------------------------------------------------------
+# Allowlist — files/paths to EXCLUDE from scanning
+# -------------------------------------------------------
+# Anchor: Allowlist — Danh sách ngoại lệ, quan trọng để tránh noise.
+# Mỗi entry có thể là path pattern hoặc regex.
+# -------------------------------------------------------
+[allowlist]
+description = "Global allowlist"
+paths = [
+  # Test fixtures and sample data (not real secrets)
+  '''(.*?)(jpg|gif|doc|pdf|bin|xls|pyc|zip)$''',
+
+  # Git internals
+  '''^\.git/''',
+
+  # Terraform state and plans (may contain hashes, not secrets)
+  '''^terraform/.*\.tfstate''',
+  '''^terraform/.*\.tfplan''',
+  '''^terraform/.*\.terraform/''',
+
+  # Python cache and virtual environments
+  '''__pycache__/''',
+  '''\.venv/''',
+  '''venv/''',
+  '''\.pytest_cache/''',
+  '''\.ruff_cache/''',
+
+  # Node modules (third-party code, not ours)
+  '''node_modules/''',
+
+  # Build artifacts
+  '''dist/''',
+  '''build/''',
+
+  # IDE and editor files
+  '''\.vscode/''',
+  '''\.idea/''',
+
+  # Documentation (may contain example strings that match patterns)
+  '''docs/''',
+  '''^post-mortems/''',
+  '''CHANGELOG\.md$''',
+
+  # Grafana dashboards (contain UUIDs that may trigger rules)
+  '''grafana/dashboards/.*\.json''',
+
+  # Terraform generated files
+  '''terraform/lab/terraform\.auto\.tfvars''',
+]
+
+# -------------------------------------------------------
+# Rule-specific allowlists
+# -------------------------------------------------------
+# For specific rules that produce false positives in our codebase,
+# add regex patterns to allowlist them.
+
+# Example: If Gitleaks flags example API keys in docs
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+commits = []
+regexes = [
+  '''example[_-]?(key|token|secret|password)''',
+  '''placeholder[_-]?(key|token|secret)''',
+  '''test[_-]?(key|token|secret|password)''',
+  '''dummy[_-]?(key|token|secret)''',
+  '''sample[_-]?(key|token|secret)''',
+]
+paths = [
+  '''\.md$''',
+  '''docs/''',
+  '''examples/''',
+]
+
+# -------------------------------------------------------
+# Disable overly noisy rules (if needed)
+# -------------------------------------------------------
+# Uncomment if specific rules produce too many false positives:
+#
+# [[rules]]
+# id = "aws-access-token"
+# description = "Disable AWS token detection (false positive heavy)"
+# regex = '''(?:^|[\\s\\-])((?:A3T8|AKIA)[A-Z0-9]{16})(?:$|[\\s\-.])'''
+# [rules.allowlist]
+# commits = []
+# paths = []
+# regexes = [".*"]  # Allow all matches
