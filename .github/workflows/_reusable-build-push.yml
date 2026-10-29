@@ -188,7 +188,123 @@ jobs:
           else
             echo "### 🔒 Trivy Scan — No report generated" >> "$GITHUB_STEP_SUMMARY"
           fi
+      # -------------------------------------------------------
+      # 6.2 Install Syft — SBOM generation tool (pinned version)
+      # -------------------------------------------------------
+      # Anchor: Syft — tool của Anchore, de-facto standard để generate SBOM.
+      # Pinned version để tránh surprise khi upstream có breaking change.
+      # -------------------------------------------------------
+      - name: Install Syft
+        id: syft-install
+        run: |
+          set -euo pipefail
+          SYFT_VERSION="v1.18.1"
+          INSTALL_DIR="/usr/local/bin"
 
+          echo "📦 Installing Syft ${SYFT_VERSION}..."
+
+          # Download install script từ GitHub raw (explicit, reproducible)
+          for attempt in 1 2 3; do
+            if curl -fsSL "https://raw.githubusercontent.com/anchore/syft/main/install.sh" -o /tmp/install-syft.sh; then
+              echo "✅ Install script downloaded on attempt $attempt"
+              break
+            fi
+            echo "⚠️  Download attempt $attempt failed, retrying in 3s..."
+            sleep 3
+          done
+
+          [ -f /tmp/install-syft.sh ] || { echo "❌ Failed to download install script"; exit 1; }
+
+          # Install pinned version
+          sh /tmp/install-syft.sh -b "${INSTALL_DIR}" "${SYFT_VERSION}"
+          rm -f /tmp/install-syft.sh
+
+          # Verify
+          syft version
+          echo "✅ Syft installed"
+          echo "syft_version=${SYFT_VERSION}" >> "$GITHUB_OUTPUT"
+        timeout-minutes: 3
+
+      # -------------------------------------------------------
+      # 6.3 Generate SBOM — CycloneDX format
+      # -------------------------------------------------------
+      # Anchor: CycloneDX (CDX) — OWASP standard format for security SBOM.
+      # Ưu tiên CycloneDX hơn SPDX vì ecosystem security tooling (Trivy, Grype,
+      # Dependency-Track) hỗ trợ CDX tốt hơn cho vulnerability queries.
+      #
+      # Scan scope: "docker:IMAGE_REF" = scan image trong local docker daemon.
+      # Vì Dockerfile dùng multi-stage, SBOM chỉ phản ánh FINAL image (runtime)
+      # → KHÔNG có build-time tools → chính xác những gì chạy ở production.
+      # -------------------------------------------------------
+      - name: Generate SBOM (CycloneDX)
+        id: sbom-gen
+        run: |
+          set -euo pipefail
+
+          SBOM_FILE="sbom-${{ inputs.service }}-${{ inputs.image_tag }}.cdx.json"
+          echo "sbom_file=${SBOM_FILE}" >> "$GITHUB_OUTPUT"
+
+          echo "📋 Generating SBOM for ${{ env.IMAGE_REF }}..."
+          BUILD_START=$(date +%s)
+
+          # Generate CycloneDX JSON from local docker image
+          syft scan "docker:${{ env.IMAGE_REF }}" \
+            --output cyclonedx-json="${SBOM_FILE}" \
+            --quiet
+
+          # Verify file was created and is valid JSON
+          if [ ! -f "${SBOM_FILE}" ]; then
+            echo "❌ SBOM file not created"
+            exit 1
+          fi
+
+          # Validate JSON structure (lightweight check)
+          if ! jq empty "${SBOM_FILE}" 2>/dev/null; then
+            echo "❌ SBOM file is not valid JSON"
+            exit 1
+          fi
+
+          # -------------------------------------------------------
+          # Extract stats for summary
+          # -------------------------------------------------------
+          # Anchor: SBOM Stats — cho phép detect "image bloat" và "supply chain drift"
+          # Ví dụ: nếu số Python packages tăng đột ngột → có thể ai đó thêm dependency
+          # mà không review (supply chain risk)
+          TOTAL_COMPONENTS=$(jq '.components | length' "${SBOM_FILE}")
+          PY_PKGS=$(jq '[.components[]? | select(.purl // "" | startswith("pkg:pypi/"))] | length' "${SBOM_FILE}")
+          OS_PKGS=$(jq '[.components[]? | select(.purl // "" | (startswith("pkg:deb/") or startswith("pkg:apk/") or startswith("pkg:rpm/")))] | length' "${SBOM_FILE}")
+          FILE_SIZE=$(wc -c < "${SBOM_FILE}")
+
+          BUILD_END=$(date +%s)
+          DURATION=$((BUILD_END - BUILD_START))
+
+          # Output for downstream steps
+          echo "sbom_total=${TOTAL_COMPONENTS}" >> "$GITHUB_OUTPUT"
+          echo "sbom_python=${PY_PKGS}" >> "$GITHUB_OUTPUT"
+          echo "sbom_os=${OS_PKGS}" >> "$GITHUB_OUTPUT"
+          echo "sbom_size=${FILE_SIZE}" >> "$GITHUB_OUTPUT"
+          echo "sbom_duration=${DURATION}" >> "$GITHUB_OUTPUT"
+
+          echo "✅ SBOM generated in ${DURATION}s:"
+          echo "   📦 Total components: ${TOTAL_COMPONENTS}"
+          echo "   🐍 Python packages:  ${PY_PKGS}"
+          echo "   🖥️  OS packages:      ${OS_PKGS}"
+          echo "   📄 File size:         ${FILE_SIZE} bytes"
+
+      # -------------------------------------------------------
+      # 6.4 Upload SBOM artifact (audit trail)
+      # -------------------------------------------------------
+      # Anchor: Audit Trail — 90 ngày retention cho compliance (SOC2, PCI-DSS).
+      # Khi cần điều tra incident, bạn download artifact và có full SBOM.
+      # -------------------------------------------------------
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ inputs.service }}-${{ inputs.image_tag }}
+          path: sbom-${{ inputs.service }}-${{ inputs.image_tag }}.cdx.json
+          retention-days: 90
+          if-no-files-found: warn
       # -------------------------------------------------------
       # 7. Push image (chỉ khi push=true VÀ Trivy pass)
       # -------------------------------------------------------
@@ -251,6 +367,45 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # -------------------------------------------------------
+          # SBOM Section
+          # -------------------------------------------------------
+          if [ -f "sbom-${{ inputs.service }}-${{ inputs.image_tag }}.cdx.json" ]; then
+            echo ""
+            echo "#### 📋 SBOM (Software Bill of Materials)"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Format | CycloneDX JSON |"
+            echo "| Total components | ${{ steps.sbom-gen.outputs.sbom_total }} |"
+            echo "| Python packages | ${{ steps.sbom-gen.outputs.sbom_python }} |"
+            echo "| OS packages (Debian) | ${{ steps.sbom-gen.outputs.sbom_os }} |"
+            echo "| File size | ${{ steps.sbom-gen.outputs.sbom_size }} bytes |"
+            echo "| Generation time | ${{ steps.sbom-gen.outputs.sbom_duration }}s |"
+            echo ""
+            echo "<details>"
+            echo "<summary>🔍 Top 10 Python dependencies</summary>"
+            echo ""
+            echo '```'
+            jq -r '
+              [.components[]?
+                | select(.purl // "" | startswith("pkg:pypi/"))
+                | {name: (.purl | split("/")[1] | split("?")[0]), version: .version}
+              ]
+              | sort_by(.name)
+              | .[:10]
+              | .[]
+              | "\(.name)@\(.version)"
+            ' "sbom-${{ inputs.service }}-${{ inputs.image_tag }}.cdx.json" 2>/dev/null
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "> 💡 **Reverse lookup hint:** Để check package \`X\` có trong image này không:"
+            echo "> \`jq '.components[]? | select(.name == \"X\")' sbom.cdx.json\`"
+          else
+            echo ""
+            echo "#### 📋 SBOM — Not generated (step failed)"
+          fi
       # -------------------------------------------------------
       # 9. Cleanup docker artifacts (tránh runner bị layer pollution)
       # -------------------------------------------------------
