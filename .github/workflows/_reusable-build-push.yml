@@ -306,13 +306,79 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
       # -------------------------------------------------------
-      # 7. Push image (chỉ khi push=true VÀ Trivy pass)
+      # 7. Push image with bounded retry (chỉ khi push=true VÀ Trivy pass)
+      # -------------------------------------------------------
+      # Anchor: Bounded Retry — external dependencies (GHCR) có thể fail transiently.
+      # Retry logic với error classification để phân biệt transient vs non-transient errors.
+      # Fail fast trên non-transient errors để không che giấu bug thật.
       # -------------------------------------------------------
       - name: Push ${{ inputs.service }}
+        id: push
         if: inputs.push
         run: |
-          echo "📦 Pushing ${{ env.IMAGE_REF }} to GHCR..."
-          docker push ${{ env.IMAGE_REF }}
+          set -uo pipefail
+
+          MAX_ATTEMPTS=3
+          PUSH_LOG="push-output.log"
+          PUSH_EXIT=0
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "═══════════════════════════════════════════════════════════════"
+            echo "📦 Push attempt ${attempt}/${MAX_ATTEMPTS}"
+            echo "═══════════════════════════════════════════════════════════════"
+
+            docker push "${IMAGE_REF}" 2>&1 | tee "${PUSH_LOG}"
+            PUSH_EXIT=${PIPESTATUS[0]}
+
+            if [ "$PUSH_EXIT" -eq 0 ]; then
+              echo ""
+              echo "✅ Push succeeded on attempt ${attempt}"
+              echo "push_attempts=${attempt}" >> "$GITHUB_OUTPUT"
+              echo "push_status=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # ── Error Classification ──────────────────────────
+            # Phân biệt transient errors (retry-worthy) vs non-transient (fail fast)
+            # Transient: network timeout, backend unavailable, rate limit
+            # Non-transient: permission denied (real), invalid image, auth failed
+            if grep -qiE "denied|unauthorized|toomanyrequests|retryafter|internal server error|bad gateway|service unavailable|EOF|connection reset|i/o timeout|broken pipe|dial tcp" "${PUSH_LOG}"; then
+              ERROR_CLASS="transient-looking"
+            else
+              ERROR_CLASS="non-transient"
+            fi
+
+            echo ""
+            echo "❌ Attempt ${attempt} failed — classified as: ${ERROR_CLASS}"
+
+            if [ "${ERROR_CLASS}" = "non-transient" ]; then
+              echo "🛑 Non-transient error → failing fast (no retry)."
+              echo "   Retrying would only mask a real bug."
+              echo "push_attempts=${attempt}" >> "$GITHUB_OUTPUT"
+              echo "push_status=failed_non_transient" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              # ── Exponential-ish Backoff ─────────────────────
+              BACKOFF=$((attempt * 10))
+              echo "⏳ Waiting ${BACKOFF}s before retry..."
+              sleep "$BACKOFF"
+
+              # Re-login: refresh token trong trường hợp token cũ expired/race
+              echo "🔑 Re-authenticating to registry..."
+              echo "${{ secrets.GITHUB_TOKEN }}" \
+                | docker login ghcr.io \
+                    --username "${{ github.actor }}" \
+                    --password-stdin
+            fi
+          done
+
+          echo ""
+          echo "❌ Push failed after ${MAX_ATTEMPTS} attempts"
+          echo "push_attempts=${MAX_ATTEMPTS}" >> "$GITHUB_OUTPUT"
+          echo "push_status=failed_transient" >> "$GITHUB_OUTPUT"
+          exit 1
 
       # -------------------------------------------------------
       # 8. Summary with Artifact Contract info + Deploy Instructions
@@ -352,6 +418,19 @@ jobs:
             echo "| Build Time | ${{ steps.build.outputs.build_duration }}s |"
             echo "| Trivy | ${trivy_status} |"
             echo "| Pushed | ${{ inputs.push }} |"
+
+            # -------------------------------------------------------
+            # Push Flakiness Indicator
+            # -------------------------------------------------------
+            if [ "${{ inputs.push }}" = "true" ]; then
+              ATTEMPTS="${{ steps.push.outputs.push_attempts }}"
+              PUSH_STATUS="${{ steps.push.outputs.push_status }}"
+              if [ "${ATTEMPTS:-1}" != "1" ]; then
+                echo "| ⚠️ **Flakiness** | Push needed ${ATTEMPTS} attempts (transient failure detected) |"
+              elif [ "${PUSH_STATUS}" = "success" ]; then
+                echo "| Push Status | ✅ Success (1 attempt) |"
+              fi
+            fi
 
             if [ "${{ inputs.push }}" = "true" ]; then
               echo ""
