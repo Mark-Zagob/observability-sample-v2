@@ -38,9 +38,9 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      POSTGRES_DB: orders
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app_secret
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     # 🛡️ Production: Remove port exposure, access only via data network
     ports:
       - "5432:5432"
@@ -134,8 +134,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - PAYMENT_SERVICE_URL=http://payment-service:5002
-      # secretlint-disable-next-line
-      - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-orders}
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       # Phase 4.5: Continuous Profiling
@@ -255,7 +254,7 @@ services:
     stop_grace_period: 60s  # Kafka needs longer for partition leader election
 
   kafka-exporter:
-    image: danielqsj/kafka-exporter:latest
+    image: danielqsj/kafka-exporter:v1.11.0
     container_name: kafka-exporter
     command:
       - "--kafka.server=kafka:9092"
@@ -280,7 +279,7 @@ services:
     logging: *default-logging
 
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: kafka-ui
     environment:
       KAFKA_CLUSTERS_0_NAME: observability-lab
@@ -315,8 +314,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      # secretlint-disable-next-line
-      - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-orders}
       # 🛡️ SRE GUARDRAILS INJECTION
       # 🛡️ NOTE: Code hardcode enable.auto.commit=False (Manual Commit).
       # Env var KAFKA_AUTO_COMMIT không được đọc bởi application code.
@@ -357,8 +355,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=192.168.100.55:4317
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      # secretlint-disable-next-line
-      - DATABASE_URL=postgresql://app:app_secret@postgres:5432/orders
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-orders}
       # Phase 4.5: Continuous Profiling
       - ENABLE_PROFILING=true
       - PYROSCOPE_URL=http://192.168.100.55:4040

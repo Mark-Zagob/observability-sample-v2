@@ -29,3 +29,5 @@ alertmanager/alertmanager.yml
 *.tfstate
 *.tfstate.*
 *.lock.hcl
+# === documents ===
+on_premise-env.md
