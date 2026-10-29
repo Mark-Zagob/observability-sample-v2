@@ -124,10 +124,15 @@ jobs:
 
           for attempt in 1 2 3; do
             echo "   Attempt ${attempt}/3..."
+            # 🛡️ FIX: Disable exit-on-error to capture pip-audit exit code
+            # pip-audit exits with code 1 when vulnerabilities are found,
+            # which is NORMAL behavior, not a failure.
+            set +e
             pip-audit -r "${{ inputs.context }}/requirements.txt" \
               --format json \
               > "$AUDIT_FILE" 2>&1
             AUDIT_EXIT=$?
+            set -e
 
             # -------------------------------------------------------
             # Failure Mode Discrimination (critical for CI stability)
