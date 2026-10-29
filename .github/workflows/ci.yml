@@ -25,6 +25,7 @@ on:
 permissions:
   contents: read
   packages: write
+  pull-requests: write  # Needed for dependency-review to comment on PR
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -130,6 +131,61 @@ jobs:
             echo "matrix={}" >> "$GITHUB_OUTPUT"
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           fi
+
+  dependency-review:
+    name: Dependency Review (PR delta scan)
+    needs: [prepare, detect-changes]
+    # Only run on PR (no meaningful delta on push events)
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: [idc-dev]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # -------------------------------------------------------
+      # Anchor: Change-based Security Review
+      # -------------------------------------------------------
+      # dependency-review-action reviews ONLY the dependencies added/changed
+      # by this PR, not the entire inventory.
+      #
+      # Answers: "Does this PR introduce vulnerable or incompatible deps?"
+      #
+      # Complementary to:
+      #   - pip-audit (state scan on push): "Does my current dep tree have CVEs?"
+      #   - Trivy (post-build): "Does the built image have CVEs?"
+      #
+      # Strategy: Soft-gate for 2 weeks, then harden to block HIGH+ CVEs.
+      # -------------------------------------------------------
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # SOFT-GATE: only critical for now
+          # After 2 weeks of observation, switch to: high
+          fail-on-severity: critical
+
+          # License compatibility (legal risk prevention)
+          # Block AGPL (copyleft viral), SSPL (MongoDB-style), BUSL (HashiCorp)
+          deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0, BUSL-1.1
+
+          # Explicitly allow common permissive licenses
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, PSF-2.0, Python-2.0
+
+          # Post summary comment on PR (very valuable for reviewers)
+          comment-summary-in-pr: always
+
+          # Diff base for PR
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}
+
+          # Allowlist for known false positives (VEX-style)
+          # Format: package_name or package_name@version
+          # Example: allow-ghsas: GHSA-abcd-1234-efgh, GHSA-xxxx-yyyy-zzzz
+          # allow-ghsas: ''
 
   lint-test:
     name: Lint and Test (${{ matrix.service }})

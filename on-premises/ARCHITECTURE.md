@@ -803,13 +803,13 @@ Tất cả Python services dùng multi-stage build để giảm image size và a
 
 ```dockerfile
 # Stage 1: Build dependencies (isolated)
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.12-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487 AS builder
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --no-compile --prefix=/install -r requirements.txt
 
 # Stage 2: Runtime (minimal image)
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 RUN groupadd -r appuser && useradd -r -g appuser -s /usr/sbin/nologin appuser
 COPY --from=builder /install /usr/local
 COPY app.py .

@@ -97,7 +97,105 @@ jobs:
           pip install --quiet \
             ruff==0.15.6 \
             bandit==1.9.4
+      # -------------------------------------------------------
+      # 4.2 pip-audit — Dependency vulnerability scanning (PRE-BUILD)
+      # -------------------------------------------------------
+      # Anchor: Shift Left — phát hiện CVE trong dependency TRƯỚC KHI build image.
+      # Trivy (post-build) và pip-audit (pre-build) là Defense in Depth.
+      #
+      # Lưu ý: requirements.txt dùng pattern ==X.Y.* (wildcard minor),
+      # KHÔNG phải fully-pinned lockfile → KHÔNG dùng --no-deps.
+      # pip-audit sẽ resolve dependency tree (tốn ~5-10s, cần network tới PyPI).
+      # -------------------------------------------------------
+      - name: pip-audit — Dependency vulnerability scan
+        id: pip-audit
+        if: steps.detect-lang.outputs.is_python == 'true'
+        run: |
+          set -uo pipefail
 
+          echo "🔍 Running pip-audit on ${{ inputs.context }}..."
+
+          # Install pinned pip-audit
+          pip install --quiet pip-audit==2.7.3
+
+          # Run audit with bounded retry (network flakiness on CI)
+          AUDIT_FILE="pip-audit-${{ inputs.service }}.txt"
+          AUDIT_EXIT=0
+
+          for attempt in 1 2 3; do
+            echo "   Attempt ${attempt}/3..."
+            pip-audit -r "${{ inputs.context }}/requirements.txt" \
+              --format json \
+              > "$AUDIT_FILE" 2>&1
+            AUDIT_EXIT=$?
+
+            # -------------------------------------------------------
+            # Failure Mode Discrimination (critical for CI stability)
+            # pip-audit exit codes:
+            #   0 = no vulnerabilities found
+            #   1 = vulnerabilities found
+            #   2 = tooling/network error (resolution failed, etc.)
+            # -------------------------------------------------------
+            if [ "$AUDIT_EXIT" -eq 0 ] || [ "$AUDIT_EXIT" -eq 1 ]; then
+              echo "   ✅ Valid scan completed (exit ${AUDIT_EXIT})"
+              break
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "   ⚠️  Tooling error (exit ${AUDIT_EXIT}), retrying in 5s..."
+              sleep 5
+            fi
+          done
+
+          # -------------------------------------------------------
+          # Tooling failure HARD-FAILS (Rule: never trust broken control)
+          # -------------------------------------------------------
+          if [ "$AUDIT_EXIT" -ge 2 ]; then
+            echo "❌ pip-audit failed to complete (tooling/network error, exit ${AUDIT_EXIT})"
+            echo "   This is NOT a vulnerability finding — it's a broken scan."
+            cat "$AUDIT_FILE" || true
+            echo "audit_status=tooling_error" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # -------------------------------------------------------
+          # SOFT-GATE Phase: report only, don't block yet
+          # After 2 weeks of clean runs, switch to:
+          #   if [ "$AUDIT_EXIT" -eq 1 ]; then exit 1; fi
+          # -------------------------------------------------------
+          if [ "$AUDIT_EXIT" -eq 1 ]; then
+            # Count only deps with actual vulnerabilities (not all deps)
+            # pip-audit JSON: each dep has 'vulns' list, count non-empty ones
+            VULN_COUNT=$(python3 -c "
+            import json, sys
+            try:
+                d = json.load(open('$AUDIT_FILE'))
+                count = len([dep for dep in d.get('dependencies', []) if dep.get('vulns')])
+                print(count)
+            except Exception as e:
+                print(f'parse error: {e}', file=sys.stderr)
+                print('0')
+            " 2>/dev/null || echo "0")
+
+            echo "⚠️  Found ${VULN_COUNT} vulnerable dependencies (SOFT-GATE: warning only)"
+            cat "$AUDIT_FILE"
+            echo "audit_status=vulns_found" >> "$GITHUB_OUTPUT"
+            echo "vuln_count=${VULN_COUNT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ No known vulnerabilities found"
+            echo "audit_status=clean" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "audit_file=${AUDIT_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pip-audit report
+        if: always() && steps.pip-audit.outputs.audit_file != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: pip-audit-${{ inputs.service }}-${{ github.run_id }}
+          path: ${{ steps.pip-audit.outputs.audit_file }}
+          retention-days: 90
+          if-no-files-found: ignore
       # -------------------------------------------------------
       # 6. Ruff — Python linting (PEP8, import sort, etc.)
       # -------------------------------------------------------
@@ -265,6 +363,20 @@ jobs:
             fi
           fi
 
+          # pip-audit status
+          pip_audit_status="⏭️ Skipped (non-Python)"
+          VULN_COUNT="${{ steps.pip-audit.outputs.vuln_count }}"
+          if [ "${{ steps.detect-lang.outputs.is_python }}" == "true" ]; then
+            pip_audit_status="✅ Passed"
+            [ "${{ steps.pip-audit.outcome }}" == "failure" ] && pip_audit_status="❌ Failed"
+            [ "${{ steps.pip-audit.outcome }}" == "skipped" ] && pip_audit_status="⏭️ Skipped"
+            if [ "${{ steps.pip-audit.outputs.audit_status }}" = "vulns_found" ]; then
+              pip_audit_status="⚠️ ${VULN_COUNT:-?} CVEs (soft-gate)"
+            elif [ "${{ steps.pip-audit.outputs.audit_status }}" = "tooling_error" ]; then
+              pip_audit_status="❌ Tooling error"
+            fi
+          fi
+
           {
             echo "### 📋 Lint & Test Summary — ${{ inputs.service }}"
             echo "| Check | Status |"
@@ -273,6 +385,7 @@ jobs:
             echo "| Ruff (Python lint) | ${ruff_status} |"
             echo "| Bandit (SAST) | ${bandit_status} |"
             echo "| Pytest (Unit tests) | ${pytest_status} |"
+            echo "| pip-audit (dependency CVE) | ${pip_audit_status} |"
             echo ""
-            echo "**Pinned versions:** ruff==0.15.6, bandit==1.9.4, pytest==8.3.4"
+            echo "**Pinned versions:** ruff==0.15.6, bandit==1.9.4, pytest==8.3.4, pip-audit==2.7.3"
           } >> $GITHUB_STEP_SUMMARY

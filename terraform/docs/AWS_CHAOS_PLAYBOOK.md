@@ -471,7 +471,7 @@ aws ecs describe-services \
 
 > *Mục tiêu: Đảm bảo payment-service đang reachable qua Cloud Map DNS.*
 
-> 💡 **Lưu ý:** Image `python:3.12-slim-bookworm` không có `curl` hay `nslookup`.
+> 💡 **Lưu ý:** Image `python:3.12-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487` không có `curl` hay `nslookup`.
 > Tất cả lệnh trong container đều dùng **Python one-liners** (có sẵn trong image).
 
 ```bash
