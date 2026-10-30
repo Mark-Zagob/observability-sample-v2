@@ -172,10 +172,9 @@ jobs:
 
           # License compatibility (legal risk prevention)
           # Block AGPL (copyleft viral), SSPL (MongoDB-style), BUSL (HashiCorp)
+          # Using deny-list (not allow-list) to avoid false positives on PyPI
+          # where many packages have NOASSERTION or UNKNOWN license
           deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0, BUSL-1.1
-
-          # Explicitly allow common permissive licenses
-          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, PSF-2.0, Python-2.0
 
           # Post summary comment on PR (very valuable for reviewers)
           comment-summary-in-pr: always
