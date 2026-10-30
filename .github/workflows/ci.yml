@@ -7,12 +7,14 @@ on:
   # push:
   #   branches: [main, develop]
   #   paths:
-  #     - 'applications-vm/applications/**'
+  #     - 'on-premises/applications-vm/applications/**'
+  #     - 'on-premises/applications-vm/shared/**'
   #     - '.github/workflows/**'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'applications-vm/applications/**'
+      - 'on-premises/applications-vm/applications/**'
+      - 'on-premises/applications-vm/shared/**'
       - '.github/workflows/**'
   workflow_dispatch:
     inputs:
