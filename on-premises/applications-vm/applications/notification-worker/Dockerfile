@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # ============================================
 # Stage 1: Build — install dependencies
 # ============================================
@@ -5,7 +6,8 @@ FROM python:3.12-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a3526
 
 WORKDIR /build
 COPY notification-worker/requirements.txt .
-RUN pip install --no-cache-dir --no-compile \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile \
     --prefix=/install -r requirements.txt
 
 # ============================================
