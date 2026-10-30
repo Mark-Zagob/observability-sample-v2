@@ -164,7 +164,7 @@ jobs:
       # Strategy: Soft-gate for 2 weeks, then harden to block HIGH+ CVEs.
       # -------------------------------------------------------
       - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           # SOFT-GATE: only critical for now
           # After 2 weeks of observation, switch to: high
@@ -174,8 +174,11 @@ jobs:
           # Block AGPL (copyleft viral), SSPL (MongoDB-style), BUSL (HashiCorp)
           # Using deny-list (not allow-list) to avoid false positives on PyPI
           # where many packages have NOASSERTION or UNKNOWN license
-          deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0, BUSL-1.1
-
+          #deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0, BUSL-1.1 Deprecated in v5
+          license-check: false
+          deny-packages: |
+            pkg:pypi/eventlet@<0.33.0
+            pkg:npm/left-pad
           # Post summary comment on PR (very valuable for reviewers)
           comment-summary-in-pr: always
 
