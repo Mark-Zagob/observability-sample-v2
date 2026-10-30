@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 # === Metadata ===
@@ -9,7 +10,8 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # === Dependencies ===
 WORKDIR /app
-RUN pip install --no-cache-dir flask==3.1.*
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile flask==3.1.*
 
 # === Application code ===
 COPY app.py .
